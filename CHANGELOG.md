@@ -32,6 +32,7 @@ All notable changes to this project will be documented in this file.
   layout"), so it can be undone from the same window.
 
 ### Fixed
+* The overlay text Test button now says the broker's number is in Celsius and, when Fahrenheit is chosen, shows the converted number too, for example "The broker gave -4.94 C, which is 23.11 F".
 * **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
   behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and
   stayed without detection until KVision was restarted. Now the tile reads the recorder's camera list in the background
