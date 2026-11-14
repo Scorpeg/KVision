@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+* **"Use another layout..." in the Backup / Restore window.** Pick any of your other layouts, or a deleted one that still has a
+  backup, and give the layout you opened the window from its grid: the same size and the same merged cells. The layout keeps
+  its own name, its place in the list and its toolbar setting. By default its own cameras stay where they still fit (cells
+  that no longer exist, or that are now inside a merged cell, lose their camera, and the window says how many). "Bring its
+  cameras too" copies the other layout's cameras instead. The layout as it was is saved first ("Before applying another
+  layout"), so it can be undone from the same window.
+
 ### Fixed
 * **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
   behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and

@@ -25,6 +25,8 @@ Dialog {
     property string status: ""
     property bool statusOk: true
     property string pendingId: ""     // the copy waiting for "Replace it"
+    property bool pickMode: false     // "Use another layout": apply a different layout's shape to this one
+    property bool copyCameras: false  // in the pick mode: bring the other layout's cameras too
 
     function liveUids() {
         var out = [];
@@ -45,7 +47,40 @@ Dialog {
     }
 
     function refresh() {
-        entries = recoverMode ? LayoutBackups.deletedLayouts(liveUids()) : LayoutBackups.list(uid);
+        var out = [];
+        var i, e, src;
+        if (pickMode) {
+            // Every other layout as it is now, then the deleted ones (their newest copy).
+            var all = layoutsCollectionModel.toJSValue();
+            for (i = 0; i < all.length; ++i) {
+                if (i === layoutIndex || all[i].uid === uid)
+                    continue;
+                var l = all[i];
+                var cams = 0;
+                for (var k = 0; k < l.items.length; ++k)
+                    if (l.items[k].url)
+                        ++cams;
+                out.push({ key: "live:" + i, id: "", removable: false, uid: l.uid, liveIndex: i,
+                           title: layoutLabel(layoutsCollectionModel.get(i), i),
+                           sub: l.size.width + "x" + l.size.height + ", " + cams + (cams === 1 ? " camera" : " cameras") + ", " + qsTr("as it is now") });
+            }
+            var gone = LayoutBackups.deletedLayouts(liveUids());
+            for (i = 0; i < gone.length; ++i) {
+                e = gone[i];
+                out.push({ key: "bk:" + e.id, id: e.id, removable: false, uid: e.uid, liveIndex: -1,
+                           title: (e.name !== "" ? e.name : (e.nvrIp !== "" ? qsTr("Recorder %1").arg(e.nvrIp) : qsTr("(no name)"))) + "   (" + qsTr("deleted") + ")",
+                           sub: e.columns + "x" + e.rows + ", " + e.cameras + (e.cameras === 1 ? " camera" : " cameras") + ", " + qsTr("copy from %1").arg(e.when) });
+            }
+        } else {
+            src = recoverMode ? LayoutBackups.deletedLayouts(liveUids()) : LayoutBackups.list(uid);
+            for (i = 0; i < src.length; ++i) {
+                e = src[i];
+                out.push({ key: e.id, id: e.id, removable: true, uid: e.uid, liveIndex: -1,
+                           title: e.when + (recoverMode ? "   " + (e.name !== "" ? e.name : (e.nvrIp !== "" ? qsTr("Recorder %1").arg(e.nvrIp) : qsTr("(no name)"))) : ""),
+                           sub: describeEntry(e), when: e.when });
+            }
+        }
+        entries = out;
     }
 
     function openFor(index) {
@@ -53,6 +88,7 @@ Dialog {
         if (!l)
             return;
         recoverMode = false;
+        pickMode = false;
         layoutIndex = index;
         uid = l.uid;
         layoutTitle = layoutLabel(l, index);
@@ -65,6 +101,7 @@ Dialog {
 
     function openRecover() {
         recoverMode = true;
+        pickMode = false;
         layoutIndex = -1;
         uid = "";
         layoutTitle = qsTr("Deleted layouts");
@@ -123,6 +160,87 @@ Dialog {
         refresh();
     }
 
+    // The layout JSON a picked entry stands for, or null.
+    function pickedLayout(entry) {
+        if (entry.liveIndex >= 0) {
+            var all = layoutsCollectionModel.toJSValue();
+            return (entry.liveIndex < all.length && all[entry.liveIndex].uid === entry.uid) ? all[entry.liveIndex] : null;
+        }
+        try { return JSON.parse(LayoutBackups.load(entry.id)); } catch (e) { return null; }
+    }
+
+    // Puts another layout's grid size and merged cells on this layout, and (when asked) its cameras. This layout keeps its own
+    // name, its place in the list, its toolbar setting and its backups. Without the cameras, this layout's own cameras stay
+    // where they are when that spot still exists and is not part of a merged cell; the ones that do not fit are counted.
+    function applyPicked(entry) {
+        var src = pickedLayout(entry);
+        if (!src || !src.items || !src.size) {
+            statusOk = false;
+            status = qsTr("That layout could not be read. Nothing was changed.");
+            return;
+        }
+        var cur = layoutJson(layoutIndex);
+        var curObj = JSON.parse(cur);
+        if (hasCameras(cur))
+            LayoutBackups.save(uid, cur, qsTr("Before applying another layout"), false);
+
+        var W = src.size.width, H = src.size.height;
+        var cw = curObj.size.width, ch = curObj.size.height;
+        var items = [];
+        var lost = 0;
+        var placed = {};
+        // The cells a merged cell covers (worked out from the spans, so it does not depend on the hidden flag being set).
+        var covered = {};
+        for (var r0 = 0; r0 < H; ++r0) {
+            for (var c0 = 0; c0 < W; ++c0) {
+                var o = src.items[r0 * W + c0];
+                if (!o || o.visible === 1 || o.columnSpan < 1 || o.rowSpan < 1)
+                    continue;
+                for (var dr = 0; dr < o.rowSpan && r0 + dr < H; ++dr)
+                    for (var dc = 0; dc < o.columnSpan && c0 + dc < W; ++dc)
+                        if (dr !== 0 || dc !== 0)
+                            covered[(r0 + dr) * W + (c0 + dc)] = true;
+            }
+        }
+        for (var r = 0; r < H; ++r) {
+            for (var c = 0; c < W; ++c) {
+                var s = src.items[r * W + c] || {};
+                var item;
+                if (copyCameras) {
+                    item = JSON.parse(JSON.stringify(s));
+                } else {
+                    var mine = (c < cw && r < ch) ? curObj.items[r * cw + c] : null;
+                    item = mine ? JSON.parse(JSON.stringify(mine))
+                                : { avFormatOptions: {}, ignoreGlobalAVFormatOptions: false, noUnmute: false, secondaryUrl: "", streamMode: 0, url: "", volume: 0 };
+                    item.columnSpan = s.columnSpan !== undefined ? s.columnSpan : 1;
+                    item.rowSpan = s.rowSpan !== undefined ? s.rowSpan : 1;
+                    item.visible = s.visible !== undefined ? s.visible : 0;
+                    if (covered[r * W + c] === true || item.visible !== 0) {      // a cell inside a merged one shows no camera of its own
+                        item.url = "";
+                        item.secondaryUrl = "";
+                    }
+                    if (mine && mine.url)
+                        placed[(r * cw + c)] = item.url !== "";
+                }
+                items.push(item);
+            }
+        }
+        if (!copyCameras) {
+            for (var i = 0; i < curObj.items.length; ++i)
+                if (curObj.items[i].url && placed[i] !== true)
+                    ++lost;
+        }
+        layoutsCollectionModel.get(layoutIndex).fromJSValue({ size: { width: W, height: H },
+                                                              aspectRatio: src.aspectRatio || curObj.aspectRatio, items: items });
+        statusOk = true;
+        status = qsTr("Done: this layout is now %1x%2.").arg(W).arg(H)
+                 + (copyCameras ? " " + qsTr("Its cameras were copied too.") : (lost > 0 ? " " + qsTr("%1 of this layout's cameras did not fit and were removed from it; they are in the \"Before applying another layout\" copy.").arg(lost) : ""))
+                 + " " + qsTr("The layout as it was is saved (\"Before applying another layout\"), so this can be undone.");
+        pendingId = "";
+        pickMode = false;
+        refresh();
+    }
+
     function describeEntry(e) {
         var s = e.columns + "x" + e.rows + ", " + e.cameras + (e.cameras === 1 ? " camera" : " cameras");
         if (e.deleted)
@@ -149,7 +267,7 @@ Dialog {
         Text {
             anchors.fill: parent
             anchors.leftMargin: 16
-            text: dlg.recoverMode ? qsTr("Recover a deleted layout") : qsTr("Backup / Restore: %1").arg(dlg.layoutTitle)
+            text: dlg.recoverMode ? qsTr("Recover a deleted layout") : (dlg.pickMode ? qsTr("Use another layout for: %1").arg(dlg.layoutTitle) : qsTr("Backup / Restore: %1").arg(dlg.layoutTitle))
             color: "#00f5d4"
             font.bold: true
             font.pixelSize: 13
@@ -168,12 +286,14 @@ Dialog {
             font.pixelSize: 11
             text: dlg.recoverMode
                   ? qsTr("These layouts were deleted but still have backups. Recover puts one back at the end of the list.")
+                  : dlg.pickMode
+                  ? qsTr("Pick a layout to copy the grid of: its size and merged cells. This layout keeps its name, its place in the list and its toolbar setting.")
                   : qsTr("Each copy holds this layout only: its grid size, cameras and positions. Restore replaces this layout with the copy and leaves every other layout, the recorders and the settings alone. KVision also saves a copy by itself about once a day when a layout has changed.")
         }
 
         RowLayout {
             Layout.fillWidth: true
-            visible: !dlg.recoverMode
+            visible: !dlg.recoverMode && !dlg.pickMode
             spacing: 8
             TextField {
                 id: noteField
@@ -196,6 +316,35 @@ Dialog {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            visible: !dlg.recoverMode
+            spacing: 10
+            Button {
+                id: pickBtn
+                text: dlg.pickMode ? qsTr("Back to the copies") : qsTr("Use another layout...")
+                implicitHeight: 28
+                implicitWidth: 170
+                contentItem: Text { text: pickBtn.text; color: pickBtn.hovered ? "#00f5d4" : "#c8d2da"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                background: Rectangle { color: pickBtn.hovered ? "#1f2a34" : "transparent"; radius: 4; border.color: pickBtn.hovered ? "#00f5d4" : "#2a3540" }
+                onClicked: { dlg.pickMode = !dlg.pickMode; dlg.pendingId = ""; dlg.status = ""; dlg.refresh(); }
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Pick one of your other layouts (or a deleted one) and give this layout its grid.")
+            }
+            CheckBox {
+                visible: dlg.pickMode
+                text: qsTr("Bring its cameras too")
+                checked: dlg.copyCameras
+                onToggled: dlg.copyCameras = checked
+                palette.highlight: "#00f5d4"
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Off (the default): only the grid changes, and this layout's own cameras stay where they still fit. On: the other layout's cameras come too, and this layout's cameras are replaced.")
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         Text {
             Layout.fillWidth: true
             visible: dlg.status !== ""
@@ -215,7 +364,7 @@ Dialog {
             Text {
                 anchors.centerIn: parent
                 visible: dlg.entries.length === 0
-                text: dlg.recoverMode ? qsTr("No deleted layouts have backups.") : qsTr("No copies of this layout yet. Press \"Back up now\".")
+                text: dlg.recoverMode ? qsTr("No deleted layouts have backups.") : (dlg.pickMode ? qsTr("There is no other layout to use.") : qsTr("No copies of this layout yet. Press \"Back up now\"."))
                 color: "#8898a6"
                 font.pixelSize: 12
             }
@@ -234,7 +383,7 @@ Dialog {
                     height: 46
                     color: "#141a21"
                     radius: 4
-                    border.color: dlg.pendingId === modelData.id ? "#ff7a00" : "#2a3540"
+                    border.color: dlg.pendingId === modelData.key ? "#ff7a00" : "#2a3540"
 
                     RowLayout {
                         anchors.fill: parent
@@ -247,7 +396,7 @@ Dialog {
                             spacing: 1
                             Text {
                                 Layout.fillWidth: true
-                                text: modelData.when + (dlg.recoverMode ? "   " + (modelData.name !== "" ? modelData.name : (modelData.nvrIp !== "" ? qsTr("Recorder %1").arg(modelData.nvrIp) : qsTr("(no name)"))) : "")
+                                text: modelData.title
                                 color: "#eeeeee"
                                 font.pixelSize: 12
                                 font.bold: true
@@ -255,7 +404,7 @@ Dialog {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: dlg.describeEntry(modelData)
+                                text: modelData.sub
                                 color: "#8898a6"
                                 font.pixelSize: 11
                                 elide: Text.ElideRight
@@ -264,8 +413,8 @@ Dialog {
 
                         Button {
                             id: restoreBtn
-                            visible: dlg.pendingId !== modelData.id
-                            text: dlg.recoverMode ? qsTr("Recover") : qsTr("Restore")
+                            visible: dlg.pendingId !== modelData.key
+                            text: dlg.recoverMode ? qsTr("Recover") : (dlg.pickMode ? qsTr("Use this") : qsTr("Restore"))
                             implicitHeight: 28
                             implicitWidth: 78
                             contentItem: Text { text: restoreBtn.text; color: "white"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
@@ -274,25 +423,26 @@ Dialog {
                                 if (dlg.recoverMode)
                                     dlg.restore(modelData.id);
                                 else
-                                    dlg.pendingId = modelData.id;
+                                    dlg.pendingId = modelData.key;
                             }
                         }
                         Button {
                             id: sureBtn
-                            visible: dlg.pendingId === modelData.id
-                            text: qsTr("Replace it")
+                            visible: dlg.pendingId === modelData.key
+                            text: dlg.pickMode ? qsTr("Apply it") : qsTr("Replace it")
                             implicitHeight: 28
                             implicitWidth: 86
                             contentItem: Text { text: sureBtn.text; color: "white"; font.bold: true; font.pixelSize: 11; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             background: Rectangle { color: sureBtn.hovered ? "#ff4d4d" : "#d63333"; radius: 4 }
-                            onClicked: dlg.restore(modelData.id)
+                            onClicked: { if (dlg.pickMode) dlg.applyPicked(modelData); else dlg.restore(modelData.id); }
                             ToolTip.visible: hovered
                             ToolTip.delay: 400
-                            ToolTip.text: qsTr("Replaces this layout with the copy from %1. The layout as it is now is saved first.").arg(modelData.when)
+                            ToolTip.text: dlg.pickMode ? qsTr("Changes this layout to the grid of \"%1\". The layout as it is now is saved first, so this can be undone.").arg(modelData.title)
+                                                       : qsTr("Replaces this layout with the copy from %1. The layout as it is now is saved first.").arg(modelData.when)
                         }
                         Button {
                             id: cancelPendingBtn
-                            visible: dlg.pendingId === modelData.id
+                            visible: dlg.pendingId === modelData.key
                             text: qsTr("Cancel")
                             implicitHeight: 28
                             implicitWidth: 64
@@ -302,7 +452,7 @@ Dialog {
                         }
                         Button {
                             id: removeBtn
-                            visible: dlg.pendingId !== modelData.id
+                            visible: dlg.pendingId !== modelData.key && modelData.removable
                             implicitHeight: 28
                             implicitWidth: 28
                             contentItem: Text { text: "\u00d7"; color: removeBtn.hovered ? "#ff4d4d" : "#8898a6"; font.pixelSize: 16; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
