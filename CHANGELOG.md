@@ -93,6 +93,7 @@ All notable changes to this project will be documented in this file.
   confirmation. Cameras that cannot take the switch are skipped and counted, and a login that one camera refused is not sent to
   another camera. A camera that answers a read but lists the setting as "notSupport" in its capabilities (the panoramic
   cameras) is counted as having no switch, not as a failure. (A recorder itself has no such switch over the network; its own screen menu button is not reachable.)
+  Found by the owner: on a G3 camera this switch draws the target boxes on the video stream as well as the rule lines.
 
 ### Changed
 * **A recorder can be set "Offline" when its network is not connected.** The "Mute" box in the recorder monitoring window is now
