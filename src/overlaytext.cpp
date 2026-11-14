@@ -294,6 +294,21 @@ void OverlayText::apply(const QVariantMap &settings)
     QTimer::singleShot(3000, this, [this]() { runOnce(true); }); // the first one soon after the start, not after a full period
 }
 
+void OverlayText::showStale(const QVariantMap &settings)
+{
+    m_s = settings;
+    m_timer->stop();
+    m_busy = true;
+    QString t = m_s.value(QStringLiteral("template")).toString();
+    if (t.isEmpty())
+        t = QStringLiteral("{temp} {unit}");
+    const bool f = m_s.value(QStringLiteral("unit")).toString().compare(QStringLiteral("F"), Qt::CaseInsensitive) == 0;
+    t.replace(QStringLiteral("{temp}"), QStringLiteral("--"));
+    t.replace(QStringLiteral("{unit}"), f ? QStringLiteral("F") : QStringLiteral("C"));
+    m_lastText.clear();
+    readCamera(t, true);
+}
+
 void OverlayText::test(const QVariantMap &settings)
 {
     m_s = settings;

@@ -40,6 +40,7 @@ Window {
         unitBox.currentIndex = s.unit === "F" ? 1 : 0;
         decimalsBox.currentIndex = Math.max(0, Math.min(2, s.decimals !== undefined ? s.decimals : 1));
         minutesBox.value = s.minutes > 0 ? s.minutes : 5;
+        closedBox.currentIndex = s.whenClosed === "remove" ? 1 : (s.whenClosed === "stale" ? 2 : 0);
         var found = -1;
         for (var i = 0; i < win.cameras.length; ++i)
             if (win.cameras[i].ip === s.camera && win.cameras[i].channel === (s.camChannel > 0 ? s.camChannel : 1))
@@ -67,7 +68,8 @@ Window {
             "template": templateField.text,
             "unit": unitBox.currentIndex === 1 ? "F" : "C",
             "decimals": decimalsBox.currentIndex,
-            "minutes": minutesBox.value
+            "minutes": minutesBox.value,
+            "whenClosed": ["keep", "remove", "stale"][closedBox.currentIndex]
         };
     }
 
@@ -270,6 +272,16 @@ Window {
                 RowLayout {
                     SpinBox { id: minutesBox; from: 1; to: 1440; value: 5; editable: true }
                     Text { text: qsTr("minutes"); color: "#eeeeee"; font.pixelSize: 12 }
+                }
+
+                Text { text: qsTr("When KVision is closed"); color: "#eeeeee"; font.pixelSize: 12 }
+                ComboBox {
+                    id: closedBox
+                    Layout.preferredWidth: 300
+                    model: [qsTr("Keep updating it"), qsTr("Remove it from the camera"), qsTr("Show \"--\" instead of the number")]
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: qsTr("What the camera shows while the KVision window is closed. This is done by the background service (the detection logger), so it must be running. When KVision starts again the text comes back by itself.")
                 }
             }
 

@@ -4,6 +4,7 @@
 #include "hikvisioneventlogger.h"
 #include "hikvisionevents.h"
 #include "offlinerecorders.h"
+#include "overlaytext.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -128,6 +129,12 @@ int runHeadlessEvents(int argc, char *argv[])
     HikvisionEvents events;
     HikvisionEventLogger logger(&events);
 
+    // The MQTT overlay text while no window is open. The window itself runs it when it is open, so the service stops it then.
+    // "whenClosed" in the overlay settings says what to do: keep updating (default), remove the text, or show a "--" marker.
+    OverlayText overlay;
+    QString overlayActive;      // the settings the service is currently updating with (keep), empty when it is not
+    QString overlayClosedDone;  // the settings a remove or stale action was already done for, so it happens once per close
+
     Settings current;
     QString state = QStringLiteral("starting");
     int tick = 0;
@@ -155,6 +162,35 @@ int runHeadlessEvents(int argc, char *argv[])
         // One writer at a time: only hold connections when enabled and no window is open.
         logger.configure(state == QLatin1String("logging"), s.recorders, s.source, configDir, s.sourceOverrides);
         current = s;
+
+        {
+            const QString raw = QSettings(configPath, QSettings::IniFormat).value(QStringLiteral("overlayText"), QStringLiteral("{}")).toString();
+            const QJsonObject o = QJsonDocument::fromJson(raw.toUtf8()).object();
+            const QString mode = o.value(QStringLiteral("whenClosed")).toString(QStringLiteral("keep"));
+            if (ui || !o.value(QStringLiteral("enabled")).toBool()) {
+                if (!overlayActive.isEmpty()) {
+                    overlay.apply(QVariantMap()); // stops the timer
+                    overlayActive.clear();
+                }
+                overlayClosedDone.clear();
+            } else if (mode == QLatin1String("remove") || mode == QLatin1String("stale")) {
+                if (overlayClosedDone != raw) {
+                    overlayClosedDone = raw;
+                    overlay.apply(QVariantMap());
+                    overlayActive.clear();
+                    qInfo() << "[Headless] overlay text:" << (mode == QLatin1String("remove") ? "removing it" : "marking it stale") << "(window closed)";
+                    if (mode == QLatin1String("remove"))
+                        overlay.clearSlot(o.toVariantMap());
+                    else
+                        overlay.showStale(o.toVariantMap());
+                }
+            } else if (overlayActive != raw) {
+                overlayActive = raw;
+                overlayClosedDone.clear();
+                qInfo() << "[Headless] overlay text: keeping it up to date (window closed)";
+                overlay.apply(o.toVariantMap());
+            }
+        }
 
         writeStatus(configDir, state, events, logger);
         // The "Status:" line of systemctl --user status: which build is running, and what it is doing.

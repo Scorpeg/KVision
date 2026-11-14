@@ -32,6 +32,9 @@ public:
     // Removes the chosen text overlay from the camera (switches it off and empties its text, which these cameras take as
     // "delete this entry") and stops the updates. Result goes to clearDone.
     Q_INVOKABLE void clearSlot(const QVariantMap &settings);
+    // Writes the template with "--" in place of the number (for example "Outside -- C") and stops the updates, so a value
+    // that is no longer being refreshed cannot be mistaken for a current one. Used when KVision is closed.
+    Q_INVOKABLE void showStale(const QVariantMap &settings);
     // Reads the value and shows what would be written, without writing anything. Result goes to testDone.
     Q_INVOKABLE void test(const QVariantMap &settings);
     // The text for a value in Celsius: the template with {temp} and {unit} replaced.

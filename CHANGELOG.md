@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **The MQTT overlay text now has a "When KVision is closed" choice** (Overlay text from MQTT window): keep updating it (the
+  default, done by the background detection logger), remove it from the camera, or show "--" in place of the number so an old
+  value is never mistaken for a current one. The service does this within about 5 seconds of the window closing, and steps
+  aside when a window is open. It needs the background service to be running.
+
 * **Force Fit, in a tile's right-click menu.** Stretches that camera's picture to fill the whole tile, so a camera that is
   naturally 4:3 has no black bars in a 16:9 tile (the picture is slightly stretched). It is kept per camera in the settings
   (`forceFitCameras`), not in the layout, so the layout is not changed and every tile of that camera follows it.
