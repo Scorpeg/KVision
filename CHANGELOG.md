@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **Overlay text from MQTT can feed several cameras and topics.** The window now holds a list of entries. Each entry is one
+  topic going into one text overlay of one camera, with its own broker, text, unit and update time, so you can keep adding
+  them: another camera, or another value (humidity in overlay 2) on the same camera. Fill in the form and press Add; pressing
+  Update on the same camera and overlay number changes that entry instead of adding a second one. Each entry shows what it last
+  did. "Remove from camera" takes the selected entry's text off its camera and removes it from the list; if the camera cannot be
+  reached the entry stays, so the text is not forgotten there. "Forget" drops an entry without touching the camera (for a camera
+  that is gone). "When KVision is closed" is one setting for all entries. Entries run on their own, so an offline camera does
+  not hold up the others, a camera's overlay is never changed by two entries at once, and a refused login is still tried once
+  per camera. Your existing setup becomes the first entry by itself. The window scrolls on small screens.
 * **The event picture window can zoom.** Mouse wheel (around the pointer), the - and + buttons or keys, or double-click to zoom
   in on a spot and again to go back; 0 or a click on the percentage shows the whole picture. Drag to move around when zoomed
   in, up to 10 times. The target box and zone are redrawn at each zoom, so they stay on the target. Each new picture starts

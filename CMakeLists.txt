@@ -194,7 +194,7 @@ set(PROJ_FILES
     src/headlessevents.cpp src/headlessevents.h
     src/hikvisionsetupcheck.cpp src/hikvisionsetupcheck.h
     src/mqttonce.cpp src/mqttonce.h
-    src/overlaytext.cpp src/overlaytext.h
+    src/overlaytext.cpp src/overlaytext.h src/overlayentry.cpp src/overlayentry.h
     src/layoutbackups.cpp src/layoutbackups.h
     src/systemstats.cpp src/systemstats.h
     src/nvrstatusmanager.cpp src/nvrstatusmanager.h

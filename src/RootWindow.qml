@@ -2460,7 +2460,7 @@ ApplicationWindow {
         if (!Context.isAuxiliary && generalSettings.logDetectionEvents)
             backgroundServiceTimer.start();
         if (!Context.isAuxiliary) {
-            try { OverlayText.apply(JSON.parse(generalSettings.overlayText || "{}")); } catch (e) {}
+            OverlayText.apply(generalSettings.overlayText || "{}");
         }
         if (generalSettings.checkSetupAtStart && !Context.isAuxiliary)
             startupSetupCheckTimer.start();

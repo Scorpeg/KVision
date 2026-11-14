@@ -1,69 +1,69 @@
 #ifndef OVERLAYTEXT_H
 #define OVERLAYTEXT_H
 
+#include <QHash>
 #include <QObject>
-#include <QSet>
 #include <QString>
 #include <QVariantMap>
-#include <functional>
 
-class QNetworkAccessManager;
-class QTimer;
+class OverlayEntry;
 
-// Puts a value from an MQTT topic (an outside temperature, say) into one of a camera's on-screen text overlays and keeps
-// it up to date. It is the only part of KVision that writes to a camera, so it is careful: it does nothing until the
-// settings ask for it, changes only the text of the one slot (the rest of the overlay is read first and written back as
-// it was), writes only when the text has changed, tries a login once and stops for the session when it is refused, and
-// never retries a failed write in a loop (the next try is at the next update).
+// The list of "MQTT value into a camera's text overlay" entries. Each entry is one topic going into one text overlay (slot)
+// of one camera, with its own broker, topic, text, unit and update time, and runs on its own (see OverlayEntry for how a
+// single entry treats the camera). The list is kept as JSON in the "overlayText" setting:
+//   { "version": 2, "whenClosed": "keep" | "remove" | "stale", "entries": [ { enabled, host, port, user, pass, topic, field,
+//     camera, camChannel, httpPort, camUser, camPass, slot, template, unit, decimals, minutes }, ... ] }
+// "whenClosed" is one setting for all entries: what the cameras show while the KVision window is closed. The older single-entry
+// form of the setting (the same fields at the top level) is converted when it is read.
 class OverlayText : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(QVariantMap statuses READ statuses NOTIFY statusesChanged) // entry key -> what it last did
+    Q_PROPERTY(QString status READ status NOTIFY statusesChanged)        // one line for all entries
 
 public:
     explicit OverlayText(QObject *parent = nullptr);
 
-    QString status() const { return m_status; }
+    QVariantMap statuses() const { return m_statuses; }
+    QString status() const;
 
-    // Replaces what the overlay does. settings holds: enabled, host, port (broker), user, pass, topic, field (the name in
-    // a JSON message, empty for a plain number), camera (address), httpPort, camUser, camPass, slot (text overlay id),
-    // template (for example "Outside {temp} {unit}"), unit ("C" or "F"), decimals, minutes. A change takes effect at once.
-    Q_INVOKABLE void apply(const QVariantMap &settings);
-    // Removes the chosen text overlay from the camera (switches it off and empties its text, which these cameras take as
-    // "delete this entry") and stops the updates. Result goes to clearDone.
-    Q_INVOKABLE void clearSlot(const QVariantMap &settings);
-    // Writes the template with "--" in place of the number (for example "Outside -- C") and stops the updates, so a value
-    // that is no longer being refreshed cannot be mistaken for a current one. Used when KVision is closed.
-    Q_INVOKABLE void showStale(const QVariantMap &settings);
+    // The settings as the current JSON form, whatever form they were saved in. Empty or broken text gives an empty list.
+    Q_INVOKABLE static QString migrate(const QString &json);
+    // Which camera and text overlay an entry is for. Two entries with the same key would overwrite each other.
+    Q_INVOKABLE static QString entryKey(const QVariantMap &entry);
+
+    // Makes the running entries match the list: new ones start, changed ones restart, unchanged ones are left alone (their
+    // timers keep running), ones no longer in the list stop. Only entries that are switched on run.
+    Q_INVOKABLE void apply(const QString &json);
+    // Stops every entry.
+    Q_INVOKABLE void stop();
+    // Removes the text overlay of one entry from its camera (switches it off and empties its text) and stops that entry.
+    // The result goes to clearDone with the entry's key.
+    Q_INVOKABLE void clearSlot(const QVariantMap &entry);
+    // For the closed window: remove, or mark as stale ("--"), every entry that is switched on.
+    void clearAll(const QString &json);
+    void staleAll(const QString &json);
     // Reads the value and shows what would be written, without writing anything. Result goes to testDone.
-    Q_INVOKABLE void test(const QVariantMap &settings);
+    Q_INVOKABLE void test(const QVariantMap &entry);
+
     // The text for a value in Celsius: the template with {temp} and {unit} replaced.
     Q_INVOKABLE static QString formatText(double celsius, const QString &templ, const QString &unit, int decimals);
     // The number in an MQTT message: a plain number, or the field of a JSON object. ok says whether one was found.
     static double parseValue(const QString &payload, const QString &field, bool *ok = nullptr);
 
 signals:
-    void statusChanged();
+    void statusesChanged();
     void testDone(bool ok, const QString &text, const QString &message);
-    void clearDone(bool ok, const QString &message);
+    void clearDone(const QString &key, bool ok, const QString &message);
 
 private:
-    void runOnce(bool writeIt);
-    void readCamera(const QString &text, bool writeIt);
-    void writeCamera(const QString &xml, const QString &text, const QString &path);
-    void setStatus(const QString &s);
-    void request(const QString &method, const QString &path, const QByteArray &body, std::function<void(int, const QByteArray &)> done);
-    static QString setSlotText(const QString &xml, int slot, const QString &text, bool *found);
-    // The overlay XML with one text entry switched off and emptied; found says whether the entry was there.
-    static QString removeSlot(const QString &xml, int slot, bool *found);
+    static QVariantList entriesOf(const QString &json);
+    OverlayEntry *makeEntry(const QString &key);
+    void entryStatus(const QString &key, const QString &status);
 
-    QNetworkAccessManager *m_net = nullptr;
-    QTimer *m_timer = nullptr;
-    QVariantMap m_s;
-    QString m_status;
-    QString m_lastText;      // what was last written, so an unchanged value is not written again
-    QSet<QString> m_refused; // cameras that refused the login this session
-    bool m_busy = false;
+    QHash<QString, OverlayEntry *> m_entries; // the running ones
+    QVariantMap m_statuses;
+    QList<OverlayEntry *> m_transient;        // for clearing and marking stale: they finish and delete themselves
 };
 
 #endif // OVERLAYTEXT_H

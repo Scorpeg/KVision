@@ -5,16 +5,17 @@ import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
 
-// Settings for putting a value from an MQTT broker (an outside temperature, say) into one of a camera's on-screen text
-// overlays, refreshed every few minutes. Off until switched on. It is the one place KVision writes to a camera, and it
-// changes only the text of the slot chosen here.
+// Settings for putting values from an MQTT broker (an outside temperature, say) into a camera's on-screen text overlays,
+// refreshed every few minutes. Each entry is one topic going into one text overlay of one camera, so the list can hold as
+// many as you like: fill in the form and press "Add / update" for each. Off until switched on. It is the one place KVision
+// writes to a camera, and it changes only the text of the slots chosen here.
 Window {
     id: win
 
     width: 560
-    height: 780
+    height: 900
     minimumWidth: 500
-    minimumHeight: 740
+    minimumHeight: 520
     color: "#0f151b"
     title: qsTr("Overlay text from MQTT")
     flags: Qt.Window | Qt.WindowStaysOnTopHint
@@ -24,10 +25,23 @@ Window {
     property bool testOk: false
     property string savedCamera: "" // the address saved earlier, kept visible when it is no longer in the list
     readonly property bool haveCamera: cameraBox.currentIndex >= 0
+    property var entries: []        // the saved entries (see OverlayText in overlaytext.h)
+    property string whenClosed: "keep"
+    property int selected: -1       // the entry shown in the form; -1 is a new one
+    readonly property var statuses: OverlayText.statuses
 
-    function load() {
-        var s = {};
-        try { s = JSON.parse(generalSettings.overlayText || "{}"); } catch (e) {}
+    function cameraLabel(ip, channel) {
+        for (var i = 0; i < win.cameras.length; ++i)
+            if (win.cameras[i].ip === ip && win.cameras[i].channel === (channel > 0 ? channel : 1))
+                return win.cameras[i].label;
+        return ip || "";
+    }
+
+    function keyOf(e) {
+        return OverlayText.entryKey(e);
+    }
+
+    function fillForm(s) {
         enabledBox.checked = s.enabled === true;
         hostField.text = s.host || "";
         portField.text = s.port > 0 ? String(s.port) : "1883";
@@ -40,13 +54,41 @@ Window {
         unitBox.currentIndex = s.unit === "F" ? 1 : 0;
         decimalsBox.currentIndex = Math.max(0, Math.min(2, s.decimals !== undefined ? s.decimals : 1));
         minutesBox.value = s.minutes > 0 ? s.minutes : 5;
-        closedBox.currentIndex = s.whenClosed === "remove" ? 1 : (s.whenClosed === "stale" ? 2 : 0);
         var found = -1;
         for (var i = 0; i < win.cameras.length; ++i)
             if (win.cameras[i].ip === s.camera && win.cameras[i].channel === (s.camChannel > 0 ? s.camChannel : 1))
                 found = i;
         cameraBox.currentIndex = found;
         win.savedCamera = s.camera || "";
+    }
+
+    function load() {
+        var s = {};
+        try { s = JSON.parse(OverlayText.migrate(generalSettings.overlayText || "{}")); } catch (e) {}
+        win.entries = s.entries || [];
+        win.whenClosed = s.whenClosed || "keep";
+        closedBox.currentIndex = win.whenClosed === "remove" ? 1 : (win.whenClosed === "stale" ? 2 : 0);
+        if (win.entries.length > 0)
+            win.select(0);
+        else
+            win.newEntry(true);
+    }
+
+    function select(i) {
+        win.selected = i;
+        win.fillForm(win.entries[i]);
+    }
+
+    // An empty form for another entry. The broker and the text settings stay as they are, since the next entry is usually
+    // another camera or another topic on the same broker.
+    function newEntry(first) {
+        win.selected = -1;
+        cameraBox.currentIndex = -1;
+        win.savedCamera = "";
+        enabledBox.checked = true;
+        if (first === true)
+            win.fillForm({ "enabled": true });
+        win.testResult = "";
     }
 
     function collect() {
@@ -68,13 +110,19 @@ Window {
             "template": templateField.text,
             "unit": unitBox.currentIndex === 1 ? "F" : "C",
             "decimals": decimalsBox.currentIndex,
-            "minutes": minutesBox.value,
-            "whenClosed": ["keep", "remove", "stale"][closedBox.currentIndex]
+            "minutes": minutesBox.value
         };
     }
 
-    function save(quiet) {
-        if (enabledBox.checked && !win.haveCamera) {
+    // Writes the list to the settings and makes the running entries match it.
+    function persist() {
+        var json = JSON.stringify({ "version": 2, "whenClosed": win.whenClosed, "entries": win.entries });
+        generalSettings.overlayText = json;
+        OverlayText.apply(json);
+    }
+
+    function save() {
+        if (!win.haveCamera) {
             win.testOk = false;
             win.testResult = qsTr("Choose the camera first. Nothing was saved.");
             return;
@@ -84,15 +132,39 @@ Window {
             win.testResult = qsTr("Fill in the broker address and the topic. Nothing was saved.");
             return;
         }
-        var s = win.collect();
-        generalSettings.overlayText = JSON.stringify(s);
-        OverlayText.apply(s);
-        // Say what the Save did, so a ticked and an unticked box are not mistaken for each other.
-        if (quiet === true)
-            return;
+        var e = win.collect();
+        var key = win.keyOf(e);
+        var list = win.entries.slice();
+        var at = -1;
+        for (var i = 0; i < list.length; ++i)
+            if (win.keyOf(list[i]) === key)
+                at = i;
+        if (at >= 0)
+            list[at] = e;
+        else
+            list.push(e);
+        win.entries = list;
+        win.selected = at >= 0 ? at : list.length - 1;
+        win.persist();
+        // Say what the save did, so a ticked and an unticked box are not mistaken for each other.
         win.testOk = true;
-        win.testResult = s.enabled ? qsTr("Saved. The first update follows in a few seconds, then one every %1 minutes.").arg(s.minutes)
-                                   : qsTr("Saved. Updates are switched off. Tick \"Keep the overlay text up to date\" and press Save to start them.");
+        var what = at >= 0 ? qsTr("Updated the entry for this camera and text overlay.") : qsTr("Added to the list.");
+        win.testResult = what + " " + (e.enabled ? qsTr("The first update follows in a few seconds, then one every %1 minutes.").arg(e.minutes)
+                                                  : qsTr("Its updates are switched off. Tick \"Keep the overlay text up to date\" and press the button again to start them."));
+    }
+
+    // Takes an entry out of the list without touching the camera.
+    function dropEntry(key) {
+        var list = [];
+        for (var i = 0; i < win.entries.length; ++i)
+            if (win.keyOf(win.entries[i]) !== key)
+                list.push(win.entries[i]);
+        win.entries = list;
+        win.persist();
+        if (list.length > 0)
+            win.select(0);
+        else
+            win.newEntry(false);
     }
 
     Component.onCompleted: {
@@ -131,11 +203,10 @@ Window {
         onClearDone: {
             win.testOk = ok;
             win.testResult = message;
-            if (ok) {
-                // The overlay is gone, so the updates are switched off too: nothing would write it back.
-                enabledBox.checked = false;
-                win.save(true);
-            }
+            // The overlay is gone, so the entry goes too: nothing would write it back. When the camera could not be reached the
+            // entry stays, so the text is not forgotten on the camera.
+            if (ok)
+                win.dropEntry(key);
         }
         onTestDone: {
             win.testOk = ok;
@@ -149,42 +220,129 @@ Window {
             rootWindow.triggerGcDeferred();
     }
 
+    readonly property var chosen: win.selected >= 0 && win.selected < win.entries.length ? win.entries[win.selected] : null
+
     ConfirmDialog {
         id: removeDialog
         parent: win.contentItem
         title: qsTr("Remove the overlay text?")
         iconSource: "qrc:/images/icon-trash.svg"
-        message: qsTr("Text overlay number %1 will be taken off %2 (its text is deleted) and the updates will be switched off. The camera's date and time are not touched.").arg(slotBox.currentIndex + 1).arg(win.haveCamera ? cameraBox.currentText : "")
+        message: win.chosen ? qsTr("Text overlay number %1 will be taken off %2 (its text is deleted) and this entry will be removed from the list. The camera's date and time are not touched.").arg(win.chosen.slot).arg(win.cameraLabel(win.chosen.camera, win.chosen.camChannel)) : ""
         confirmButtonText: qsTr("Remove")
         onAccepted: {
+            if (!win.chosen)
+                return;
             win.testOk = true;
             win.testResult = qsTr("Removing...");
-            OverlayText.clearSlot(win.collect());
+            OverlayText.clearSlot(win.chosen);
         }
     }
 
-    Item {
+    ConfirmDialog {
+        id: forgetDialog
+        parent: win.contentItem
+        title: qsTr("Forget this entry?")
+        iconSource: "qrc:/images/icon-trash.svg"
+        message: win.chosen ? qsTr("The entry for %1, text overlay %2, will be taken off the list and its updates stop. The camera is NOT touched, so the last text stays on its picture. Use this for a camera that is gone.").arg(win.cameraLabel(win.chosen.camera, win.chosen.camChannel)).arg(win.chosen.slot) : ""
+        confirmButtonText: qsTr("Forget")
+        onAccepted: {
+            if (win.chosen)
+                win.dropEntry(win.keyOf(win.chosen));
+        }
+    }
+
+    // The form is taller than a small screen, so it scrolls.
+    Flickable {
         anchors.fill: parent
-        anchors.margins: 12
+        contentWidth: width
+        contentHeight: formColumn.implicitHeight + 24
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar {}
 
         ColumnLayout {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
+            id: formColumn
+            x: 12
+            y: 12
+            width: parent.width - 24 - 10
             spacing: 8
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("Shows a value from an MQTT broker, such as the outside temperature, in one of a camera's on-screen text overlays and refreshes it. KVision changes only the text of the slot you choose, and only when the text has changed. It works while KVision is running. The camera needs a character overlay setting (most Hikvision cameras have one). If the slot you choose is not set up, KVision creates it. Slot 1 is the safest choice, and its old text is replaced.")
+                text: qsTr("Shows values from an MQTT broker, such as the outside temperature, in a camera's on-screen text overlays and keeps them up to date. Each entry is one topic going into one text overlay of one camera. Fill in the form and press Add for each one. KVision changes only the text of the overlays you choose, and only when the text has changed. A text overlay that the camera has not set up yet is created; its old text is replaced.")
                 color: "#8898a6"
                 font.pixelSize: 11
                 wrapMode: Text.Wrap
             }
 
+            Text { text: qsTr("Entries"); color: "#eeeeee"; font.pixelSize: 12; font.bold: true }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 120
+                color: "#141c24"
+                border.color: "#2a3540"
+                radius: 4
+                clip: true
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: win.entries.length === 0
+                    text: qsTr("Nothing yet. Fill in the form below and press \"Add / update\".")
+                    color: "#8898a6"
+                    font.pixelSize: 12
+                }
+
+                ListView {
+                    id: entryList
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    model: win.entries
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: Rectangle {
+                        readonly property var e: modelData
+                        readonly property string st: win.statuses[win.keyOf(e)] || ""
+                        width: entryList.width
+                        height: 48
+                        color: index === win.selected ? "#1f3a40" : (rowArea.containsMouse ? "#1b2630" : "transparent")
+                        radius: 3
+                        MouseArea { id: rowArea; anchors.fill: parent; hoverEnabled: true; onClicked: win.select(index) }
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            spacing: 0
+                            Text {
+                                Layout.fillWidth: true
+                                text: win.cameraLabel(e.camera, e.camChannel) + "  -  " + qsTr("overlay %1").arg(e.slot) + (e.enabled ? "" : "  " + qsTr("(off)"))
+                                color: e.enabled ? "#eeeeee" : "#8898a6"
+                                font.pixelSize: 12
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: e.topic + "  ->  " + (e.template || "")
+                                color: "#8898a6"
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: !e.enabled ? qsTr("Switched off") : (st !== "" ? st : qsTr("Waiting for the first update"))
+                                color: "#00f5d4"
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
+                }
+            }
+
             Text {
                 Layout.fillWidth: true
                 text: win.haveCamera
-                      ? qsTr("Will write to:  %1,  text overlay %2").arg(cameraBox.currentText).arg(slotBox.currentIndex + 1)
+                      ? (win.selected >= 0 ? qsTr("Editing:  %1,  text overlay %2") : qsTr("New entry for:  %1,  text overlay %2")).arg(cameraBox.currentText).arg(slotBox.currentIndex + 1)
                       : qsTr("No camera chosen yet. Nothing will be written.")
                 color: win.haveCamera ? "#00f5d4" : "#e0a040"
                 font.pixelSize: 12
@@ -274,15 +432,6 @@ Window {
                     Text { text: qsTr("minutes"); color: "#eeeeee"; font.pixelSize: 12 }
                 }
 
-                Text { text: qsTr("When KVision is closed"); color: "#eeeeee"; font.pixelSize: 12 }
-                ComboBox {
-                    id: closedBox
-                    Layout.preferredWidth: 300
-                    model: [qsTr("Keep updating it"), qsTr("Remove it from the camera"), qsTr("Show \"--\" instead of the number")]
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: qsTr("What the camera shows while the KVision window is closed. This is done by the background service (the detection logger), so it must be running. When KVision starts again the text comes back by itself.")
-                }
             }
 
             RowLayout {
@@ -295,15 +444,30 @@ Window {
                     ToolTip.text: qsTr("Reads the value and shows the text it would write. Nothing is written to the camera.")
                 }
                 Button {
-                    text: qsTr("Save")
+                    text: win.selected >= 0 ? qsTr("Update") : qsTr("Add")
                     onClicked: win.save()
+                    ToolTip.visible: hovered; ToolTip.delay: 600
+                    ToolTip.text: qsTr("Adds this to the list, or updates the entry that has the same camera and text overlay number, and starts it.")
+                }
+                Button {
+                    text: qsTr("New entry")
+                    onClicked: win.newEntry(false)
+                    ToolTip.visible: hovered; ToolTip.delay: 600
+                    ToolTip.text: qsTr("Clears the camera so you can add another entry. The broker and the text settings stay, so a second camera takes a few clicks.")
                 }
                 Button {
                     text: qsTr("Remove from camera")
-                    enabled: win.haveCamera
+                    enabled: win.chosen !== null
                     onClicked: removeDialog.open()
                     ToolTip.visible: hovered; ToolTip.delay: 600
-                    ToolTip.text: qsTr("Takes this text overlay off the camera (its text is deleted) and switches the updates off. Use it when you no longer want the text on the picture.")
+                    ToolTip.text: qsTr("Takes this entry's text overlay off its camera (its text is deleted) and removes the entry from the list. Use it when you no longer want the text on the picture.")
+                }
+                Button {
+                    text: qsTr("Forget")
+                    enabled: win.chosen !== null
+                    onClicked: forgetDialog.open()
+                    ToolTip.visible: hovered; ToolTip.delay: 600
+                    ToolTip.text: qsTr("Takes the entry off the list without touching the camera. For a camera that is gone for good.")
                 }
                 Item { Layout.fillWidth: true }
             }
@@ -319,10 +483,30 @@ Window {
 
             Text {
                 Layout.fillWidth: true
-                text: OverlayText.status !== "" ? qsTr("Last update:  %1").arg(OverlayText.status) : qsTr("Switched off. Tick the box above and press Save to start.")
+                text: win.entries.length === 0 ? qsTr("No entries yet.") : qsTr("The list above shows what each entry last did.")
                 color: "#8898a6"
                 font.pixelSize: 12
                 wrapMode: Text.Wrap
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: "#2a3540" }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                Text { text: qsTr("When KVision is closed"); color: "#eeeeee"; font.pixelSize: 12; font.bold: true }
+                ComboBox {
+                    id: closedBox
+                    Layout.preferredWidth: 300
+                    model: [qsTr("Keep updating them"), qsTr("Remove them from the cameras"), qsTr("Show \"--\" instead of the number")]
+                    onActivated: {
+                        win.whenClosed = ["keep", "remove", "stale"][currentIndex];
+                        win.persist();
+                    }
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: qsTr("What the cameras show while the KVision window is closed. It applies to every entry in the list. This is done by the background service (the detection logger), so it must be running. When KVision starts again the text comes back by itself.")
+                }
             }
         }
     }

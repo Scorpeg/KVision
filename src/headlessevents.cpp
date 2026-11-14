@@ -164,31 +164,35 @@ int runHeadlessEvents(int argc, char *argv[])
         current = s;
 
         {
+            // The MQTT overlay texts (a list of entries; the older single setting is converted when read).
             const QString raw = QSettings(configPath, QSettings::IniFormat).value(QStringLiteral("overlayText"), QStringLiteral("{}")).toString();
-            const QJsonObject o = QJsonDocument::fromJson(raw.toUtf8()).object();
+            const QJsonObject o = QJsonDocument::fromJson(OverlayText::migrate(raw).toUtf8()).object();
             const QString mode = o.value(QStringLiteral("whenClosed")).toString(QStringLiteral("keep"));
-            if (ui || !o.value(QStringLiteral("enabled")).toBool()) {
+            bool anyOn = false;
+            for (const QJsonValue &v : o.value(QStringLiteral("entries")).toArray())
+                anyOn = anyOn || v.toObject().value(QStringLiteral("enabled")).toBool();
+            if (ui || !anyOn) {
                 if (!overlayActive.isEmpty()) {
-                    overlay.apply(QVariantMap()); // stops the timer
+                    overlay.stop();
                     overlayActive.clear();
                 }
                 overlayClosedDone.clear();
             } else if (mode == QLatin1String("remove") || mode == QLatin1String("stale")) {
                 if (overlayClosedDone != raw) {
                     overlayClosedDone = raw;
-                    overlay.apply(QVariantMap());
+                    overlay.stop();
                     overlayActive.clear();
                     qInfo() << "[Headless] overlay text:" << (mode == QLatin1String("remove") ? "removing it" : "marking it stale") << "(window closed)";
                     if (mode == QLatin1String("remove"))
-                        overlay.clearSlot(o.toVariantMap());
+                        overlay.clearAll(raw);
                     else
-                        overlay.showStale(o.toVariantMap());
+                        overlay.staleAll(raw);
                 }
             } else if (overlayActive != raw) {
                 overlayActive = raw;
                 overlayClosedDone.clear();
                 qInfo() << "[Headless] overlay text: keeping it up to date (window closed)";
-                overlay.apply(o.toVariantMap());
+                overlay.apply(raw);
             }
         }
 
