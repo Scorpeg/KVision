@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **`scripts/restore-layout.py`: put back one layout from an older copy of the settings** without touching anything else
+  (`list`, `compare` and `restore`). It saves the current file first, refuses when KVision is open or when the layout in the
+  copy is a different one, and checks the result.
+
 * **The MQTT overlay text now has a "When KVision is closed" choice** (Overlay text from MQTT window): keep updating it (the
   default, done by the background detection logger), remove it from the camera, or show "--" in place of the number so an old
   value is never mistaken for a current one. The service does this within about 5 seconds of the window closing, and steps
