@@ -921,8 +921,14 @@ FocusScope {
         var login = root.savedLoginFor(root.recorderIp);
         if (!login)
             return null;
-        var p = HikvisionManager.proxyCameraCached(root.recorderIp, login.http, login.user, login.pass, root.channelId);
-        if (!p || !p.ip || p.ip === root.recorderIp)
+        // Never waits for the recorder. When its camera list is not known yet (it was not answering) it is read in the
+        // background, and updateTargetWatch runs again when it arrives (proxyChannelsReady) or on the retry timer below.
+        var p = HikvisionManager.proxyCameraIfCached(root.recorderIp, root.channelId);
+        if (!p || !p.ip) {
+            HikvisionManager.prefetchProxyChannels(root.recorderIp, login.http, login.user, login.pass);
+            return null;
+        }
+        if (p.ip === root.recorderIp)
             return null;
         root.targetCam = { ip: p.ip, http: 80 };
         root.targetCamFor = key;
@@ -1040,6 +1046,24 @@ FocusScope {
     }
     property string watchedIp: ""
     onTargetWantedChanged: updateTargetWatch()
+
+    // A camera behind a recorder is found through the recorder. If the recorder was not answering (unplugged, rebooting, just
+    // switched back from Offline) the watch could not start; ask again every 20 seconds until it does. Nothing here waits for
+    // the recorder, and a recorder that is set Offline is not asked at all (targetWanted is false then).
+    Timer {
+        id: targetRetryTimer
+        interval: 20000
+        repeat: true
+        running: root.targetWanted && !root.targetWatching && !root.useRecorderEvents && !root.isStandaloneCamera
+        onTriggered: root.updateTargetWatch()
+    }
+    Connections {
+        target: HikvisionManager
+        function onProxyChannelsReady(nvrIp, ok) {
+            if (ok && nvrIp === root.recorderIp && root.targetWanted && !root.targetWatching)
+                root.updateTargetWatch();
+        }
+    }
     onUseRecorderEventsChanged: {
         // The source setting changed: close the old connection and open the one the setting now asks for.
         if (root.targetWatching) {

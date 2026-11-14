@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+* **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
+  behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and
+  stayed without detection until KVision was restarted. Now the tile reads the recorder's camera list in the background
+  (the window never waits for it) and asks again every 20 seconds until it answers. A recorder that is set Offline is still
+  not asked at all.
+* A device that answered "no detection stream" (for example while it was still starting up) was never asked again. It is
+  now asked once every 30 minutes, and detection starts if it answers.
+
 ### Added
 * **Backup / Restore button next to every layout in Presets.** It opens a list of saved copies of that one layout (grid size,
   cameras and positions). "Back up now" saves a copy with an optional note. "Restore" replaces only that layout, after a

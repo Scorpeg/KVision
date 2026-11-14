@@ -331,6 +331,52 @@ QVariantMap HikvisionManager::proxyCameraCached(const QString &nvrIp, int httpPo
     return m_proxyCache.value(cleanIp).value(channelId);
 }
 
+QVariantMap HikvisionManager::proxyCameraIfCached(const QString &nvrIp, int channelId) const
+{
+    QString cleanIp = nvrIp.trimmed();
+    if (cleanIp.contains(QLatin1Char(':')))
+        cleanIp = cleanIp.section(QLatin1Char(':'), 0, 0);
+    return m_proxyCache.value(cleanIp).value(channelId);
+}
+
+void HikvisionManager::prefetchProxyChannels(const QString &nvrIp, int httpPort, const QString &username, const QString &password)
+{
+    QString cleanIp = nvrIp.trimmed();
+    if (cleanIp.contains(QLatin1Char(':')))
+        cleanIp = cleanIp.section(QLatin1Char(':'), 0, 0);
+    if (cleanIp.isEmpty() || username.isEmpty() || password.isEmpty() || m_proxyCache.contains(cleanIp) || m_proxyFetching.contains(cleanIp))
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_proxyAttemptAt.contains(cleanIp) && now - m_proxyAttemptAt.value(cleanIp) < 15000)
+        return;
+    m_proxyAttemptAt.insert(cleanIp, now);
+    m_proxyFetching.insert(cleanIp);
+    if (httpPort <= 0)
+        httpPort = 80;
+
+    QThread *thread = QThread::create([this, cleanIp, httpPort, username, password]() {
+        const QHash<int, QVariantMap> channels = fetchProxyChannels(cleanIp, httpPort, username, password);
+        QMetaObject::invokeMethod(this, [this, cleanIp, channels]() {
+            m_proxyFetching.remove(cleanIp);
+            if (!channels.isEmpty()) {
+                m_proxyCache.insert(cleanIp, channels);
+                m_proxyFailedAt.remove(cleanIp);
+            }
+            emit proxyChannelsReady(cleanIp, !channels.isEmpty());
+        }, Qt::QueuedConnection);
+    });
+    {
+        std::lock_guard<std::mutex> lock(m_discoveryMutex);
+        m_discoveryThreads.append(thread);
+    }
+    connect(thread, &QThread::finished, this, [this, thread]() {
+        std::lock_guard<std::mutex> lock(m_discoveryMutex);
+        m_discoveryThreads.removeOne(thread);
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
 QHash<int, QVariantMap> HikvisionManager::fetchProxyChannels(const QString &nvrIp, int httpPort, const QString &username, const QString &password)
 {
     QHash<int, QVariantMap> channels;

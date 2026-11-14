@@ -21,6 +21,7 @@ namespace {
 const int kMaxFailures = 3;       // after this many failed attempts in a row, tell the user once (it keeps trying)
 const int kRetryBaseMs = 2000;    // first wait before reopening a lost stream; doubles each time
 const int kRetryMaxMs = 30000;    // and never waits longer than this
+const int kUnsupportedRetryMs = 30 * 60 * 1000; // a device that said "no event stream" is asked again after this long (it may only have been starting up)
 const int kHealthyMs = 10000;     // a stream that has stayed up this long counts as working
 const int kStallMs = 40000;       // a camera sends a heartbeat about every 10 s: this long with no data means the stream is dead
 const int kMaxBuffer = 1024 * 1024; // pictures can ride along in an event; never keep more than this
@@ -245,6 +246,10 @@ void HikvisionEvents::onReadyRead(const QString &ip)
     // for a while, so a camera that connects and drops at once is not asked again every two seconds.
     if (QDateTime::currentMSecsSinceEpoch() - c->openedMs >= kHealthyMs)
         c->failures = 0;
+    if (c->unsupported && c->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
+        c->unsupported = false; // it does offer them after all
+        qInfo() << "[Events]" << ip << "now offers detection events";
+    }
     c->watchdog->start(); // and the stream is alive: start the stall timer again
     c->lastDataMs = QDateTime::currentMSecsSinceEpoch();
     c->buffer += c->reply->readAll();
@@ -752,6 +757,7 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
         c->unsupported = true;
         qWarning() << "[Events]" << ip << "has no detection stream (HTTP" << httpStatus << "). Not trying again.";
         emit listenFailed(ip, tr("This device does not offer detection events."));
+        c->retry->start(kUnsupportedRetryMs); // a device that is still starting up can answer like this; one question every 30 minutes costs nothing
         return;
     }
     // The camera closed the stream, the network dropped or it went quiet: reopen it, waiting a little longer each

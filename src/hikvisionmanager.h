@@ -5,6 +5,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QHash>
+#include <QSet>
 #include <QList>
 #include <QThread>
 #include <mutex>
@@ -50,6 +51,12 @@ public:
     // the recorder's whole camera list is fetched once and remembered, so many tiles do not each wait
     // for the recorder. A failed fetch is not retried for 30 seconds.
     Q_INVOKABLE QVariantMap proxyCameraCached(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
+    // The remembered answer only: never waits for the recorder, empty when the recorder's camera list has not been read yet.
+    Q_INVOKABLE QVariantMap proxyCameraIfCached(const QString &nvrIp, int channelId) const;
+    // Reads a recorder's camera list on a background thread (so the window never waits for an unreachable recorder) and
+    // remembers it; proxyChannelsReady() follows. Does nothing when the list is already known or being read, and not more
+    // often than every 15 seconds after a failure, so it can simply be called again until the recorder answers.
+    Q_INVOKABLE void prefetchProxyChannels(const QString &nvrIp, int httpPort, const QString &username, const QString &password);
     Q_INVOKABLE QVariantMap proxyCamera(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
 
     // Every channel of a recorder with the camera behind it (channel -> {ip, channel, sdkPort}). Keeps no state,
@@ -85,6 +92,7 @@ signals:
     void discoveryFinished(const QString &ip, const QVariantList &cameras, bool success, const QString &errorMsg);
     void unstickProgress(const QString &label, const QString &text);
     void unstickFinished(const QString &label, const QString &result);
+    void proxyChannelsReady(const QString &nvrIp, bool ok);
 
 private:
     struct SessionInfo {
@@ -97,6 +105,8 @@ private:
     static HikvisionManager* m_instance;
     QHash<QString, SessionInfo> m_sessions; // Maps IP to SessionInfo
     QHash<QString, QHash<int, QVariantMap>> m_proxyCache; // recorder ip -> channel -> camera
+    QHash<QString, qint64> m_proxyAttemptAt;               // recorder ip -> ms since epoch of the last background read
+    QSet<QString> m_proxyFetching;                         // recorders whose list is being read right now
     QHash<QString, qint64> m_proxyFailedAt;                // recorder ip -> ms since epoch of the last failed fetch
     QHash<QString, SharedSession> m_sharedSessions;
     std::mutex m_sharedSessionsMutex;
