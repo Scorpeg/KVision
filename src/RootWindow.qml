@@ -3452,34 +3452,44 @@ ApplicationWindow {
         onTriggered: notice.opacity = 0.0
     }
 
-    Rectangle {
-        id: notice
-        z: 1000001
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 76
-        width: Math.min(parent.width - 40, noticeText.implicitWidth + 36)
-        height: noticeText.implicitHeight + 18
-        radius: 10
-        color: "#f2121214"
-        border.color: "#00f5d4"
-        border.width: 1
-        opacity: 0.0
-        visible: opacity > 0.01
+    // The status notice is a window of its own, not an item in this window: the Settings window (where Camera Tools is) and the
+    // other windows are separate windows that sit on top of this one, and an item here would be hidden behind them. It never takes
+    // the focus or the clicks, so the window under it carries on working.
+    Window {
+        id: noticeWindow
+        readonly property real maxWidth: Math.max(200, rootWindow.width - 40)
+        flags: Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput
+        color: "transparent"
+        visible: notice.opacity > 0.01 && rootWindow.visibility !== Window.Minimized && rootWindow.visible
+        width: notice.width
+        height: notice.height
+        x: Math.round(rootWindow.x + (rootWindow.width - width) / 2)
+        y: Math.round(rootWindow.y + rootWindow.height - height - 76)
 
-        Behavior on opacity {
-            NumberAnimation { duration: 160 }
-        }
+        Rectangle {
+            id: notice
+            width: Math.min(noticeWindow.maxWidth, noticeText.implicitWidth + 36)
+            height: noticeText.implicitHeight + 18
+            radius: 10
+            color: "#f2121214"
+            border.color: "#00f5d4"
+            border.width: 1
+            opacity: 0.0
 
-        Text {
-            id: noticeText
-            anchors.centerIn: parent
-            width: Math.min(implicitWidth, notice.parent.width - 76)
-            wrapMode: Text.Wrap
-            horizontalAlignment: Text.AlignHCenter
-            color: "#00f5d4"
-            font.bold: true
-            font.pixelSize: 12
+            Behavior on opacity {
+                NumberAnimation { duration: 160 }
+            }
+
+            Text {
+                id: noticeText
+                anchors.centerIn: parent
+                width: Math.min(implicitWidth, noticeWindow.maxWidth - 36)
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                color: "#00f5d4"
+                font.bold: true
+                font.pixelSize: 12
+            }
         }
     }
 

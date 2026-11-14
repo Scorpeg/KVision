@@ -32,6 +32,10 @@ All notable changes to this project will be documented in this file.
   layout"), so it can be undone from the same window.
 
 ### Fixed
+* **Status notices (Camera Tools, backups, background logging) are no longer hidden behind other windows.** The small message at
+  the bottom of the screen used to be part of the main window, so the Settings window (where Camera Tools is) and any other
+  window covered it, and you could press a button and see nothing. It is now a window of its own that stays on top, never takes
+  the focus or the clicks, and goes away with the main window when that is minimized.
 * The overlay text Test button now says the broker's number is in Celsius and, when Fahrenheit is chosen, shows the converted number too, for example "The broker gave -4.94 C, which is 23.11 F".
 * **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
   behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and
