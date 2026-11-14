@@ -187,7 +187,7 @@ Window {
             // 1 if the camera's own picture already has the red frame, 0 if not, -1 if it cannot be told; looked up per picture
             property int hasFrame: -1
             signal closed()
-            onShownChanged: pv.updateFrame()
+            onShownChanged: { pv.updateFrame(); pv.resetZoom() }
             Component.onCompleted: pv.updateFrame()
             function updateFrame() {
                 var it = pv.items.length > 0 ? pv.items[pv.shown] : null;
@@ -288,6 +288,36 @@ Window {
                     }
                 }
                 Button {
+                    id: zoomOutBtn
+                    implicitWidth: 30
+                    text: "\u2212"
+                    enabled: pv.zoom > 1
+                    onClicked: pv.zoomAt(1 / 1.4, view.width / 2, view.height / 2)
+                    ToolTip.visible: hovered; ToolTip.delay: 500; ToolTip.text: qsTr("Zoom out (- key, or the mouse wheel)")
+                }
+                Text {
+                    text: Math.round(pv.zoom * 100) + "%"
+                    color: "#cccccc"
+                    font.pixelSize: 12
+                    width: 44
+                    horizontalAlignment: Text.AlignHCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: pv.resetZoom()
+                        ToolTip.visible: containsMouse; ToolTip.delay: 500; ToolTip.text: qsTr("Click for the whole picture (0 key, or double-click the picture)")
+                        hoverEnabled: true
+                    }
+                }
+                Button {
+                    id: zoomInBtn
+                    implicitWidth: 30
+                    text: "+"
+                    enabled: pv.zoom < pv.maxZoom
+                    onClicked: pv.zoomAt(1.4, view.width / 2, view.height / 2)
+                    ToolTip.visible: hovered; ToolTip.delay: 500; ToolTip.text: qsTr("Zoom in (+ key, the mouse wheel, or double-click the picture). Drag the picture to move it.")
+                }
+                Button {
                     id: snapBtn
                     implicitWidth: 34
                     onClicked: pv.saveSnapshot()
@@ -304,24 +334,69 @@ Window {
                 Button { visible: pv.items.length > 1; text: "\u203a"; enabled: pv.shown < pv.items.length - 1; onClicked: pv.shown++
                          ToolTip.visible: hovered; ToolTip.delay: 500; ToolTip.text: qsTr("Next newest picture (Right key)") }
             }
-            Image {
+            // Zoom: the mouse wheel (around the pointer), the - and + buttons or keys, double-click to zoom in on a spot and again to
+            // go back. Drag the picture to move it when zoomed in. 100% is the whole picture fitted in the window. The target box
+            // and the zone are drawn again at every zoom, so they stay sharp and on the target.
+            property real zoom: 1
+            readonly property real maxZoom: 10
+            function clampPan() {
+                pic.x = Math.min(0, Math.max(view.width - pic.width, pic.x));
+                pic.y = Math.min(0, Math.max(view.height - pic.height, pic.y));
+            }
+            function zoomAt(factor, mx, my) {
+                var z2 = Math.max(1, Math.min(pv.maxZoom, pv.zoom * factor));
+                if (z2 === pv.zoom)
+                    return;
+                var k = z2 / pv.zoom;
+                var nx = mx - (mx - pic.x) * k;
+                var ny = my - (my - pic.y) * k;
+                pv.zoom = z2;
+                pic.x = nx;
+                pic.y = ny;
+                pv.clampPan();
+                marks.requestPaint();
+            }
+            function resetZoom() {
+                pv.zoom = 1;
+                pic.x = 0;
+                pic.y = 0;
+                marks.requestPaint();
+            }
+            Shortcut { sequence: "+"; onActivated: pv.zoomAt(1.4, view.width / 2, view.height / 2) }
+            Shortcut { sequence: "="; onActivated: pv.zoomAt(1.4, view.width / 2, view.height / 2) }
+            Shortcut { sequence: "-"; onActivated: pv.zoomAt(1 / 1.4, view.width / 2, view.height / 2) }
+            Shortcut { sequence: "0"; onActivated: pv.resetZoom() }
+
+            Item {
+                id: view
                 anchors.top: stepRow.bottom
                 anchors.topMargin: 6
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.margins: 8
-                id: pic
-                source: pv.items.length > 0 ? "file://" + pv.items[pv.shown].path : ""
-                fillMode: Image.PreserveAspectFit
-                asynchronous: true
-                cache: false
+                clip: true
 
-                // The part of this item the picture really covers (it is centred and keeps its shape).
-                readonly property real shownW: paintedWidth
-                readonly property real shownH: paintedHeight
-                readonly property real offX: (width - paintedWidth) / 2
-                readonly property real offY: (height - paintedHeight) / 2
+                Image {
+                    id: pic
+                    x: 0
+                    y: 0
+                    width: view.width * pv.zoom
+                    height: view.height * pv.zoom
+                    source: pv.items.length > 0 ? "file://" + pv.items[pv.shown].path : ""
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: false
+                    smooth: true
+                    onWidthChanged: pv.clampPan()
+                    onHeightChanged: pv.clampPan()
+
+                    // The part of this item the picture really covers (it is centred and keeps its shape).
+                    readonly property real shownW: paintedWidth
+                    readonly property real shownH: paintedHeight
+                    readonly property real offX: (width - paintedWidth) / 2
+                    readonly property real offY: (height - paintedHeight) / 2
+                }
 
                 Canvas {
                     id: marks
@@ -338,6 +413,8 @@ Window {
                         onPaintedWidthChanged: marks.requestPaint()
                         onPaintedHeightChanged: marks.requestPaint()
                         onStatusChanged: marks.requestPaint()
+                        onXChanged: marks.requestPaint()
+                        onYChanged: marks.requestPaint()
                     }
                     onPaint: {
                         var ctx = getContext("2d");
@@ -350,7 +427,7 @@ Window {
                         if (it.poly && it.poly.length >= 6) {
                             ctx.beginPath();
                             for (var i = 0; i + 1 < it.poly.length; i += 2) {
-                                var px = pic.offX + it.poly[i] * pic.shownW, py = pic.offY + it.poly[i + 1] * pic.shownH;
+                                var px = pic.x + pic.offX + it.poly[i] * pic.shownW, py = pic.y + pic.offY + it.poly[i + 1] * pic.shownH;
                                 if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
                             }
                             ctx.closePath();
@@ -360,12 +437,41 @@ Window {
                         }
                         // the target it reacted to, in red, a little larger than a pixel-thin box so it can be seen
                         if (it.box && it.box.length >= 4) {
-                            var bx = pic.offX + it.box[0] * pic.shownW, by = pic.offY + it.box[1] * pic.shownH;
+                            var bx = pic.x + pic.offX + it.box[0] * pic.shownW, by = pic.y + pic.offY + it.box[1] * pic.shownH;
                             var bw = Math.max(8, it.box[2] * pic.shownW), bh = Math.max(8, it.box[3] * pic.shownH);
                             ctx.strokeStyle = "#ff2a2a";
                             ctx.lineWidth = 2;
                             ctx.strokeRect(bx, by, bw, bh);
                         }
+                    }
+                }
+
+                MouseArea {
+                    id: panArea
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton
+                    cursorShape: pv.zoom > 1 ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
+                    property real lastX: 0
+                    property real lastY: 0
+                    onWheel: {
+                        pv.zoomAt(wheel.angleDelta.y > 0 ? 1.25 : 0.8, wheel.x, wheel.y);
+                        wheel.accepted = true;
+                    }
+                    onPressed: { lastX = mouse.x; lastY = mouse.y; }
+                    onPositionChanged: {
+                        if (!pressed || pv.zoom <= 1)
+                            return;
+                        pic.x += mouse.x - lastX;
+                        pic.y += mouse.y - lastY;
+                        lastX = mouse.x;
+                        lastY = mouse.y;
+                        pv.clampPan();
+                    }
+                    onDoubleClicked: {
+                        if (pv.zoom > 1)
+                            pv.resetZoom();
+                        else
+                            pv.zoomAt(3, mouse.x, mouse.y);
                     }
                 }
             }

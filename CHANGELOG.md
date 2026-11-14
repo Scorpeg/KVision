@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **The event picture window can zoom.** Mouse wheel (around the pointer), the - and + buttons or keys, or double-click to zoom
+  in on a spot and again to go back; 0 or a click on the percentage shows the whole picture. Drag to move around when zoomed
+  in, up to 10 times. The target box and zone are redrawn at each zoom, so they stay on the target. Each new picture starts
+  at the whole picture.
+
 * **"Use another layout..." in the Backup / Restore window.** Pick any of your other layouts, or a deleted one that still has a
   backup, and give the layout you opened the window from its grid: the same size and the same merged cells. The layout keeps
   its own name, its place in the list and its toolbar setting. By default its own cameras stay where they still fit (cells
