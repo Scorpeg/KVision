@@ -408,7 +408,11 @@ void OverlayEntry::runOnce(bool writeIt)
                                         m_s.value(QStringLiteral("decimals")).toInt());
         if (!writeIt) {
             idle();
-            emit testDone(true, text, tr("The broker gave %1 (Celsius). This is what would be written.").arg(QString::number(c, 'f', 2)));
+            // The broker's number is always read as Celsius; with Fahrenheit chosen the text shows the converted number.
+            const bool inF = m_s.value(QStringLiteral("unit")).toString().compare(QStringLiteral("F"), Qt::CaseInsensitive) == 0;
+            emit testDone(true, text, inF ? tr("The broker gave %1 C, which is %2 F. This is what would be written.")
+                                                .arg(QString::number(c, 'f', 2), QString::number(c * 9.0 / 5.0 + 32.0, 'f', 2))
+                                          : tr("The broker gave %1 C. This is what would be written.").arg(QString::number(c, 'f', 2)));
             return;
         }
         if (text == m_lastText) { // unchanged: leave the camera alone
