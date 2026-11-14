@@ -1,5 +1,7 @@
 #include "viewportslayoutmodel.h"
 
+#include "layoutbackups.h"
+
 ViewportsLayoutItem::ViewportsLayoutItem(QObject *parent)
     : QObject(parent)
 {
@@ -22,6 +24,8 @@ ViewportsLayoutModel::ViewportsLayoutModel(QObject *parent)
         QMetaProperty property = meta->property(i);
         m_roleNames[Qt::UserRole + i] = property.name();
     }
+
+    m_uid = LayoutBackups::makeUid();
 
     connect(this, &ViewportsLayoutModel::dataChanged, this, &ViewportsLayoutModel::changed);
 
@@ -213,6 +217,9 @@ void ViewportsLayoutModel::fromJSValue(const QVariantMap &model)
     if (model.contains("visible")) {
         setVisible(model.value("visible").toBool());
     }
+    if (model.contains("uid") && LayoutBackups::validUid(model.value("uid").toString())) {
+        setUid(model.value("uid").toString());
+    }
 
     if (model.contains("size")) {
         val = model.value("size");
@@ -284,6 +291,7 @@ QVariantMap ViewportsLayoutModel::toJSValue() const
     model["isNvrPreset"] = isNvrPreset();
     model["name"] = name();
     model["visible"] = visible();
+    model["uid"] = uid();
     model["items"] = items;
 
     return model;

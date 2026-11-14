@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **Backup / Restore button next to every layout in Presets.** It opens a list of saved copies of that one layout (grid size,
+  cameras and positions). "Back up now" saves a copy with an optional note. "Restore" replaces only that layout, after a
+  confirmation, and first saves the layout as it is now ("Before restore"), so a restore can be undone. Recorders, settings
+  and the other layouts are never touched. KVision also saves a copy of each changed layout by itself about once a day (a
+  minute after it starts, then every 6 hours; empty layouts are skipped). The newest 30 copies of each layout are kept, in
+  `layout-backups/` beside the settings file.
+* **Deleting a layout that has backups asks what to do with them:** keep them (and bring the layout back later with the new
+  "Recover a deleted layout" button in Presets) or delete them too. A layout without backups gets a last copy saved before it
+  is deleted, so a mistaken trash click can be undone. Removing a recorder, which removes its layouts, saves a last copy of each.
+* Every layout now has a small id of its own, saved with it. Backups are found through it, so renaming a layout or moving it in
+  the list loses nothing.
+
 * **`scripts/restore-layout.py`: put back one layout from an older copy of the settings** without touching anything else
   (`list`, `compare` and `restore`). It saves the current file first, refuses when KVision is open or when the layout in the
   copy is a different one, and checks the result.

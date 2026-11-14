@@ -1028,6 +1028,7 @@ ColumnLayout {
                 for (var j = layoutsCollectionModel.count - 1; j >= 0; --j) {
                     var l = layoutsCollectionModel.get(j);
                     if (l && l.isNvr && l.nvrIp === targetIp) {
+                        LayoutBackups.save(l.uid, JSON.stringify(layoutsCollectionModel.toJSValue()[j]), qsTr("Deleted with its recorder"), true);
                         layoutsCollectionModel.remove(j);
                     }
                 }

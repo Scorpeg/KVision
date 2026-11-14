@@ -70,6 +70,31 @@ ApplicationWindow {
         }
     }
 
+    // Automatic layout backups (see LayoutBackups): at most one per layout in 20 hours, and only when the layout has changed.
+    Timer {
+        id: layoutBackupTimer
+        interval: 6 * 3600 * 1000
+        repeat: true
+        triggeredOnStart: false
+        running: !Context.isAuxiliary
+        onTriggered: rootWindow.backUpLayouts()
+    }
+    Timer {
+        id: layoutBackupFirstTimer
+        interval: 60 * 1000
+        repeat: false
+        running: !Context.isAuxiliary
+        onTriggered: rootWindow.backUpLayouts()
+    }
+
+    function backUpLayouts() {
+        if (Context.isAuxiliary || rootWindow.isSyncing || layoutsCollectionModel.count === 0)
+            return;
+        var n = LayoutBackups.autoBackup(rootWindow.persistedLayoutsJson(), 20);
+        if (n > 0)
+            console.log("[Layouts] automatic backup of", n, "layout(s)");
+    }
+
     Timer {
         id: syncEndTimer
         interval: 500
@@ -1092,6 +1117,7 @@ ApplicationWindow {
             get(0).get(1).url = "rtmp://live.a71.ru/demo/1";
 
             var initialModels = "";
+            var needsUid = false;
             rootWindow.isSyncing = true;
             try {
                 if (!layoutsCollectionSettings.models.isEmpty()) {
@@ -1101,6 +1127,7 @@ ApplicationWindow {
                     // Migrate hikvision URLs to strip credentials and port
                     for (var i = 0; i < parsedModels.length; i++) {
                         var model = parsedModels[i];
+                        if (!model.uid) needsUid = true; // a layout saved before layouts had an id: it gets one, which must be saved
                         if (model.items) {
                             for (var j = 0; j < model.items.length; j++) {
                                 var item = model.items[j];
@@ -1136,6 +1163,8 @@ ApplicationWindow {
                 saveTimer.restart();
             });
             rootWindow.refreshToolbarLayouts();
+            if (needsUid && !Context.isAuxiliary)
+                saveTimer.restart();
 
             if (Context.isAuxiliary) {
                 stackLayout.currentIndex = -1;

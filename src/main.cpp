@@ -72,6 +72,7 @@ int qmlRegisterSingletonInstance(const char *uri, int versionMajor, int versionM
 #include <QLockFile>
 #include <memory>
 #include "overlaytext.h"
+#include "layoutbackups.h"
 #include "hikvisionsetupcheck.h"
 
 QFile *g_logFile = nullptr;
@@ -479,6 +480,12 @@ int main(int argc, char *argv[])
 
     auto *hikvisionEventLogger = new HikvisionEventLogger(hikvisionEvents);
     qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "HikvisionEventLogger", hikvisionEventLogger);
+
+    {
+        const QString cfgFile = Context::config() ? Context::config()->fileName() : QSettings().fileName();
+        qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "LayoutBackups",
+                                     new LayoutBackups(QFileInfo(cfgFile).absolutePath()));
+    }
 
     auto *overlayText = new OverlayText();
     qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "OverlayText", overlayText);

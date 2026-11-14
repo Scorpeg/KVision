@@ -57,6 +57,8 @@
         <file>src/SetupCheckWindow.qml</file>
         <file>src/DetectionFramesWindow.qml</file>
         <file>src/OverlayTextWindow.qml</file>
+        <file>src/LayoutBackupButton.qml</file>
+        <file>src/LayoutBackupDialog.qml</file>
         <file>src/SetupCheckList.qml</file>
         <file>src/PlaybackWindow.qml</file>
         <file>images/play.svg</file>

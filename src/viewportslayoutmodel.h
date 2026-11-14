@@ -52,6 +52,9 @@ class ViewportsLayoutModel : public QAbstractListModel
     QMLAV_PROPERTY(QString, nvrIp, setNvrIp, nvrIpChanged) = "";
     QMLAV_PROPERTY(bool, isNvrPreset, setIsNvrPreset, isNvrPresetChanged) = false;
     QMLAV_PROPERTY(QString, name, setName, nameChanged) = "";
+    // A stable id of this layout (set once, saved with it). Its backups are found through it, so a rename or a move in the list
+    // does not lose them.
+    QMLAV_PROPERTY(QString, uid, setUid, uidChanged);
     QMLAV_PROPERTY(bool, visible, setVisible, visibleChanged) = true;
 
 public:

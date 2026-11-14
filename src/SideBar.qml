@@ -41,6 +41,66 @@ FocusScope {
         }
     }
 
+    // How many deleted layouts still have backups (for the "Recover a deleted layout" button)
+    property int deletedBackupCount: 0
+    // Worked out again a moment after the layouts change (they are loaded after this screen is created, and each change
+    // would otherwise read every backup file)
+    Timer {
+        id: deletedBackupsTimer
+        interval: 800
+        repeat: false
+        onTriggered: rootSideBar.refreshDeletedBackups()
+    }
+    function refreshDeletedBackups() {
+        var live = [];
+        for (var i = 0; i < layoutsCollectionModel.count; ++i) {
+            var l = layoutsCollectionModel.get(i);
+            if (l && l.uid)
+                live.push(l.uid);
+        }
+        deletedBackupCount = LayoutBackups.deletedLayouts(live).length;
+    }
+
+    function layoutHasCameras(l) {
+        if (!l)
+            return false;
+        for (var i = 0; i < l.count; ++i) {
+            var it = l.get(i);
+            if (it && it.url !== "")
+                return true;
+        }
+        return false;
+    }
+
+    // The trash button. A layout that has backups asks what to do with them; one that has none but has cameras gets a last
+    // copy saved first, so deleting it by mistake can be undone ("Recover a deleted layout").
+    function deleteLayoutAt(index) {
+        var l = layoutsCollectionModel.get(index);
+        if (!l)
+            return;
+        if (LayoutBackups.count(l.uid) > 0) {
+            keepBackupsDialog.index = index;
+            keepBackupsDialog.open();
+            return;
+        }
+        finishDelete(index, "keep");
+    }
+
+    // what: "keep" saves a last copy and keeps every backup, "delete" removes the backups too.
+    function finishDelete(index, what) {
+        var l = layoutsCollectionModel.get(index);
+        if (!l)
+            return;
+        var uid = l.uid;
+        if (what === "delete") {
+            LayoutBackups.removeAll(uid);
+        } else if (layoutHasCameras(l)) {
+            LayoutBackups.save(uid, JSON.stringify(layoutsCollectionModel.toJSValue()[index]), qsTr("Deleted"), true);
+        }
+        layoutsCollectionModel.remove(index);
+        refreshDeletedBackups();
+    }
+
     property var regularIndices: []
     property var nvrIndices: []
     property var nvrPresetIndices: []
@@ -127,7 +187,9 @@ FocusScope {
 
     Component.onCompleted: {
         layoutsCollectionModel.changed.connect(updateIndices);
+        layoutsCollectionModel.changed.connect(function () { deletedBackupsTimer.restart(); });
         updateIndices();
+        deletedBackupsTimer.restart();
         resetPathChangesCheckbox();
         checkForUpdates();
     }
@@ -1901,6 +1963,11 @@ FocusScope {
                                         ToolTip.text: qsTr("LNG_00287")
                                     }
 
+                                    LayoutBackupButton {
+                                        layoutUid: (presetRow.layout && presetRow.layout.uid) ? presetRow.layout.uid : ""
+                                        onActivated: layoutBackupDialog.openFor(modelData)
+                                    }
+
                                     // Delete icon button
                                     Button {
                                         id: delPresetBtn
@@ -1961,6 +2028,33 @@ FocusScope {
                                 }
                             }
                         }
+                    }
+
+                    // Layouts that were deleted but still have backups
+                    Button {
+                        id: recoverLayoutBtn
+                        Layout.fillWidth: true
+                        implicitHeight: 30
+                        visible: rootSideBar.deletedBackupCount > 0
+                        text: qsTr("Recover a deleted layout (%1)").arg(rootSideBar.deletedBackupCount)
+                        onClicked: layoutBackupDialog.openRecover()
+                        contentItem: Text {
+                            text: recoverLayoutBtn.text
+                            color: recoverLayoutBtn.hovered ? "#00f5d4" : "#c8d2da"
+                            font.pixelSize: 11
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: recoverLayoutBtn.hovered ? "#1f2a34" : "transparent"
+                            radius: 6
+                            border.color: recoverLayoutBtn.hovered ? "#00f5d4" : "#2a3540"
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.delay: Compact.toolTipDelay
+                        ToolTip.timeout: Compact.toolTipTimeout
+                        ToolTip.text: qsTr("Layouts that were deleted but still have backups. Pick one to put it back.")
                     }
 
                     // Group 2: NVR Views (Only when NVR layouts configured)
@@ -2064,6 +2158,11 @@ FocusScope {
                                         ToolTip.timeout: Compact.toolTipTimeout
                                         ToolTip.visible: activateBtnNvr.hovered
                                         ToolTip.text: qsTr("LNG_00282")
+                                    }
+
+                                    LayoutBackupButton {
+                                        layoutUid: (nvrRow.layout && nvrRow.layout.uid) ? nvrRow.layout.uid : ""
+                                        onActivated: layoutBackupDialog.openFor(modelData)
                                     }
 
                                     Button {
@@ -2200,6 +2299,11 @@ FocusScope {
                                         ToolTip.timeout: Compact.toolTipTimeout
                                         ToolTip.visible: activateBtnNvrPreset.hovered
                                         ToolTip.text: qsTr("LNG_00277")
+                                    }
+
+                                    LayoutBackupButton {
+                                        layoutUid: (nvrPresetRow.layout && nvrPresetRow.layout.uid) ? nvrPresetRow.layout.uid : ""
+                                        onActivated: layoutBackupDialog.openFor(modelData)
                                     }
 
                                     Button {
@@ -4066,6 +4170,75 @@ FocusScope {
         }
     }
 
+    LayoutBackupDialog {
+        id: layoutBackupDialog
+        onClosed: rootSideBar.refreshDeletedBackups()
+    }
+    Connections {
+        target: LayoutBackups
+        function onChanged() { rootSideBar.refreshDeletedBackups(); }
+    }
+
+    // Asked when a layout that has backups is deleted
+    Dialog {
+        id: keepBackupsDialog
+        modal: true
+        anchors.centerIn: parent
+        width: 460
+        leftPadding: 16; rightPadding: 16; topPadding: 16; bottomPadding: 16
+        property int index: -1
+        property var target: index >= 0 && index < layoutsCollectionModel.count ? layoutsCollectionModel.get(index) : null
+        property int backups: target ? LayoutBackups.count(target.uid) : 0
+        property string layoutName: (target && target.name && target.name.trim() !== "") ? target.name : qsTr("this layout")
+
+        background: Rectangle { color: "#1c242c"; border.color: "#2a3540"; radius: 8 }
+        header: Rectangle {
+            color: "#0f151b"; implicitHeight: 42; radius: 8
+            Text { anchors.fill: parent; anchors.leftMargin: 16; text: qsTr("What about the backups?"); color: "#00f5d4"; font.bold: true; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }
+        }
+        contentItem: Text {
+            wrapMode: Text.Wrap
+            color: "white"
+            font.pixelSize: 12
+            text: qsTr("%1 has %2 saved backup(s). The layout is about to be deleted.\n\nKeep the backups and you can bring it back later with \"Recover a deleted layout\". Delete them too and it cannot be recovered.").arg(keepBackupsDialog.layoutName).arg(keepBackupsDialog.backups)
+        }
+        footer: Rectangle {
+            implicitHeight: 52
+            color: "#0f151b"
+            radius: 8
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    id: kbCancel
+                    text: qsTr("Cancel")
+                    implicitWidth: 80; implicitHeight: 32
+                    contentItem: Text { text: kbCancel.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: kbCancel.hovered ? "#3a4550" : "#222c36"; radius: 4; border.color: "#2a3540" }
+                    onClicked: keepBackupsDialog.close()
+                }
+                Button {
+                    id: kbDelete
+                    text: qsTr("Delete them too")
+                    implicitWidth: 130; implicitHeight: 32
+                    contentItem: Text { text: kbDelete.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: kbDelete.hovered ? "#ff4d4d" : "#d63333"; radius: 4 }
+                    onClicked: { var i = keepBackupsDialog.index; keepBackupsDialog.close(); rootSideBar.finishDelete(i, "delete"); }
+                }
+                Button {
+                    id: kbKeep
+                    text: qsTr("Keep the backups")
+                    implicitWidth: 140; implicitHeight: 32
+                    contentItem: Text { text: kbKeep.text; color: "#0f151b"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: kbKeep.hovered ? "#00ffd8" : "#00f5d4"; radius: 4 }
+                    onClicked: { var i = keepBackupsDialog.index; keepBackupsDialog.close(); rootSideBar.finishDelete(i, "keep"); }
+                }
+            }
+        }
+    }
+
     // Modal dialogs declared safely at root scope
     ConfirmDialog {
         id: presetDeleteDialog
@@ -4081,7 +4254,7 @@ FocusScope {
             return qsTr("LNG_00225").arg(index + 1);
         }
         property int index: -1
-        onAccepted: layoutsCollectionModel.remove(index)
+        onAccepted: rootSideBar.deleteLayoutAt(index)
     }
 
     ConfirmDialog {
@@ -4098,7 +4271,7 @@ FocusScope {
             return qsTr("LNG_00223");
         }
         property int index: -1
-        onAccepted: layoutsCollectionModel.remove(index)
+        onAccepted: rootSideBar.deleteLayoutAt(index)
     }
 
     ConfirmDialog {
@@ -4115,7 +4288,7 @@ FocusScope {
             return qsTr("LNG_00220");
         }
         property int index: -1
-        onAccepted: layoutsCollectionModel.remove(index)
+        onAccepted: rootSideBar.deleteLayoutAt(index)
     }
 
     Connections {

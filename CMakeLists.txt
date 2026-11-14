@@ -195,6 +195,7 @@ set(PROJ_FILES
     src/hikvisionsetupcheck.cpp src/hikvisionsetupcheck.h
     src/mqttonce.cpp src/mqttonce.h
     src/overlaytext.cpp src/overlaytext.h
+    src/layoutbackups.cpp src/layoutbackups.h
     src/systemstats.cpp src/systemstats.h
     src/nvrstatusmanager.cpp src/nvrstatusmanager.h
     src/DownloadDialog.qml
