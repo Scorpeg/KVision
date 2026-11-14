@@ -225,7 +225,9 @@ Window {
             // Saves the picture on screen in the snapshot folder (Settings), like the snapshot button of a live tile: a folder
             // for the day, and a name made of the channel, camera, date and time. The kind of event is added to the name so
             // two events in the same second keep their own file.
-            function saveSnapshot() {
+            // zoomedOnly false saves the picture file as it is (the whole picture, nothing drawn on it). true saves what is on
+            // screen now: the zoomed part, with the target box and zone if they are shown, named with "_zoomed".
+            function saveSnapshot(zoomedOnly) {
                 if (pv.items.length === 0)
                     return;
                 var it = pv.items[pv.shown];
@@ -234,6 +236,21 @@ Window {
                 var tag = String(it.kind || "").replace(/[^A-Za-z0-9]/g, "");
                 if (tag !== "")
                     path = path.replace(/(\.[^.\/]+)$/, "_" + tag + "$1");
+                if (zoomedOnly === true) {
+                    path = path.replace(/(\.[^.\/]+)$/, "_zoomed$1");
+                    // Keep the visible part at about the picture's own resolution (never more than 4 times the window).
+                    var gain = Math.max(1, Math.min(4, pic.implicitWidth / Math.max(1, pic.paintedWidth)));
+                    view.grabToImage(function(result) {
+                        if (result.saveToFile(path)) {
+                            saved.filePath = path;
+                            saved.open();
+                        } else {
+                            saved.filePath = qsTr("(the picture could not be saved)");
+                            saved.open();
+                        }
+                    }, Qt.size(Math.round(view.width * gain), Math.round(view.height * gain)));
+                    return;
+                }
                 if (HikvisionEvents.copyPicture(it.path, path)) {
                     saved.filePath = path;
                     saved.open();
@@ -248,7 +265,25 @@ Window {
                 z: 99
             }
 
-            Shortcut { sequence: "S"; onActivated: pv.saveSnapshot() }
+            // Zoomed in: ask which one. At 100% there is only the whole picture, so it is saved at once.
+            function snapshotClicked() {
+                if (pv.zoom > 1)
+                    snapshotChoiceMenu.popup();
+                else
+                    pv.saveSnapshot(false);
+            }
+            Menu {
+                id: snapshotChoiceMenu
+                MenuItem {
+                    text: qsTr("Save full image")
+                    onTriggered: pv.saveSnapshot(false)
+                }
+                MenuItem {
+                    text: qsTr("Save zoomed view")
+                    onTriggered: pv.saveSnapshot(true)
+                }
+            }
+            Shortcut { sequence: "S"; onActivated: pv.snapshotClicked() }
             Shortcut { sequence: "Left"; enabled: pv.shown > 0; onActivated: pv.shown-- }
             Shortcut { sequence: "Right"; enabled: pv.shown < pv.items.length - 1; onActivated: pv.shown++ }
 
@@ -320,8 +355,10 @@ Window {
                 Button {
                     id: snapBtn
                     implicitWidth: 34
-                    onClicked: pv.saveSnapshot()
-                    ToolTip.visible: hovered; ToolTip.delay: 500; ToolTip.text: qsTr("Save this picture in the snapshot folder (S key)")
+                    onClicked: pv.snapshotClicked()
+                    ToolTip.visible: hovered; ToolTip.delay: 500
+                    ToolTip.text: pv.zoom > 1 ? qsTr("Save this picture in the snapshot folder: the full image or the zoomed view (S key)")
+                                              : qsTr("Save this picture in the snapshot folder (S key)")
                     contentItem: Image {
                         sourceSize: Qt.size(20, 20)
                         fillMode: Image.PreserveAspectFit
@@ -339,9 +376,18 @@ Window {
             // and the zone are drawn again at every zoom, so they stay sharp and on the target.
             property real zoom: 1
             readonly property real maxZoom: 10
+            // Keeps the picture itself (not the empty bars beside it) covering the view. When the picture is smaller than the view
+            // in one direction (at 100% in a window of another shape) it stays centred in that direction.
             function clampPan() {
-                pic.x = Math.min(0, Math.max(view.width - pic.width, pic.x));
-                pic.y = Math.min(0, Math.max(view.height - pic.height, pic.y));
+                var pw = pic.paintedWidth, ph = pic.paintedHeight;
+                if (pw <= 0 || ph <= 0) {
+                    pic.x = 0;
+                    pic.y = 0;
+                    return;
+                }
+                var ox = (pic.width - pw) / 2, oy = (pic.height - ph) / 2;
+                pic.x = pw <= view.width ? (view.width - pw) / 2 - ox : Math.min(-ox, Math.max(view.width - pw - ox, pic.x));
+                pic.y = ph <= view.height ? (view.height - ph) / 2 - oy : Math.min(-oy, Math.max(view.height - ph - oy, pic.y));
             }
             function zoomAt(factor, mx, my) {
                 var z2 = Math.max(1, Math.min(pv.maxZoom, pv.zoom * factor));
@@ -390,6 +436,8 @@ Window {
                     smooth: true
                     onWidthChanged: pv.clampPan()
                     onHeightChanged: pv.clampPan()
+                    onPaintedWidthChanged: pv.clampPan()
+                    onPaintedHeightChanged: pv.clampPan()
 
                     // The part of this item the picture really covers (it is centred and keeps its shape).
                     readonly property real shownW: paintedWidth

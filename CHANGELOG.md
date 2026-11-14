@@ -9,6 +9,11 @@ All notable changes to this project will be documented in this file.
   in on a spot and again to go back; 0 or a click on the percentage shows the whole picture. Drag to move around when zoomed
   in, up to 10 times. The target box and zone are redrawn at each zoom, so they stay on the target. Each new picture starts
   at the whole picture.
+* **The event picture's snapshot button offers the full image or the zoomed view** when the picture is zoomed in, like the
+  live tile and Playback do. The full image is the picture file exactly as it is (the same bytes, nothing drawn on it). The
+  zoomed view is what is on screen, with the target box and zone if they are shown, saved with `_zoomed` in the name. At 100%
+  there is only one choice, so it saves at once. The S key does the same.
+* The event picture can no longer be dragged so that empty space shows beside it.
 
 * **"Use another layout..." in the Backup / Restore window.** Pick any of your other layouts, or a deleted one that still has a
   backup, and give the layout you opened the window from its grid: the same size and the same merged cells. The layout keeps
