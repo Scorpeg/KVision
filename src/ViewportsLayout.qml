@@ -20,6 +20,46 @@ FocusScope {
         playerPool.releaseAll();
     }
 
+    // Quick tools > Rule lines: read the camera's switch and set it the other way, then say what the camera now says.
+    property string ruleMenuIp: ""      // the camera the menu asked about, while the answer is awaited
+    property string ruleMenuName: ""
+    property bool ruleMenuLoading: false // waiting for the camera list before the switch can be read
+    function toggleRuleLines(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        root.ruleMenuIp = ip;
+        root.ruleMenuName = name || ip;
+        rootWindow.showNotice(qsTr("Rule lines on the stream") + "\n" + root.ruleMenuName + "\n" + qsTr("asking the camera..."), "#00f5d4", 0);
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.ruleMenuLoading = true;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        HikvisionBackup.toggleRuleLines(ip);
+    }
+    Connections {
+        target: HikvisionBackup
+        function onCamerasLoaded(cameras) {
+            if (root.ruleMenuLoading && root.ruleMenuIp !== "") {
+                root.ruleMenuLoading = false;
+                HikvisionBackup.toggleRuleLines(root.ruleMenuIp);
+            }
+        }
+        function onRuleLinesResult(ip, state, message) {
+            if (root.ruleMenuIp === "" || ip !== root.ruleMenuIp)
+                return;
+            var name = root.ruleMenuName;
+            root.ruleMenuIp = "";
+            var head = qsTr("Rule lines on the stream") + "\n" + name + "\n";
+            if (state === "on")
+                rootWindow.showNotice(head + qsTr("ON: ") + message, "#00ff66", 6000);
+            else if (state === "off")
+                rootWindow.showNotice(head + qsTr("OFF: ") + message, "#00f5d4", 6000);
+            else
+                rootWindow.showNotice(head + message, "#ff3333", 10000);
+        }
+    }
+
     QtObject {
         id: playerPool
 
@@ -1059,6 +1099,7 @@ FocusScope {
                         onClosed: {
                             if (!keepSubMenuOpen) {
                                 streamSubMenu.close();
+                                quickToolsSubMenu.close();
                             }
                             keepSubMenuOpen = false;
                         }
@@ -1110,6 +1151,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
 
@@ -1149,6 +1191,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
                             
@@ -1244,6 +1287,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
                             
@@ -1253,81 +1297,7 @@ FocusScope {
                             }
                         }
 
-                        MenuItem {
-                            id: changeSettingsMenuItem
-                            text: qsTr("LNG_00472")
-                            visible: model.url !== "" && generalSettings.enableChangeViewportSettings
-                            enabled: model.url !== ""
-                            leftPadding: 12
-                            
-                            contentItem: Text {
-                                text: changeSettingsMenuItem.text
-                                font {
-                                    pixelSize: 11
-                                    bold: true
-                                }
-                                color: changeSettingsMenuItem.enabled ? (changeSettingsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
-                                horizontalAlignment: Text.AlignLeft
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            
-                            background: Rectangle {
-                                implicitWidth: 150
-                                implicitHeight: 32
-                                color: changeSettingsMenuItem.hovered ? "#2a3540" : "transparent"
-                                border.color: changeSettingsMenuItem.hovered ? "#00f5d4" : "transparent"
-                                border.width: 1
-                                radius: 4
-                            }
-                            
-                            onHoveredChanged: {
-                                if (hovered) {
-                                    streamSubMenu.close();
-                                }
-                            }
-                            
-                            onTriggered: {
-                                viewportSettingsDialog.index = model.index;
-                                viewportSettingsDialog.open();
-                            }
-                        }
 
-                        MenuItem {
-                            id: reloadMenuItem
-                            text: qsTr("LNG_00471")
-                            visible: model.url !== ""
-                            enabled: model.url !== "" && (playerPool.activePlayersMap[model.index] ? !playerPool.activePlayersMap[model.index].isQuickPlayback : true)
-                            leftPadding: 12
-                            
-                            contentItem: Text {
-                                text: reloadMenuItem.text
-                                font { pixelSize: 11; bold: true }
-                                color: reloadMenuItem.enabled ? (reloadMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
-                                horizontalAlignment: Text.AlignLeft
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                implicitWidth: 150
-                                implicitHeight: 32
-                                color: reloadMenuItem.hovered ? "#2a3540" : "transparent"
-                                border.color: reloadMenuItem.hovered ? "#00f5d4" : "transparent"
-                                border.width: 1
-                                radius: 4
-                            }
-                            
-                            onHoveredChanged: {
-                                if (hovered) {
-                                    streamSubMenu.close();
-                                }
-                            }
-                            
-                            onTriggered: {
-                                var player = playerPool.activePlayersMap[model.index];
-                                if (player) {
-                                    player.reload();
-                                }
-                            }
-                        }
                         MenuItem {
                             id: snapshotMenuItem
                             text: qsTr("LNG_00470")
@@ -1354,6 +1324,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
                             
@@ -1392,6 +1363,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
                             
@@ -1430,6 +1402,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
 
@@ -1441,45 +1414,53 @@ FocusScope {
                             }
                         }
 
+
                         MenuItem {
-                            id: forceFitMenuItem
-                            text: (contextMenu.fitOn ? "\u2713 " : "    ") + qsTr("Force Fit")
+                            id: quickToolsMenuItem
+                            text: qsTr("Quick tools")
                             visible: model.url !== ""
                             enabled: visible
                             height: visible ? implicitHeight : 0
                             leftPadding: 12
 
-                            contentItem: Text {
-                                text: forceFitMenuItem.text
-                                font { pixelSize: 11; bold: true }
-                                color: forceFitMenuItem.enabled ? (forceFitMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
-                                horizontalAlignment: Text.AlignLeft
-                                verticalAlignment: Text.AlignVCenter
+                            contentItem: RowLayout {
+                                spacing: 8
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: quickToolsMenuItem.text
+                                    font { pixelSize: 11; bold: true }
+                                    color: quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    horizontalAlignment: Text.AlignLeft
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    text: "\u25B6"
+                                    font { pixelSize: 9; bold: true }
+                                    color: quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                    rightPadding: 8
+                                }
                             }
                             background: Rectangle {
                                 implicitWidth: 150
                                 implicitHeight: 32
-                                color: forceFitMenuItem.hovered ? "#2a3540" : "transparent"
-                                border.color: forceFitMenuItem.hovered ? "#00f5d4" : "transparent"
+                                color: quickToolsMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: quickToolsMenuItem.hovered ? "#00f5d4" : "transparent"
                                 border.width: 1
                                 radius: 4
                             }
 
-                            ToolTip.visible: hovered
-                            ToolTip.delay: 600
-                            ToolTip.text: qsTr("Stretch this camera's picture to fill the whole tile, so a 4:3 camera has no black bars (the picture is slightly stretched). Only this camera is changed, not the layout.")
-
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.popup(quickToolsMenuItem, quickToolsMenuItem.width, 0);
                                 }
                             }
 
                             onTriggered: {
-                                var player = playerPool.activePlayersMap[model.index];
-                                if (player) {
-                                    player.toggleForceFitHere();
-                                }
+                                contextMenu.keepSubMenuOpen = true;
+                                quickToolsSubMenu.popup(quickToolsMenuItem, quickToolsMenuItem.width, 0);
                             }
                         }
 
@@ -1514,6 +1495,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
 
@@ -1555,6 +1537,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    quickToolsSubMenu.close();
                                 }
                             }
 
@@ -1568,6 +1551,100 @@ FocusScope {
                                 });
                                 if (win)
                                     win.show();
+                            }
+                        }
+
+                    }
+
+                    Menu {
+                        id: quickToolsSubMenu
+
+                        topPadding: 5
+                        bottomPadding: 5
+
+                        enter: Transition {
+                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
+                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
+                        }
+                        exit: Transition {
+                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
+                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
+                        }
+
+                        background: Rectangle {
+                            implicitWidth: 200
+                            color: "#151d24"
+                            border.color: "#ff7a00"
+                            border.width: 1
+                            radius: 6
+                        }
+
+                        MenuItem {
+                            id: forceFitMenuItem
+                            text: (contextMenu.fitOn ? "\u2713 " : "    ") + qsTr("Force Fit")
+                            visible: model.url !== ""
+                            enabled: visible
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: forceFitMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: forceFitMenuItem.enabled ? (forceFitMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: forceFitMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: forceFitMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Stretch this camera's picture to fill the whole tile, so a 4:3 camera has no black bars (the picture is slightly stretched). Only this camera is changed, not the layout.")
+
+                            onTriggered: {
+                            contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player) {
+                                    player.toggleForceFitHere();
+                                }
+                            }
+                        }
+
+                        MenuItem {
+                            id: reloadMenuItem
+                            text: qsTr("LNG_00471")
+                            visible: model.url !== ""
+                            enabled: model.url !== "" && (playerPool.activePlayersMap[model.index] ? !playerPool.activePlayersMap[model.index].isQuickPlayback : true)
+                            leftPadding: 12
+                            
+                            contentItem: Text {
+                                text: reloadMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: reloadMenuItem.enabled ? (reloadMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: reloadMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: reloadMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+                            
+                            onTriggered: {
+                            contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player) {
+                                    player.reload();
+                                }
                             }
                         }
 
@@ -1598,13 +1675,8 @@ FocusScope {
                             ToolTip.delay: 600
                             ToolTip.text: qsTr("Read this camera's detection settings and list what is missing. It changes nothing.")
 
-                            onHoveredChanged: {
-                                if (hovered) {
-                                    streamSubMenu.close();
-                                }
-                            }
-
                             onTriggered: {
+                            contextMenu.close();
                                 var player = playerPool.activePlayersMap[model.index];
                                 if (!player)
                                     return;
@@ -1613,6 +1685,76 @@ FocusScope {
                                 var win = setupCheckComponent.createObject(rootWindow, { "focusKey": key });
                                 if (win)
                                     win.show();
+                            }
+                        }
+
+                        MenuItem {
+                            id: changeSettingsMenuItem
+                            text: qsTr("LNG_00472")
+                            visible: model.url !== "" && generalSettings.enableChangeViewportSettings
+                            enabled: model.url !== ""
+                            leftPadding: 12
+                            
+                            contentItem: Text {
+                                text: changeSettingsMenuItem.text
+                                font {
+                                    pixelSize: 11
+                                    bold: true
+                                }
+                                color: changeSettingsMenuItem.enabled ? (changeSettingsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: changeSettingsMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: changeSettingsMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+                            
+                            onTriggered: {
+                            contextMenu.close();
+                                viewportSettingsDialog.index = model.index;
+                                viewportSettingsDialog.open();
+                            }
+                        }
+
+                        MenuItem {
+                            id: ruleLinesMenuItem
+                            text: qsTr("Rule lines on/off (VCA lines)")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: ruleLinesMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: ruleLinesMenuItem.enabled ? (ruleLinesMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: ruleLinesMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: ruleLinesMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). The camera is read first and then set the other way. Only this camera is changed.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.toggleRuleLines(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
                     }

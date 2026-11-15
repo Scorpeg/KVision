@@ -50,6 +50,9 @@ public:
     // changes only "enabled" and "streamType", and reads it back. The answer comes in ruleLinesResult().
     Q_INVOKABLE void checkRuleLines(const QString &ip);
     Q_INVOKABLE void setRuleLines(const QString &ip, bool on);
+    // Reads the camera's switch and sets it the other way (the right-click menu). The answer comes in ruleLinesResult().
+    Q_INVOKABLE void toggleRuleLines(const QString &ip);
+    Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
     Q_INVOKABLE void checkRuleLinesAll();

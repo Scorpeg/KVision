@@ -99,7 +99,7 @@ struct RuleLinesAnswer {
 //   {"SmartOverlap": {"enabled": bool, "streamType": 0 or 2, "bkgImageOverlapEnabled": bool}}
 // On is enabled=true with streamType=2; off is enabled=false with streamType=0. bkgImageOverlapEnabled is a different
 // switch (the rule frame on the picture a camera saves) and is always written back exactly as it was read.
-// mode: 0 only read, 1 turn on, 2 turn off. A refused login is never retried.
+// mode: 0 only read, 1 turn on, 2 turn off, 3 turn it the other way (read first). A refused login is never retried.
 RuleLinesAnswer ruleLinesOne(const HikvisionBackup::Cam &cam, int mode)
 {
     RuleLinesAnswer a;
@@ -166,6 +166,8 @@ RuleLinesAnswer ruleLinesOne(const HikvisionBackup::Cam &cam, int mode)
         a.message = QStringLiteral("rule lines on the stream are %1").arg(a.state);
         return a;
     }
+    if (mode == 3)
+        mode = nowOn ? 2 : 1;
     const bool want = (mode == 1);
     const int wantType = want ? 2 : 0;
     if (nowOn == want && so.value(QStringLiteral("streamType")).toInt() == wantType) {
@@ -429,6 +431,11 @@ void HikvisionBackup::setRuleLines(const QString &ip, bool on)
     runRuleLines(ip, on ? 1 : 2);
 }
 
+void HikvisionBackup::toggleRuleLines(const QString &ip)
+{
+    runRuleLines(ip, 3);
+}
+
 void HikvisionBackup::runRuleLines(const QString &ip, int mode)
 {
     if (m_ruleBusy)
@@ -455,7 +462,7 @@ void HikvisionBackup::runRuleLines(const QString &ip, int mode)
     m_ruleWorker = QThread::create([this, found, mode]() {
         const RuleLinesAnswer a = ruleLinesOne(found, mode);
         QMetaObject::invokeMethod(this, [this, found, mode, a]() {
-            qInfo() << "[RuleLines]" << found.ip << (mode == 0 ? "read:" : (mode == 1 ? "turn on:" : "turn off:")) << a.state << "-" << a.message;
+            qInfo() << "[RuleLines]" << found.ip << (mode == 0 ? "read:" : (mode == 1 ? "turn on:" : (mode == 2 ? "turn off:" : "switch over:"))) << a.state << "-" << a.message;
             m_ruleBusy = false;
             emit ruleBusyChanged();
             emit ruleLinesResult(found.ip, a.state, a.message);

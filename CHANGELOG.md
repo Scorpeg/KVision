@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **Right-click on a camera: new "Quick tools" sub-menu.** Force Fit, Reload, Check detection setup and Change settings moved into it, so the main menu is shorter. It also has a new entry, **Rule lines on/off (VCA lines)**, that reads that one camera's own switch for drawing its rule lines and boxes on the video stream and sets it the other way. A notice says what the camera now says. Only the camera you right-clicked is changed, and a camera with no such switch (a panoramic or dual-lens one) says so.
 * **Overlay text from MQTT can feed several cameras and topics.** The window now holds a list of entries. Each entry is one
   topic going into one text overlay of one camera, with its own broker, text, unit and update time, so you can keep adding
   them: another camera, or another value (humidity in overlay 2) on the same camera. Fill in the form and press Add; pressing
