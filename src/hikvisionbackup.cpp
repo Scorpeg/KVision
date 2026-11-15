@@ -413,7 +413,48 @@ struct HealthAnswer {
     QString state;   // "ok", "warn", "unavailable" or "error"
     QString message; // one or more lines
     bool refused = false;
+    QString model;    // from deviceInfo, empty when it could not be read
+    QString firmware;
 };
+
+const char *kNewestFirmwareGroup = "NewestFirmware";
+
+// The model name has a "/" in it (DS-2CD2387G3-LIS2UY/SL), which QSettings would read as a sub-group.
+QString newestKey(const QString &model)
+{
+    QString k = model.trimmed();
+    k.replace(QLatin1Char('/'), QLatin1Char('|'));
+    return k;
+}
+
+// The first dotted version in a text ("V5.8.40" or "V5.8.40 build 260911" both give 5, 8, 40), or nothing.
+QList<int> versionParts(const QString &text)
+{
+    QList<int> parts;
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("(\\d+(?:\\.\\d+)+)")).match(text);
+    if (!m.hasMatch())
+        return parts;
+    for (const QString &p : m.captured(1).split(QLatin1Char('.')))
+        parts << p.toInt();
+    return parts;
+}
+
+// -1 when a is older than b, 0 when equal, 1 when newer, 2 when either has no dotted version.
+int compareVersions(const QString &a, const QString &b)
+{
+    QList<int> x = versionParts(a), y = versionParts(b);
+    if (x.isEmpty() || y.isEmpty())
+        return 2;
+    while (x.size() < y.size())
+        x << 0;
+    while (y.size() < x.size())
+        y << 0;
+    for (int i = 0; i < x.size(); ++i) {
+        if (x[i] != y[i])
+            return x[i] < y[i] ? -1 : 1;
+    }
+    return 0;
+}
 
 // Read only. The camera's clock against this computer's, and its firmware:
 //   GET /ISAPI/System/time        <localTime>2026-11-14T22:41:09-09:00</localTime> <timeMode>NTP|manual</timeMode>
@@ -421,7 +462,7 @@ struct HealthAnswer {
 //   GET /ISAPI/System/time/ntpServers  (only to name the time server when the camera uses NTP)
 // A clock that is more than two minutes off is "warn": it makes event times wrong and can break the login of some
 // cameras. Nothing is ever written. A refused login is never retried.
-HealthAnswer healthOne(const HikvisionBackup::Cam &cam)
+HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QString> &newest)
 {
     HealthAnswer a;
     a.state = QStringLiteral("error");
@@ -501,6 +542,28 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam)
         lines << QStringLiteral("Firmware: %1%2%3").arg(fw.isEmpty() ? QStringLiteral("not given") : fw)
                      .arg(built.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(built))
                      .arg(model.isEmpty() ? QString() : QStringLiteral(", model %1").arg(model));
+        a.model = model;
+        a.firmware = fw;
+        // The newest version for this model is typed in by the user (from Hikvision's own page): the cameras cannot say
+        // and Hikvision's site cannot be read by a program. So this says "may be", never "is".
+        if (!model.isEmpty() && !fw.isEmpty()) {
+            const QString note = newest.value(newestKey(model));
+            if (note.isEmpty()) {
+                lines << QStringLiteral("Newest firmware: none noted for this model yet (type it in the Camera Tools box)");
+            } else {
+                const int cmp = compareVersions(fw, note);
+                if (cmp == -1) {
+                    lines << QStringLiteral("Update may be available: newest noted for this model is %1, this camera has %2").arg(note, fw);
+                    warn = true;
+                } else if (cmp == 0) {
+                    lines << QStringLiteral("Firmware matches the newest noted for this model (%1)").arg(note);
+                } else if (cmp == 1) {
+                    lines << QStringLiteral("This camera is newer than the newest noted (%1): update the note").arg(note);
+                } else {
+                    lines << QStringLiteral("Newest noted (%1) could not be compared with %2").arg(note, fw);
+                }
+            }
+        }
     } else {
         lines << QStringLiteral("Firmware: could not be read (HTTP %1)").arg(ic);
     }
@@ -881,6 +944,36 @@ void HikvisionBackup::runStrobe(const QString &ip, int mode, bool siren)
     m_ruleWorker->start();
 }
 
+QMap<QString, QString> HikvisionBackup::readNewestFirmware() const
+{
+    QMap<QString, QString> out;
+    if (m_configPath.isEmpty())
+        return out;
+    QSettings s(m_configPath, QSettings::IniFormat);
+    s.beginGroup(QLatin1String(kNewestFirmwareGroup));
+    for (const QString &k : s.childKeys())
+        out.insert(k, s.value(k).toString().trimmed());
+    return out;
+}
+
+QString HikvisionBackup::newestFirmware(const QString &model) const
+{
+    return readNewestFirmware().value(newestKey(model));
+}
+
+void HikvisionBackup::setNewestFirmware(const QString &model, const QString &version)
+{
+    if (m_configPath.isEmpty() || model.trimmed().isEmpty())
+        return;
+    QSettings s(m_configPath, QSettings::IniFormat);
+    s.beginGroup(QLatin1String(kNewestFirmwareGroup));
+    if (version.trimmed().isEmpty())
+        s.remove(newestKey(model));
+    else
+        s.setValue(newestKey(model), version.trimmed());
+    s.sync();
+}
+
 void HikvisionBackup::checkHealth(const QString &ip)
 {
     if (m_ruleBusy)
@@ -904,13 +997,15 @@ void HikvisionBackup::checkHealth(const QString &ip)
         m_ruleWorker->wait();
         m_ruleWorker->deleteLater();
     }
-    m_ruleWorker = QThread::create([this, found]() {
-        const HealthAnswer a = healthOne(found);
+    const QMap<QString, QString> newest = readNewestFirmware();
+    m_ruleWorker = QThread::create([this, found, newest]() {
+        const HealthAnswer a = healthOne(found, newest);
         QMetaObject::invokeMethod(this, [this, found, a]() {
             qInfo() << "[Health]" << found.ip << a.state << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
             m_ruleBusy = false;
             emit ruleBusyChanged();
             emit healthResult(found.ip, a.state, a.message);
+            emit healthModel(found.ip, a.model, a.firmware);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();
@@ -931,7 +1026,8 @@ void HikvisionBackup::checkHealthAll()
         m_ruleWorker->wait();
         m_ruleWorker->deleteLater();
     }
-    m_ruleWorker = QThread::create([this, cams]() {
+    const QMap<QString, QString> newest = readNewestFirmware();
+    m_ruleWorker = QThread::create([this, cams, newest]() {
         int good = 0;
         QStringList problems;
         QSet<QString> refusedLogins;
@@ -947,7 +1043,7 @@ void HikvisionBackup::checkHealthAll()
                 QMetaObject::invokeMethod(this, [this, cam, n, total = int(cams.size())]() {
                     emit healthAllProgress(cam.name, n, total);
                 }, Qt::QueuedConnection);
-                a = healthOne(cam);
+                a = healthOne(cam, newest);
                 if (a.refused && !login.isEmpty())
                     refusedLogins.insert(login);
             }

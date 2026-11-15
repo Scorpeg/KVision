@@ -180,12 +180,25 @@ that report the feature.
   of how many are fine and how many need a look, and a "Check again" button. Check (one camera) still shows its answer in the box.
 - **Not built:** setting the time or the NTP server from KVision (a write; do it in the camera's web page, System > Time Settings).
 
-### 12. [~] Firmware version and update check - version shown, update check not built
-- **Built:** the same "Camera clock and firmware" box shows each camera's firmware version, build date and model (read from
-  `System/deviceInfo`).
-- **Not built:** an "update available" mark. `System/onlineUpgrade/capabilities` and `.../status` answer on the G3
-  (`status` was `notUpgrade`) but 192.0.0.60 says `notSupport`, and the search call (`onlineUpgrade/SearchDevInfo`) goes to
-  Hikvision's servers, so it may need a Hik-Connect account on the camera. Starting an upgrade from KVision is not wanted.
+### 12. [~] Firmware version and update check - version shown, "update may be available" from a note you keep; apply NOT built
+- **Built:** the "Camera clock and firmware" box shows each camera's firmware version, build date and model (`System/deviceInfo`).
+  After a Check, a row appears with the model: type the newest firmware version you see on Hikvision's page for that model and
+  press Save (stored in the config file under `NewestFirmware`, one value per model). "Open Hikvision page" opens Hikvision's search
+  for that model in your browser. Check and Check all then say "Update may be available" (orange) when the camera's version is
+  lower than the note, "matches" when equal, "newer than the note" when higher, and "none noted for this model yet" otherwise.
+  The versions are compared number by number (V5.8.9 is older than V5.8.40). It always says "may be", never "is".
+- **Tested:** the comparison and the per-model storage (model names contain "/", which is stored as "|") with a small test program
+  (10 version cases, all as expected); the box itself has not been tried by a person yet.
+- **Can the cameras check for an update themselves? No.** `GET /ISAPI/System/onlineUpgrade/version?check=false` answers 403
+  `SW_ONLINE_UPGRADE_SUP not support` on the G3 (192.168.20.137) and the PTZ 192.168.20.66, and 403 on every other camera read
+  (192.0.0.4, .30, .60, .150, 192.168.20.51, .88, .90, .97). The 192.168.20.185 doorbell has no such address (404).
+- **Can KVision read Hikvision's site for the newest version? No.** The firmware download page and the product pages answer a
+  program with a small script that sets a cookie and reloads, and no content: an anti-bot check, which we do not get around. The
+  page does list the current firmware when opened in a browser, which is why the note is typed by hand.
+- **Not built (risky):** applying a firmware file the user downloaded: `PUT /ISAPI/System/updateFirmware` (the camera's web page
+  uses it), `System/upgradeStatus` for progress (answers on the G3: `upgrading=false`). A failed or wrong flash can leave a camera
+  unusable. If ever built: one camera at a time, the file's model checked against `deviceInfo`, the settings backed up first (the
+  Camera backup tool), a clear warning that the camera restarts, two confirmations, never "upgrade all".
 
 ### 13. [ ] Supplement light and dehaze
 - **Why:** simple on-demand helpers for night views.

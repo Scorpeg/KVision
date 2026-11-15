@@ -746,12 +746,23 @@ ColumnLayout {
     property string healthState: ""     // ok, warn, unavailable, error, or "" when not read yet
     property string healthMessage: ""
     property string healthForIp: ""
+    property string healthModelIp: ""   // the camera that healthModel / healthFirmware were read from
+    property string healthModel: ""     // its model, read by Check; empty until then
+    property string healthFirmware: ""
+    property string healthNewest: ""    // the newest firmware the user noted for that model
     Connections {
         target: HikvisionBackup
         function onHealthResult(ip, state, message) {
             rootPanel.healthForIp = ip;
             rootPanel.healthState = state;
             rootPanel.healthMessage = message;
+        }
+        function onHealthModel(ip, model, firmware) {
+            rootPanel.healthModelIp = ip;
+            rootPanel.healthModel = model;
+            rootPanel.healthFirmware = firmware;
+            rootPanel.healthNewest = model !== "" ? HikvisionBackup.newestFirmware(model) : "";
+            newestField.text = rootPanel.healthNewest;
         }
     }
 
@@ -807,6 +818,10 @@ ColumnLayout {
                 onCurrentIndexChanged: {
                     rootPanel.healthState = "";
                     rootPanel.healthMessage = "";
+                    rootPanel.healthModel = "";
+                    rootPanel.healthFirmware = "";
+                    rootPanel.healthNewest = "";
+                    newestField.text = "";
                 }
 
                 background: Rectangle {
@@ -935,8 +950,88 @@ ColumnLayout {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                visible: rootPanel.healthModel !== ""
+
+                Text {
+                    text: qsTr("Newest firmware for %1:").arg(rootPanel.healthModel)
+                    color: "#c8d2dc"
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 260
+                }
+
+                TextField {
+                    id: newestField
+                    placeholderText: qsTr("for example V5.8.40")
+                    selectByMouse: true
+                    Layout.fillWidth: true
+                    color: "white"
+                    onAccepted: noteSaveBtn.clicked()
+                    background: Rectangle {
+                        color: "#0f151b"
+                        radius: 4
+                        border.color: newestField.activeFocus ? "#ff7a00" : "#2a3540"
+                    }
+                }
+
+                Button {
+                    id: noteSaveBtn
+                    text: qsTr("Save")
+                    enabled: rootPanel.healthModel !== "" && newestField.text.trim() !== rootPanel.healthNewest
+                    contentItem: Text {
+                        text: noteSaveBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: noteSaveBtn.pressed ? "#0a8f4a" : (noteSaveBtn.hovered ? "#14a24c" : "#118a41")
+                        radius: 4
+                        opacity: noteSaveBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: {
+                        HikvisionBackup.setNewestFirmware(rootPanel.healthModel, newestField.text);
+                        rootPanel.healthNewest = newestField.text.trim();
+                        rootWindow.showNotice(rootPanel.healthNewest === ""
+                            ? qsTr("Note removed for %1").arg(rootPanel.healthModel)
+                            : qsTr("Noted %1 as the newest firmware for %2").arg(rootPanel.healthNewest).arg(rootPanel.healthModel), "#00ff66", 5000);
+                    }
+                }
+
+                Button {
+                    id: notePageBtn
+                    text: qsTr("Open Hikvision page")
+                    enabled: rootPanel.healthModel !== ""
+                    contentItem: Text {
+                        text: notePageBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: notePageBtn.pressed ? "#303a46" : (notePageBtn.hovered ? "#3a4550" : "#2a3540")
+                        border.color: "#00f5d4"
+                        radius: 4
+                        opacity: notePageBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: Qt.openUrlExternally("https://www.hikvision.com/en/search/?keyword=" + encodeURIComponent(rootPanel.healthModel))
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: qsTr("Opens Hikvision's own search for this model in your browser. Find the model's page, read the current firmware version there, and type it here.")
+                }
+            }
+
             Text {
-                text: "Check shows one camera here. Check all opens a window with one card per camera. It shows the camera's own clock next to this computer's, and its firmware version. A clock that is more than two minutes off is "
+                text: "Check shows one camera here. Check all opens a window with one card per camera. It shows the camera's own clock next to this computer's, and its firmware version. After a Check, type the newest firmware version you see on Hikvision's page for that model and press Save: a camera with an older version is then marked as \"update may be available\". (The cameras cannot say, and Hikvision's site cannot be read by a program, so this is a note you keep.) A clock that is more than two minutes off is "
                       + "flagged: event times will be wrong, and some cameras refuse the login when their time is far out. This only reads: nothing on a camera "
                       + "is changed, and a refused login is not tried again. Set the time in the camera's web page (System > Time Settings)."
                 color: "#8898a6"

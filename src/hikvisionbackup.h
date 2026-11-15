@@ -2,6 +2,7 @@
 #define HIKVISIONBACKUP_H
 
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QString>
 #include <functional>
@@ -68,6 +69,11 @@ public:
     // healthResult(); checkHealthAll() goes through every camera and reports in healthAllFinished().
     Q_INVOKABLE void checkHealth(const QString &ip);
     Q_INVOKABLE void checkHealthAll();
+    // The newest firmware version the user noted for a camera model (typed in from Hikvision's page: the cameras cannot say
+    // and the site cannot be read by a program). The clock and firmware check compares the camera's version with it.
+    // An empty version removes the note. Stored in the config file under NewestFirmware.
+    Q_INVOKABLE QString newestFirmware(const QString &model) const;
+    Q_INVOKABLE void setNewestFirmware(const QString &model, const QString &version);
     Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
@@ -91,6 +97,8 @@ signals:
     void warningResult(const QString &ip, const QString &state, const QString &message);
     // state is "ok", "warn" (for example a clock that is off), "unavailable" or "error"; message is one or more lines.
     void healthResult(const QString &ip, const QString &state, const QString &message);
+    // Sent right after healthResult() for one camera: its model and firmware version (empty when not read).
+    void healthModel(const QString &ip, const QString &model, const QString &firmware);
     void healthAllProgress(const QString &name, int done, int total);
     // One camera of checkHealthAll() has answered (state as in healthResult()).
     void healthAllItem(const QString &ip, const QString &state, const QString &message);
@@ -116,6 +124,7 @@ private:
     void runRuleLines(const QString &ip, int mode);
     void runNoiseFilter(const QString &ip, int mode);
     void runStrobe(const QString &ip, int mode, bool siren = false);
+    QMap<QString, QString> readNewestFirmware() const;
     void runRuleLinesAll(int mode);
     void startLoad(const QByteArray &json, const QString &configPath);
     void start(const QList<Cam> &cams, bool single, const QString &overrideUser, const QString &overridePass);
