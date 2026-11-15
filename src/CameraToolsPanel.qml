@@ -742,6 +742,211 @@ ColumnLayout {
         }
     }
 
+    // ── Clock and firmware: read only (the camera's time against this computer's, and its firmware version) ──
+    property string healthState: ""     // ok, warn, unavailable, error, or "" when not read yet
+    property string healthMessage: ""
+    property string healthForIp: ""
+    Connections {
+        target: HikvisionBackup
+        function onHealthResult(ip, state, message) {
+            rootPanel.healthForIp = ip;
+            rootPanel.healthState = state;
+            rootPanel.healthMessage = message;
+        }
+    }
+
+    Component {
+        id: healthWindowComponent
+        CameraHealthWindow {}
+    }
+    property var healthWin: null
+    function openHealthWindow() {
+        if (rootPanel.healthWin) {
+            // Already open: bring it forward and ask again.
+            rootPanel.healthWin.cameras = rootPanel.backupCameraModel;
+            rootPanel.healthWin.show();
+            rootPanel.healthWin.raise();
+            rootPanel.healthWin.run();
+            return;
+        }
+        var w = healthWindowComponent.createObject(rootWindow, { "cameras": rootPanel.backupCameraModel });
+        if (w) {
+            rootPanel.healthWin = w;
+            w.show();
+            w.run();
+        }
+    }
+
+    Frame {
+        Layout.fillWidth: true
+        background: Rectangle {
+            color: "#1c242c"
+            radius: 6
+            border.color: "#2a3540"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            Text {
+                text: "Camera clock and firmware"
+                color: "white"
+                font.pixelSize: 13
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            ComboBox {
+                id: healthCameraCombo
+                Layout.fillWidth: true
+                enabled: !HikvisionBackup.ruleBusy
+                model: rootPanel.backupCameraModel
+                textRole: "name"
+                onCurrentIndexChanged: {
+                    rootPanel.healthState = "";
+                    rootPanel.healthMessage = "";
+                }
+
+                background: Rectangle {
+                    implicitHeight: 34
+                    color: "#1b2733"
+                    border.color: healthCameraCombo.popup.visible || healthCameraCombo.activeFocus ? "#ff7a00" : (healthCameraCombo.hovered ? "#ff7a00" : "#5a6b7b")
+                    border.width: 1
+                    radius: 4
+                }
+                indicator: Text {
+                    x: healthCameraCombo.width - width - 10
+                    y: (healthCameraCombo.height - height) / 2
+                    text: "\u25BE"
+                    color: "#ff7a00"
+                    font.pixelSize: 18
+                }
+                contentItem: Text {
+                    text: healthCameraCombo.displayText
+                    color: healthCameraCombo.enabled ? "white" : "#8898a6"
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 28
+                    elide: Text.ElideRight
+                }
+                delegate: ItemDelegate {
+                    width: healthCameraCombo.width
+                    height: 32
+                    contentItem: Text {
+                        text: modelData.name + "  (" + modelData.ip + ")"
+                        color: hovered ? "#ff7a00" : "white"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    background: Rectangle {
+                        color: hovered ? "#2a3540" : "transparent"
+                        radius: 4
+                    }
+                }
+                popup: Popup {
+                    y: healthCameraCombo.height + 2
+                    width: healthCameraCombo.width
+                    implicitHeight: Math.min(320, healthCameraCombo.popup.visible ? contentItem.implicitHeight : 0)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: healthCameraCombo.popup.visible ? healthCameraCombo.delegateModel : null
+                        currentIndex: healthCameraCombo.highlightedIndex
+                    }
+                    background: Rectangle {
+                        color: "#0f151b"
+                        border.color: "#ff7a00"
+                        border.width: 1
+                        radius: 6
+                    }
+                }
+            }
+
+            Text {
+                property var sel: healthCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[healthCameraCombo.currentIndex] : null
+                text: {
+                    if (HikvisionBackup.ruleBusy)
+                        return "Asking the camera...";
+                    if (!sel)
+                        return "No camera to choose.";
+                    if (rootPanel.healthForIp !== sel.ip || rootPanel.healthState === "")
+                        return "Not read yet. Press Check to see this camera's clock and firmware.";
+                    if (rootPanel.healthState === "ok" || rootPanel.healthState === "warn")
+                        return rootPanel.healthMessage;
+                    if (rootPanel.healthState === "unavailable")
+                        return "Not available: " + rootPanel.healthMessage + ".";
+                    return "Problem: " + rootPanel.healthMessage + ".";
+                }
+                color: (rootPanel.healthState === "ok") ? "#00ff66" : ((rootPanel.healthState === "warn") ? "#ff9f43" : ((rootPanel.healthState === "error") ? "#ff6666" : "#8898a6"))
+                font.pixelSize: 11
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    id: healthCheckBtn
+                    text: "Check"
+                    enabled: !HikvisionBackup.ruleBusy && healthCameraCombo.currentIndex >= 0
+                    contentItem: Text {
+                        text: healthCheckBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: healthCheckBtn.pressed ? "#303a46" : (healthCheckBtn.hovered ? "#3a4550" : "#2a3540")
+                        border.color: "#00f5d4"
+                        radius: 4
+                    }
+                    onClicked: HikvisionBackup.checkHealth(rootPanel.backupCameraModel[healthCameraCombo.currentIndex].ip)
+                }
+
+                Button {
+                    id: healthAllBtn
+                    text: "Check all"
+                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0
+                    contentItem: Text {
+                        text: healthAllBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: healthAllBtn.pressed ? "#303a46" : (healthAllBtn.hovered ? "#3a4550" : "#2a3540")
+                        border.color: "#00f5d4"
+                        radius: 4
+                    }
+                    onClicked: rootPanel.openHealthWindow()
+                }
+            }
+
+            Text {
+                text: "Check shows one camera here. Check all opens a window with one card per camera. It shows the camera's own clock next to this computer's, and its firmware version. A clock that is more than two minutes off is "
+                      + "flagged: event times will be wrong, and some cameras refuse the login when their time is far out. This only reads: nothing on a camera "
+                      + "is changed, and a refused login is not tried again. Set the time in the camera's web page (System > Time Settings)."
+                color: "#8898a6"
+                font.pixelSize: 9
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
     ColumnLayout {
         id: betweenColumn
         Layout.fillWidth: true

@@ -162,24 +162,30 @@ that report the feature.
 - **Unverified:** the address, the empty body and the downtime come from general knowledge of Hikvision cameras, not
   from a test.
 
-### 10. [ ] Event destination test - goes in Settings > Camera Tools
-- **Why:** a quick way to check that a camera is sending its events to the right place. Would suit "Check detection setup".
-- **Found:** the app has `Event/notification/httpHosts`, with capabilities and a `.../httpHosts/<id>/test` call.
-- **Not yet tried.** Read the host list first (read only). The test call makes the camera send a message, so ask before
-  using it.
+### 10. [ ] Event destination test - goes in Settings > Camera Tools, NOT BUILT (probably not useful)
+- **Found:** the app has `Event/notification/httpHosts` with a `.../httpHosts/<id>/test` call.
+- **Read from 192.168.20.137 and 192.0.0.60:** all three HTTP host slots are `0.0.0.0:80` and unused. KVision does not use them: it
+  opens its own event stream to the camera (`alertStream`), so there is no destination to test. A test call would only matter
+  if KVision set up a push address on the camera, which it does not.
+- **Idea instead:** a "can this camera's event stream be opened" check already exists in the Setup check. Leave this item unless a
+  push address is ever added.
 
-### 11. [ ] Camera clock and NTP - goes in Settings > Camera Tools
-- **Why:** a camera whose clock is more than a few minutes off breaks digest login (already noted under "Ideas not taken").
-- **Found:** `System/time`, `System/time/timeZone`, `System/time/ntpServers/<id>`, and `System/time/capabilities`.
-- **Idea:** read the camera time with `GET /ISAPI/System/time`, warn in the Setup check if it differs from this computer,
-  and maybe offer to set it. Reading is safe. Setting needs a confirmation.
+### 11. [x] Camera clock and NTP - built (read only), in Settings > Camera Tools > "Camera clock and firmware"
+- **Built:** Check and Check all read `GET /ISAPI/System/time` and compare `localTime` with this computer's clock (halfway through
+  the request). Within 5 s it says "matches", under 2 minutes it says how many seconds off, and over 2 minutes it is flagged in
+  orange. It also names the time source (NTP server, or "set by hand, so it drifts"). Nothing is written.
+- **Read on 192.168.20.137 and 192.0.0.60:** both in NTP mode and both matched this computer. 192.168.20.137 uses us.pool.ntp.org
+  and 192.0.0.60 uses 192.0.0.13.
+- **Check all** opens a window (`src/CameraHealthWindow.qml`) with one card per camera, filled in as each camera answers, a count
+  of how many are fine and how many need a look, and a "Check again" button. Check (one camera) still shows its answer in the box.
+- **Not built:** setting the time or the NTP server from KVision (a write; do it in the camera's web page, System > Time Settings).
 
-### 12. [ ] Firmware version and update check - goes in Settings > Camera Tools
-- **Why:** show the firmware version and an "update available" mark.
-- **Found:** `System/deviceInfo` (firmware version, already read by the Setup check) and `System/onlineUpgrade/...`
-  (`capabilities`, `SearchDevInfo`, `SearchStatus`, `upgrade`, `CancelUpgrade`).
-- **Idea:** show only. Do not start an upgrade from KVision. Whether this camera can check for an update by itself is
-  not known yet (read `onlineUpgrade/capabilities` first).
+### 12. [~] Firmware version and update check - version shown, update check not built
+- **Built:** the same "Camera clock and firmware" box shows each camera's firmware version, build date and model (read from
+  `System/deviceInfo`).
+- **Not built:** an "update available" mark. `System/onlineUpgrade/capabilities` and `.../status` answer on the G3
+  (`status` was `notUpgrade`) but 192.0.0.60 says `notSupport`, and the search call (`onlineUpgrade/SearchDevInfo`) goes to
+  Hikvision's servers, so it may need a Hik-Connect account on the camera. Starting an upgrade from KVision is not wanted.
 
 ### 13. [ ] Supplement light and dehaze
 - **Why:** simple on-demand helpers for night views.

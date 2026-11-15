@@ -408,6 +408,107 @@ QString tag(const QString &xml, const QString &name)
     const QRegularExpression rx(QStringLiteral("<%1>([^<]*)</%1>").arg(name));
     return rx.match(xml).captured(1).trimmed();
 }
+
+struct HealthAnswer {
+    QString state;   // "ok", "warn", "unavailable" or "error"
+    QString message; // one or more lines
+    bool refused = false;
+};
+
+// Read only. The camera's clock against this computer's, and its firmware:
+//   GET /ISAPI/System/time        <localTime>2026-11-14T22:41:09-09:00</localTime> <timeMode>NTP|manual</timeMode>
+//   GET /ISAPI/System/deviceInfo  <model> <firmwareVersion> <firmwareReleasedDate>
+//   GET /ISAPI/System/time/ntpServers  (only to name the time server when the camera uses NTP)
+// A clock that is more than two minutes off is "warn": it makes event times wrong and can break the login of some
+// cameras. Nothing is ever written. A refused login is never retried.
+HealthAnswer healthOne(const HikvisionBackup::Cam &cam)
+{
+    HealthAnswer a;
+    a.state = QStringLiteral("error");
+    if (cam.user.isEmpty() || cam.pass.isEmpty()) {
+        a.message = QStringLiteral("no login saved for this camera (a blank password is never sent)");
+        return a;
+    }
+    const QString base = QStringLiteral("http://%1:%2/ISAPI/System/").arg(cam.ip).arg(cam.httpPort);
+    auto field = [](const QString &xml, const char *name) {
+        const QRegularExpression rx(QStringLiteral("<%1>([^<]*)</%1>").arg(QLatin1String(name)));
+        return rx.match(xml).captured(1).trimmed();
+    };
+    QByteArray timeBody;
+    const QDateTime before = QDateTime::currentDateTimeUtc();
+    const int tc = curlGet(base + QStringLiteral("time"), cam.user, cam.pass, 8, QString(), &timeBody);
+    const QDateTime after = QDateTime::currentDateTimeUtc();
+    if (tc == 0) {
+        a.message = QStringLiteral("could not connect");
+        return a;
+    }
+    if (tc == 401) {
+        a.refused = true;
+        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+        return a;
+    }
+    if (tc != 200) {
+        a.state = (tc == 403 || tc == 404 || tc == 501) ? QStringLiteral("unavailable") : QStringLiteral("error");
+        a.message = QStringLiteral("the camera answered HTTP %1 for its clock").arg(tc);
+        return a;
+    }
+    const QString timeXml = QString::fromUtf8(timeBody);
+    const QDateTime camTime = QDateTime::fromString(field(timeXml, "localTime"), Qt::ISODate);
+    const QString mode = field(timeXml, "timeMode");
+    QStringList lines;
+    bool warn = false;
+    if (!camTime.isValid()) {
+        lines << QStringLiteral("Clock: the camera's time was not understood");
+        warn = true;
+    } else {
+        // The camera answered about halfway through the request, so compare with the middle of it.
+        const QDateTime mid = before.addMSecs(before.msecsTo(after) / 2);
+        const qint64 diff = mid.secsTo(camTime.toUTC());
+        const qint64 ad = diff < 0 ? -diff : diff;
+        QString how;
+        if (ad < 5)
+            how = QStringLiteral("matches this computer");
+        else if (ad < 120)
+            how = QStringLiteral("%1 seconds %2 this computer").arg(ad).arg(diff > 0 ? QStringLiteral("ahead of") : QStringLiteral("behind"));
+        else {
+            const qint64 mins = ad / 60;
+            const QString amount = mins >= 120 ? QStringLiteral("%1 hours").arg(mins / 60) : QStringLiteral("%1 minutes").arg(mins);
+            how = QStringLiteral("%1 %2 this computer (more than 2 minutes off)")
+                      .arg(amount, diff > 0 ? QStringLiteral("ahead of") : QStringLiteral("behind"));
+            warn = true;
+        }
+        QString src = mode == QLatin1String("NTP") ? QStringLiteral("NTP") : (mode.isEmpty() ? QStringLiteral("unknown source") : mode);
+        if (mode == QLatin1String("NTP")) {
+            QByteArray ntp;
+            if (curlGet(base + QStringLiteral("time/ntpServers"), cam.user, cam.pass, 6, QString(), &ntp) == 200) {
+                const QString x = QString::fromUtf8(ntp);
+                const QString host = !field(x, "hostName").isEmpty() ? field(x, "hostName") : field(x, "ipAddress");
+                if (!host.isEmpty())
+                    src = QStringLiteral("NTP: %1").arg(host);
+            }
+        } else if (mode == QLatin1String("manual")) {
+            src = QStringLiteral("set by hand, so it drifts");
+        }
+        lines << QStringLiteral("Clock: %1, %2 (%3)").arg(camTime.toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")), how, src);
+    }
+    QByteArray infoBody;
+    const int ic = curlGet(base + QStringLiteral("deviceInfo"), cam.user, cam.pass, 8, QString(), &infoBody);
+    if (ic == 200) {
+        const QString x = QString::fromUtf8(infoBody);
+        const QString fw = field(x, "firmwareVersion");
+        const QString built = field(x, "firmwareReleasedDate");
+        const QString model = field(x, "model");
+        lines << QStringLiteral("Firmware: %1%2%3").arg(fw.isEmpty() ? QStringLiteral("not given") : fw)
+                     .arg(built.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(built))
+                     .arg(model.isEmpty() ? QString() : QStringLiteral(", model %1").arg(model));
+    } else {
+        lines << QStringLiteral("Firmware: could not be read (HTTP %1)").arg(ic);
+    }
+    a.state = warn ? QStringLiteral("warn") : QStringLiteral("ok");
+    a.message = lines.join(QLatin1Char('\n'));
+    return a;
+}
+
 }
 
 HikvisionBackup::HikvisionBackup(QObject *parent) : QObject(parent) {}
@@ -775,6 +876,96 @@ void HikvisionBackup::runStrobe(const QString &ip, int mode, bool siren)
                 emit warningResult(found.ip, a.state, a.message);
             else
                 emit strobeResult(found.ip, a.state, a.message);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+void HikvisionBackup::checkHealth(const QString &ip)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        emit healthResult(ip, QStringLiteral("error"), QStringLiteral("That camera is not in the list. Refresh the list and try again."));
+        return;
+    }
+    m_ruleBusy = true; // shares the one-at-a-time flag with the other camera switches
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, found]() {
+        const HealthAnswer a = healthOne(found);
+        QMetaObject::invokeMethod(this, [this, found, a]() {
+            qInfo() << "[Health]" << found.ip << a.state << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit healthResult(found.ip, a.state, a.message);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+void HikvisionBackup::checkHealthAll()
+{
+    if (m_ruleBusy)
+        return;
+    if (m_cams.isEmpty()) {
+        emit healthAllFinished(QStringLiteral("No cameras found. Refresh the list first."), false);
+        return;
+    }
+    m_ruleBusy = true;
+    emit ruleBusyChanged();
+    const QList<Cam> cams = m_cams;
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, cams]() {
+        int good = 0;
+        QStringList problems;
+        QSet<QString> refusedLogins;
+        int n = 0;
+        for (const Cam &cam : cams) {
+            ++n;
+            const QString login = cam.user + QLatin1Char('\n') + cam.pass;
+            HealthAnswer a;
+            if (refusedLogins.contains(login)) {
+                a.state = QStringLiteral("error");
+                a.message = QStringLiteral("skipped: this login was already refused by another camera");
+            } else {
+                QMetaObject::invokeMethod(this, [this, cam, n, total = int(cams.size())]() {
+                    emit healthAllProgress(cam.name, n, total);
+                }, Qt::QueuedConnection);
+                a = healthOne(cam);
+                if (a.refused && !login.isEmpty())
+                    refusedLogins.insert(login);
+            }
+            qInfo() << "[Health]" << cam.ip << cam.name << a.state << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            QMetaObject::invokeMethod(this, [this, cam, a]() { emit healthAllItem(cam.ip, a.state, a.message); }, Qt::QueuedConnection);
+            if (a.state == QLatin1String("ok"))
+                ++good;
+            else if (a.state == QLatin1String("warn") || a.state == QLatin1String("error"))
+                problems << QStringLiteral("%1: %2").arg(cam.name, a.message.section(QLatin1Char('\n'), 0, 0));
+        }
+        QString summary = QStringLiteral("Clock check of %1 camera(s): %2 fine, %3 need a look.").arg(cams.size()).arg(good).arg(problems.size());
+        if (!problems.isEmpty())
+            summary += QStringLiteral("\n") + problems.join(QLatin1Char('\n'));
+        const bool ok = problems.isEmpty();
+        QMetaObject::invokeMethod(this, [this, summary, ok]() {
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit healthAllFinished(summary, ok);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();

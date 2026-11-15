@@ -64,6 +64,10 @@ public:
     // the camera). Same idea as the flashing light. The answer comes in warningResult().
     Q_INVOKABLE void checkWarning(const QString &ip);
     Q_INVOKABLE void startWarning(const QString &ip);
+    // Read only: the camera's clock against this computer's, and its firmware version. The answer comes in
+    // healthResult(); checkHealthAll() goes through every camera and reports in healthAllFinished().
+    Q_INVOKABLE void checkHealth(const QString &ip);
+    Q_INVOKABLE void checkHealthAll();
     Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
@@ -85,6 +89,12 @@ signals:
     void strobeResult(const QString &ip, const QString &state, const QString &message);
     // state is "available", "unavailable" (no warning message), "started" or "error".
     void warningResult(const QString &ip, const QString &state, const QString &message);
+    // state is "ok", "warn" (for example a clock that is off), "unavailable" or "error"; message is one or more lines.
+    void healthResult(const QString &ip, const QString &state, const QString &message);
+    void healthAllProgress(const QString &name, int done, int total);
+    // One camera of checkHealthAll() has answered (state as in healthResult()).
+    void healthAllItem(const QString &ip, const QString &state, const QString &message);
+    void healthAllFinished(const QString &summary, bool ok);
     void ruleLinesAllProgress(const QString &name, int done, int total);
     void ruleLinesAllFinished(const QString &summary, bool ok);
 
