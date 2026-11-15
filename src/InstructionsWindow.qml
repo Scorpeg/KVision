@@ -3,6 +3,7 @@ import QtQuick.Window 2.11
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
+import CCTV_Viewer.Utils 1.0
 
 Window {
     id: instructionsWindow
@@ -214,6 +215,10 @@ Window {
             lineHeight: 1.3
             
             onLinkActivated: {
+                if (link.indexOf("http://") === 0 || link.indexOf("https://") === 0) {
+                    WebBrowser.open(link); // a web address opens in the browser chosen in the settings
+                    return;
+                }
                 var anchor = link;
                 if (anchor.indexOf("#") === 0) {
                     anchor = anchor.substring(1);

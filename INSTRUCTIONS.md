@@ -2,6 +2,8 @@
 
 **KVision** is a Linux desktop viewer for Hikvision cameras and NVR/DVR recorders. It shows many live video streams (RTSP/ONVIF) at once, plays back recordings from the recorder, and listens to the cameras' detection reports (people, vehicles, line crossing, intrusion and more) to draw a frame on the tile and keep a log with pictures.
 
+**Support KVision:** if you find it useful, you can support its development by [donating with PayPal](https://paypal.me/optio50).
+
 This manual describes KVision 3.7. The Changelog tab in the options window lists what changed in each release.
 
 ---
