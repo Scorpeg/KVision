@@ -164,18 +164,3 @@ function snapshotSavePath(recorderName, channelId, cameraName, when) {
     Context.mkpath(folder);
     return folder + "/" + filename;
 }
-
-// The text of a "Camera clock and firmware" answer as styled text: the text is escaped, and the line saying no newest firmware
-// is noted for the model is red (the clock line keeps the colour of the whole answer). Used by the single check and the
-// Check all window, so both look the same.
-function healthRich(text) {
-    var lines = String(text).split("\n");
-    var out = [];
-    for (var i = 0; i < lines.length; ++i) {
-        var s = lines[i].replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        if (lines[i].indexOf("Newest firmware: none noted") === 0)
-            s = "<font color=\"#ff6666\">" + s + "</font>";
-        out.push(s);
-    }
-    return out.join("<br>");
-}

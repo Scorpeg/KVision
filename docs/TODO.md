@@ -188,8 +188,10 @@ that report the feature.
   gives `ds-2cd2387g3`; the user confirmed the G2 and G3 forms work. The first form tried, without `q` and `active=Products`, found
   no products, and the form without the generation lists several generations together). Check and Check all then say "Update may be available" (orange) when the camera's version is
   lower than the note, "matches" when equal, "newer than the note" when higher, and "none noted for this model yet" otherwise.
-  The "none noted for this model yet" line is red in both the box and the Check all window (`Utils.healthRich` in
-  `src/imports/CCTV_Viewer/Utils/utils.js`, which also escapes the text), while a camera with a good clock still gets its green tick.
+  The results use the same card as the detection setup check (`SetupCheckList.qml`): a green tick for a good clock and firmware,
+  orange for "update may be available" or a clock that is off, and red for "none noted for this model yet" (the setup check's
+  "problem" state, which also turns the card's dot red). The Check all window and the single-check box both embed that list, so
+  there is no separate card or colour code. Each card also has "Open camera web page" and "Check this camera again".
   The versions are compared number by number (V5.8.9 is older than V5.8.40). It always says "may be", never "is".
 - **Tested:** the comparison and the per-model storage (model names contain "/", which is stored as "|") with a small test program
   (10 version cases, all as expected); the box itself has not been tried by a person yet.

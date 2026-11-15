@@ -410,11 +410,9 @@ QString tag(const QString &xml, const QString &name)
 }
 
 struct HealthAnswer {
-    QString state;   // "ok", "warn", "unavailable" or "error"
-    QString message; // one or more lines
     bool refused = false;
-    QString model;    // from deviceInfo, empty when it could not be read
-    QString firmware;
+    QString message;      // the lines as plain text, for the log
+    QVariantMap result;   // one card in the shape the setup check's list draws (see healthCard)
 };
 
 const char *kNewestFirmwareGroup = "NewestFirmware";
@@ -456,6 +454,40 @@ int compareVersions(const QString &a, const QString &b)
     return 0;
 }
 
+QVariantMap healthItem(const QString &state, const QString &label, const QString &detail)
+{
+    return QVariantMap{{QStringLiteral("state"), state}, {QStringLiteral("label"), label}, {QStringLiteral("detail"), detail}};
+}
+
+// One card for SetupCheckList.qml (the same shape the detection setup check gives): key, name, problems, warnings, summary,
+// time, firmware, camIp, camPort and the list of items (state ok / problem / warning / note, label, detail). shorts are the
+// few words for each thing that needs a look; they become the card's summary.
+QVariantMap healthCard(const HikvisionBackup::Cam &cam, const QVariantList &items, const QStringList &shorts,
+                       const QString &model, const QString &firmware)
+{
+    int problems = 0, warnings = 0;
+    for (const QVariant &v : items) {
+        const QString s = v.toMap().value(QStringLiteral("state")).toString();
+        if (s == QLatin1String("problem"))
+            ++problems;
+        else if (s == QLatin1String("warning"))
+            ++warnings;
+    }
+    QVariantMap r;
+    r.insert(QStringLiteral("key"), cam.ip);
+    r.insert(QStringLiteral("name"), cam.name.isEmpty() ? cam.ip : cam.name);
+    r.insert(QStringLiteral("camIp"), cam.ip);
+    r.insert(QStringLiteral("camPort"), cam.httpPort);
+    r.insert(QStringLiteral("problems"), problems);
+    r.insert(QStringLiteral("warnings"), warnings);
+    r.insert(QStringLiteral("summary"), shorts.isEmpty() ? QStringLiteral("Clock and firmware fine") : shorts.join(QStringLiteral(", ")));
+    r.insert(QStringLiteral("time"), QTime::currentTime().toString(QStringLiteral("hh:mm:ss")));
+    r.insert(QStringLiteral("firmware"), firmware);
+    r.insert(QStringLiteral("model"), model);
+    r.insert(QStringLiteral("items"), items);
+    return r;
+}
+
 // Read only. The camera's clock against this computer's, and its firmware:
 //   GET /ISAPI/System/time        <localTime>2026-11-14T22:41:09-09:00</localTime> <timeMode>NTP|manual</timeMode>
 //   GET /ISAPI/System/deviceInfo  <model> <firmwareVersion> <firmwareReleasedDate>
@@ -465,11 +497,14 @@ int compareVersions(const QString &a, const QString &b)
 HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QString> &newest)
 {
     HealthAnswer a;
-    a.state = QStringLiteral("error");
-    if (cam.user.isEmpty() || cam.pass.isEmpty()) {
-        a.message = QStringLiteral("no login saved for this camera (a blank password is never sent)");
+    // A card with a single line for a camera that could not be read at all.
+    auto bail = [&](const QString &itemState, const QString &detail, const QString &shortText) {
+        a.message = detail;
+        a.result = healthCard(cam, {healthItem(itemState, QStringLiteral("Clock and firmware"), detail)}, {shortText}, QString(), QString());
         return a;
-    }
+    };
+    if (cam.user.isEmpty() || cam.pass.isEmpty())
+        return bail(QStringLiteral("problem"), QStringLiteral("no login saved for this camera (a blank password is never sent)"), QStringLiteral("No login saved"));
     const QString base = QStringLiteral("http://%1:%2/ISAPI/System/").arg(cam.ip).arg(cam.httpPort);
     auto field = [](const QString &xml, const char *name) {
         const QRegularExpression rx(QStringLiteral("<%1>([^<]*)</%1>").arg(QLatin1String(name)));
@@ -479,33 +514,39 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
     const QDateTime before = QDateTime::currentDateTimeUtc();
     const int tc = curlGet(base + QStringLiteral("time"), cam.user, cam.pass, 8, QString(), &timeBody);
     const QDateTime after = QDateTime::currentDateTimeUtc();
-    if (tc == 0) {
-        a.message = QStringLiteral("could not connect");
-        return a;
-    }
+    if (tc == 0)
+        return bail(QStringLiteral("problem"), QStringLiteral("could not connect"), QStringLiteral("Could not connect"));
     if (tc == 401) {
         a.refused = true;
-        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
-        return a;
+        return bail(QStringLiteral("problem"), QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"),
+                    QStringLiteral("Login refused"));
     }
     if (tc != 200) {
-        a.state = (tc == 403 || tc == 404 || tc == 501) ? QStringLiteral("unavailable") : QStringLiteral("error");
-        a.message = QStringLiteral("the camera answered HTTP %1 for its clock").arg(tc);
-        return a;
+        const bool none = (tc == 403 || tc == 404 || tc == 501);
+        return bail(none ? QStringLiteral("warning") : QStringLiteral("problem"),
+                    QStringLiteral("the camera answered HTTP %1 for its clock").arg(tc),
+                    none ? QStringLiteral("No clock to read") : QStringLiteral("Could not be read"));
     }
     const QString timeXml = QString::fromUtf8(timeBody);
     const QDateTime camTime = QDateTime::fromString(field(timeXml, "localTime"), Qt::ISODate);
     const QString mode = field(timeXml, "timeMode");
-    QStringList lines;
-    bool warn = false;
+    QVariantList items;
+    QStringList shorts;
+    QStringList plain;
+    auto add = [&](const QString &state, const QString &label, const QString &detail, const QString &shortText = QString()) {
+        items << healthItem(state, label, detail);
+        plain << QStringLiteral("%1: %2").arg(label, detail);
+        if (!shortText.isEmpty())
+            shorts << shortText;
+    };
     if (!camTime.isValid()) {
-        lines << QStringLiteral("Clock: the camera's time was not understood");
-        warn = true;
+        add(QStringLiteral("warning"), QStringLiteral("Clock"), QStringLiteral("the camera's time was not understood"), QStringLiteral("Clock not understood"));
     } else {
         // The camera answered about halfway through the request, so compare with the middle of it.
         const QDateTime mid = before.addMSecs(before.msecsTo(after) / 2);
         const qint64 diff = mid.secsTo(camTime.toUTC());
         const qint64 ad = diff < 0 ? -diff : diff;
+        bool off = false;
         QString how;
         if (ad < 5)
             how = QStringLiteral("matches this computer");
@@ -516,7 +557,7 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
             const QString amount = mins >= 120 ? QStringLiteral("%1 hours").arg(mins / 60) : QStringLiteral("%1 minutes").arg(mins);
             how = QStringLiteral("%1 %2 this computer (more than 2 minutes off)")
                       .arg(amount, diff > 0 ? QStringLiteral("ahead of") : QStringLiteral("behind"));
-            warn = true;
+            off = true;
         }
         QString src = mode == QLatin1String("NTP") ? QStringLiteral("NTP") : (mode.isEmpty() ? QStringLiteral("unknown source") : mode);
         if (mode == QLatin1String("NTP")) {
@@ -530,48 +571,51 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
         } else if (mode == QLatin1String("manual")) {
             src = QStringLiteral("set by hand, so it drifts");
         }
-        lines << QStringLiteral("Clock: %1, %2 (%3)").arg(camTime.toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")), how, src);
+        add(off ? QStringLiteral("warning") : QStringLiteral("ok"), QStringLiteral("Clock"),
+            QStringLiteral("%1, %2 (%3)").arg(camTime.toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")), how, src),
+            off ? QStringLiteral("Clock is off") : QString());
     }
+    QString model, fw;
     QByteArray infoBody;
     const int ic = curlGet(base + QStringLiteral("deviceInfo"), cam.user, cam.pass, 8, QString(), &infoBody);
     if (ic == 200) {
         const QString x = QString::fromUtf8(infoBody);
-        const QString fw = field(x, "firmwareVersion");
+        fw = field(x, "firmwareVersion");
+        model = field(x, "model");
         const QString built = field(x, "firmwareReleasedDate");
-        const QString model = field(x, "model");
-        lines << QStringLiteral("Firmware: %1%2%3").arg(fw.isEmpty() ? QStringLiteral("not given") : fw)
-                     .arg(built.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(built))
-                     .arg(model.isEmpty() ? QString() : QStringLiteral(", model %1").arg(model));
-        a.model = model;
-        a.firmware = fw;
+        add(QStringLiteral("ok"), QStringLiteral("Firmware"),
+            QStringLiteral("%1%2%3").arg(fw.isEmpty() ? QStringLiteral("not given") : fw)
+                .arg(built.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(built))
+                .arg(model.isEmpty() ? QString() : QStringLiteral(", model %1").arg(model)));
         // The newest version for this model is typed in by the user (from Hikvision's own page): the cameras cannot say
-        // and Hikvision's site cannot be read by a program. So this says "may be", never "is".
+        // and Hikvision's site cannot be read by a program. So this says "may be", never "is". No note at all is a
+        // "problem" (red): the firmware cannot be judged.
         if (!model.isEmpty() && !fw.isEmpty()) {
             const QString note = newest.value(newestKey(model));
+            const QString label = QStringLiteral("Newest firmware");
             if (note.isEmpty()) {
-                lines << QStringLiteral("Newest firmware: none noted for this model yet (type it in the Camera Tools box)");
+                add(QStringLiteral("problem"), label, QStringLiteral("none noted for this model yet (type it in Settings > Camera Tools)"),
+                    QStringLiteral("No newest firmware noted"));
             } else {
                 const int cmp = compareVersions(fw, note);
-                if (cmp == -1) {
-                    lines << QStringLiteral("Update may be available: newest noted for this model is %1, this camera has %2").arg(note, fw);
-                    warn = true;
-                } else if (cmp == 0) {
-                    lines << QStringLiteral("Firmware matches the newest noted for this model (%1)").arg(note);
-                } else if (cmp == 1) {
-                    lines << QStringLiteral("This camera is newer than the newest noted (%1): update the note").arg(note);
-                } else {
-                    lines << QStringLiteral("Newest noted (%1) could not be compared with %2").arg(note, fw);
-                }
+                if (cmp == -1)
+                    add(QStringLiteral("warning"), label, QStringLiteral("update may be available: newest noted for this model is %1, this camera has %2").arg(note, fw),
+                        QStringLiteral("Update may be available"));
+                else if (cmp == 0)
+                    add(QStringLiteral("ok"), label, QStringLiteral("matches the newest noted for this model (%1)").arg(note));
+                else if (cmp == 1)
+                    add(QStringLiteral("note"), label, QStringLiteral("this camera is newer than the newest noted (%1): update the note").arg(note));
+                else
+                    add(QStringLiteral("note"), label, QStringLiteral("the newest noted (%1) could not be compared with %2").arg(note, fw));
             }
         }
     } else {
-        lines << QStringLiteral("Firmware: could not be read (HTTP %1)").arg(ic);
+        add(QStringLiteral("warning"), QStringLiteral("Firmware"), QStringLiteral("could not be read (HTTP %1)").arg(ic), QStringLiteral("Firmware not read"));
     }
-    a.state = warn ? QStringLiteral("warn") : QStringLiteral("ok");
-    a.message = lines.join(QLatin1Char('\n'));
+    a.message = plain.join(QLatin1Char('\n'));
+    a.result = healthCard(cam, items, shorts, model, fw);
     return a;
 }
-
 }
 
 HikvisionBackup::HikvisionBackup(QObject *parent) : QObject(parent) {}
@@ -988,7 +1032,11 @@ void HikvisionBackup::checkHealth(const QString &ip)
         }
     }
     if (!have) {
-        emit healthResult(ip, QStringLiteral("error"), QStringLiteral("That camera is not in the list. Refresh the list and try again."));
+        Cam none;
+        none.ip = ip;
+        emit healthResult(healthCard(none, {healthItem(QStringLiteral("problem"), QStringLiteral("Clock and firmware"),
+                                                       QStringLiteral("That camera is not in the list. Refresh the list and try again."))},
+                                     {QStringLiteral("Not in the list")}, QString(), QString()));
         return;
     }
     m_ruleBusy = true; // shares the one-at-a-time flag with the other camera switches
@@ -1001,11 +1049,10 @@ void HikvisionBackup::checkHealth(const QString &ip)
     m_ruleWorker = QThread::create([this, found, newest]() {
         const HealthAnswer a = healthOne(found, newest);
         QMetaObject::invokeMethod(this, [this, found, a]() {
-            qInfo() << "[Health]" << found.ip << a.state << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            qInfo() << "[Health]" << found.ip << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
             m_ruleBusy = false;
             emit ruleBusyChanged();
-            emit healthResult(found.ip, a.state, a.message);
-            emit healthModel(found.ip, a.model, a.firmware);
+            emit healthResult(a.result);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();
@@ -1028,8 +1075,7 @@ void HikvisionBackup::checkHealthAll()
     }
     const QMap<QString, QString> newest = readNewestFirmware();
     m_ruleWorker = QThread::create([this, cams, newest]() {
-        int good = 0;
-        QStringList problems;
+        int good = 0, needLook = 0;
         QSet<QString> refusedLogins;
         int n = 0;
         for (const Cam &cam : cams) {
@@ -1037,8 +1083,9 @@ void HikvisionBackup::checkHealthAll()
             const QString login = cam.user + QLatin1Char('\n') + cam.pass;
             HealthAnswer a;
             if (refusedLogins.contains(login)) {
-                a.state = QStringLiteral("error");
                 a.message = QStringLiteral("skipped: this login was already refused by another camera");
+                a.result = healthCard(cam, {healthItem(QStringLiteral("problem"), QStringLiteral("Clock and firmware"), a.message)},
+                                      {QStringLiteral("Skipped (login refused)")}, QString(), QString());
             } else {
                 QMetaObject::invokeMethod(this, [this, cam, n, total = int(cams.size())]() {
                     emit healthAllProgress(cam.name, n, total);
@@ -1047,21 +1094,19 @@ void HikvisionBackup::checkHealthAll()
                 if (a.refused && !login.isEmpty())
                     refusedLogins.insert(login);
             }
-            qInfo() << "[Health]" << cam.ip << cam.name << a.state << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
-            QMetaObject::invokeMethod(this, [this, cam, a]() { emit healthAllItem(cam.ip, a.state, a.message); }, Qt::QueuedConnection);
-            if (a.state == QLatin1String("ok"))
+            qInfo() << "[Health]" << cam.ip << cam.name << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            const QVariantMap card = a.result;
+            QMetaObject::invokeMethod(this, [this, card]() { emit healthAllItem(card); }, Qt::QueuedConnection);
+            if (card.value(QStringLiteral("problems")).toInt() == 0 && card.value(QStringLiteral("warnings")).toInt() == 0)
                 ++good;
-            else if (a.state == QLatin1String("warn") || a.state == QLatin1String("error"))
-                problems << QStringLiteral("%1: %2").arg(cam.name, a.message.section(QLatin1Char('\n'), 0, 0));
+            else
+                ++needLook;
         }
-        QString summary = QStringLiteral("Clock check of %1 camera(s): %2 fine, %3 need a look.").arg(cams.size()).arg(good).arg(problems.size());
-        if (!problems.isEmpty())
-            summary += QStringLiteral("\n") + problems.join(QLatin1Char('\n'));
-        const bool ok = problems.isEmpty();
-        QMetaObject::invokeMethod(this, [this, summary, ok]() {
+        const QString summary = QStringLiteral("Clock and firmware of %1 camera(s): %2 fine, %3 to look at.").arg(cams.size()).arg(good).arg(needLook);
+        QMetaObject::invokeMethod(this, [this, summary, needLook]() {
             m_ruleBusy = false;
             emit ruleBusyChanged();
-            emit healthAllFinished(summary, ok);
+            emit healthAllFinished(summary, needLook == 0);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();

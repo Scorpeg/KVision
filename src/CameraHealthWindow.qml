@@ -4,10 +4,10 @@ import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
-import CCTV_Viewer.Utils 1.0
 
-// The result of "Camera clock and firmware > Check all": one card per camera, filled in as each camera answers.
-// It only reads. Nothing on a camera is changed.
+// The result of "Camera clock and firmware > Check all": one card per camera, added as each camera answers. The cards are the
+// ones the detection setup check shows (SetupCheckList), so both look and behave the same. It only reads: nothing on a camera is
+// changed.
 Window {
     id: win
 
@@ -19,36 +19,41 @@ Window {
     title: qsTr("Camera clock and firmware")
     flags: Qt.Window | Qt.WindowStaysOnTopHint
 
-    // The cameras to list: { name, ip }. Set before run().
-    property var cameras: []
+    property var results: []
+    property string openKey: ""
     property bool running: false
     property string progressText: ""
 
-    ListModel { id: rows }
-
-    function stateColor(state) {
-        return state === "ok" ? "#14a24c" : (state === "warn" ? "#e0a040" : (state === "error" ? "#e0241f" : (state === "unavailable" ? "#667788" : "#8899aa")));
+    // Replaces the card of the same camera, or adds it at the end.
+    function put(card) {
+        var list = win.results.slice();
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].key === card.key) {
+                list[i] = card;
+                win.results = list;
+                return;
+            }
+        }
+        list.push(card);
+        win.results = list;
     }
 
-    function stateMark(state) {
-        return state === "ok" ? "\u2713" : (state === "warn" ? "!" : (state === "error" ? "\u2717" : (state === "unavailable" ? "\u2013" : "\u2026")));
-    }
-
-    function count(state) {
+    function count(bad) {
         var n = 0;
-        for (var i = 0; i < rows.count; ++i)
-            if (rows.get(i).status === state)
+        for (var i = 0; i < win.results.length; ++i) {
+            var isBad = win.results[i].problems > 0 || win.results[i].warnings > 0;
+            if (isBad === bad)
                 ++n;
+        }
         return n;
     }
 
-    // Lists every camera as "waiting" and asks them one after the other (read only).
+    // Asks every camera, one after the other (read only). The cards appear as the answers arrive.
     function run() {
         if (HikvisionBackup.ruleBusy)
             return;
-        rows.clear();
-        for (var i = 0; i < win.cameras.length; ++i)
-            rows.append({ "name": win.cameras[i].name, "ip": win.cameras[i].ip, "status": "waiting", "message": qsTr("waiting...") });
+        win.results = [];
+        win.openKey = "";
         win.running = true;
         win.progressText = "";
         HikvisionBackup.checkHealthAll();
@@ -62,14 +67,8 @@ Window {
 
     Connections {
         target: HikvisionBackup
-        function onHealthAllItem(ip, state, message) {
-            for (var i = 0; i < rows.count; ++i) {
-                if (rows.get(i).ip === ip && rows.get(i).status === "waiting") {
-                    rows.set(i, { "name": rows.get(i).name, "ip": ip, "status": state, "message": message });
-                    break;
-                }
-            }
-        }
+        function onHealthAllItem(card) { win.put(card); }
+        function onHealthResult(card) { win.put(card); } // a card's own "Check this camera again"
         function onHealthAllProgress(name, done, total) {
             win.progressText = qsTr("Asking %1 of %2: %3").arg(done).arg(total).arg(name);
         }
@@ -90,9 +89,7 @@ Window {
             Text {
                 text: win.running
                       ? (win.progressText !== "" ? win.progressText : qsTr("Asking the cameras..."))
-                      : qsTr("%1 camera(s): %2 fine, %3 need a look, %4 without the feature or not read")
-                            .arg(rows.count).arg(win.count("ok")).arg(win.count("warn") + win.count("error"))
-                            .arg(win.count("unavailable") + win.count("waiting"))
+                      : qsTr("%1 camera(s): %2 fine, %3 to look at").arg(win.results.length).arg(win.count(false)).arg(win.count(true))
                 color: "#8899aa"
                 font.pixelSize: 12
                 Layout.fillWidth: true
@@ -109,72 +106,14 @@ Window {
             }
         }
 
-        ListView {
-            id: list
+        SetupCheckList {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            spacing: 6
-            model: rows
-            ScrollBar.vertical: ScrollBar { }
-
-            delegate: Rectangle {
-                width: list.width - 12
-                implicitHeight: body.implicitHeight + 16
-                height: implicitHeight
-                color: "#1c242c"
-                radius: 6
-                border.color: win.stateColor(model.status)
-                border.width: 1
-
-                RowLayout {
-                    id: body
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 8
-                    spacing: 10
-
-                    Rectangle {
-                        Layout.alignment: Qt.AlignTop
-                        width: 24
-                        height: 24
-                        radius: 12
-                        color: win.stateColor(model.status)
-                        Text {
-                            anchors.centerIn: parent
-                            text: win.stateMark(model.status)
-                            color: "white"
-                            font.pixelSize: 14
-                            font.bold: true
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 3
-
-                        Text {
-                            text: model.name + "  (" + model.ip + ")"
-                            color: "white"
-                            font.pixelSize: 13
-                            font.bold: true
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                        }
-
-                        Text {
-                            textFormat: Text.StyledText
-                            text: Utils.healthRich(model.status === "unavailable" ? qsTr("Not available: %1").arg(model.message)
-                                  : (model.status === "error" ? qsTr("Problem: %1").arg(model.message) : model.message))
-                            color: model.status === "warn" ? "#e0a040" : (model.status === "error" ? "#ff6666" : "#c8d2dc")
-                            font.pixelSize: 11
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                        }
-                    }
-                }
-            }
+            results: win.results
+            busy: win.running || HikvisionBackup.ruleBusy
+            onRecheck: HikvisionBackup.checkHealth(key)
+            openKey: win.openKey
+            onOpenKeyChanged: win.openKey = openKey
         }
     }
 }

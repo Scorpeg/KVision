@@ -743,25 +743,19 @@ ColumnLayout {
     }
 
     // ── Clock and firmware: read only (the camera's time against this computer's, and its firmware version) ──
-    property string healthState: ""     // ok, warn, unavailable, error, or "" when not read yet
-    property string healthMessage: ""
-    property string healthForIp: ""
-    property string healthModelIp: ""   // the camera that healthModel / healthFirmware were read from
+    property var healthCard: ({})       // the last answer for the chosen camera, in the shape the setup check's list draws
     property string healthModel: ""     // its model, read by Check; empty until then
-    property string healthFirmware: ""
     property string healthNewest: ""    // the newest firmware the user noted for that model
     Connections {
         target: HikvisionBackup
-        function onHealthResult(ip, state, message) {
-            rootPanel.healthForIp = ip;
-            rootPanel.healthState = state;
-            rootPanel.healthMessage = message;
-        }
-        function onHealthModel(ip, model, firmware) {
-            rootPanel.healthModelIp = ip;
-            rootPanel.healthModel = model;
-            rootPanel.healthFirmware = firmware;
-            rootPanel.healthNewest = model !== "" ? HikvisionBackup.newestFirmware(model) : "";
+        function onHealthResult(card) {
+            // Only the camera chosen here (another camera can be checked again from the Check all window).
+            var sel = healthCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[healthCameraCombo.currentIndex] : null;
+            if (!sel || sel.ip !== card.key)
+                return;
+            rootPanel.healthCard = card;
+            rootPanel.healthModel = card.model || "";
+            rootPanel.healthNewest = rootPanel.healthModel !== "" ? HikvisionBackup.newestFirmware(rootPanel.healthModel) : "";
             newestField.text = rootPanel.healthNewest;
         }
     }
@@ -774,13 +768,12 @@ ColumnLayout {
     function openHealthWindow() {
         if (rootPanel.healthWin) {
             // Already open: bring it forward and ask again.
-            rootPanel.healthWin.cameras = rootPanel.backupCameraModel;
             rootPanel.healthWin.show();
             rootPanel.healthWin.raise();
             rootPanel.healthWin.run();
             return;
         }
-        var w = healthWindowComponent.createObject(rootWindow, { "cameras": rootPanel.backupCameraModel });
+        var w = healthWindowComponent.createObject(rootWindow);
         if (w) {
             rootPanel.healthWin = w;
             w.show();
@@ -816,10 +809,8 @@ ColumnLayout {
                 model: rootPanel.backupCameraModel
                 textRole: "name"
                 onCurrentIndexChanged: {
-                    rootPanel.healthState = "";
-                    rootPanel.healthMessage = "";
+                    rootPanel.healthCard = ({});
                     rootPanel.healthModel = "";
-                    rootPanel.healthFirmware = "";
                     rootPanel.healthNewest = "";
                     newestField.text = "";
                 }
@@ -884,24 +875,27 @@ ColumnLayout {
 
             Text {
                 property var sel: healthCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[healthCameraCombo.currentIndex] : null
-                text: Utils.healthRich((function() {
-                    if (HikvisionBackup.ruleBusy)
-                        return "Asking the camera...";
-                    if (!sel)
-                        return "No camera to choose.";
-                    if (rootPanel.healthForIp !== sel.ip || rootPanel.healthState === "")
-                        return "Not read yet. Press Check to see this camera's clock and firmware.";
-                    if (rootPanel.healthState === "ok" || rootPanel.healthState === "warn")
-                        return rootPanel.healthMessage;
-                    if (rootPanel.healthState === "unavailable")
-                        return "Not available: " + rootPanel.healthMessage + ".";
-                    return "Problem: " + rootPanel.healthMessage + ".";
-                })())
-                textFormat: Text.StyledText
-                color: (rootPanel.healthState === "ok") ? "#00ff66" : ((rootPanel.healthState === "warn") ? "#ff9f43" : ((rootPanel.healthState === "error") ? "#ff6666" : "#8898a6"))
+                visible: !healthCardView.visible
+                text: HikvisionBackup.ruleBusy ? "Asking the camera..."
+                      : (!sel ? "No camera to choose." : "Not read yet. Press Check to see this camera's clock and firmware.")
+                color: "#8898a6"
                 font.pixelSize: 11
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+            }
+
+            // The same card the detection setup check shows (one camera, opened).
+            SetupCheckList {
+                id: healthCardView
+                visible: healthCameraCombo.currentIndex >= 0 && rootPanel.healthCard.key !== undefined
+                         && rootPanel.healthCard.key === rootPanel.backupCameraModel[healthCameraCombo.currentIndex].ip
+                Layout.fillWidth: true
+                Layout.preferredHeight: contentHeight
+                interactive: false
+                results: rootPanel.healthCard.key !== undefined ? [rootPanel.healthCard] : []
+                openKey: rootPanel.healthCard.key !== undefined ? rootPanel.healthCard.key : ""
+                busy: HikvisionBackup.ruleBusy
+                onRecheck: HikvisionBackup.checkHealth(key)
             }
 
             RowLayout {
@@ -1002,6 +996,8 @@ ColumnLayout {
                         rootWindow.showNotice(rootPanel.healthNewest === ""
                             ? qsTr("Note removed for %1").arg(rootPanel.healthModel)
                             : qsTr("Noted %1 as the newest firmware for %2").arg(rootPanel.healthNewest).arg(rootPanel.healthModel), "#00ff66", 5000);
+                        if (!HikvisionBackup.ruleBusy && healthCameraCombo.currentIndex >= 0)
+                            HikvisionBackup.checkHealth(rootPanel.backupCameraModel[healthCameraCombo.currentIndex].ip);
                     }
                 }
 

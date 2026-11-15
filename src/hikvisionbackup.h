@@ -7,6 +7,7 @@
 #include <QString>
 #include <functional>
 #include <QVariantList>
+#include <QVariantMap>
 
 class QThread;
 
@@ -95,13 +96,12 @@ signals:
     void strobeResult(const QString &ip, const QString &state, const QString &message);
     // state is "available", "unavailable" (no warning message), "started" or "error".
     void warningResult(const QString &ip, const QString &state, const QString &message);
-    // state is "ok", "warn" (for example a clock that is off), "unavailable" or "error"; message is one or more lines.
-    void healthResult(const QString &ip, const QString &state, const QString &message);
-    // Sent right after healthResult() for one camera: its model and firmware version (empty when not read).
-    void healthModel(const QString &ip, const QString &model, const QString &firmware);
+    // One camera's clock and firmware check, as a card in the shape the detection setup check's list draws: key, name, camIp,
+    // camPort, problems, warnings, summary, time, firmware, model and items (each: state ok / problem / warning / note, label, detail).
+    void healthResult(const QVariantMap &card);
     void healthAllProgress(const QString &name, int done, int total);
-    // One camera of checkHealthAll() has answered (state as in healthResult()).
-    void healthAllItem(const QString &ip, const QString &state, const QString &message);
+    // One camera of checkHealthAll() has answered (same card as healthResult()).
+    void healthAllItem(const QVariantMap &card);
     void healthAllFinished(const QString &summary, bool ok);
     void ruleLinesAllProgress(const QString &name, int done, int total);
     void ruleLinesAllFinished(const QString &summary, bool ok);
