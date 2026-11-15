@@ -88,9 +88,16 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
       do not offer the request at all.
 - [ ] **Restore:** only tested on DoggieCam, and only the device name was checked afterwards. Try one more camera and
       compare more settings (before a restore, take the safety backup it makes, and keep it).
-- [ ] **Face detection on Livingroom2 / Garage2 (192.0.0.108):** enabled on the camera, but no face event appeared on its
-      stream or the NVR's in two live tests. `OtherEvents.log` would show one if it ever came. Unknown whether this model
-      sends one.
+- [~] **Face detection on Livingroom2 / Garage2 (192.0.0.108, DS-2CD2483G2-I, firmware V5.7.23): it DOES send face events.** The
+      earlier "no event in two live tests" was wrong or too short. `OtherEvents.log` has 4 `facedetection (active)` events from
+      the camera's own stream: 13 Nov 19:11:08, 14 Nov 18:44:10, 14 Nov 21:54:59 and 15 Nov 00:02:51 (the NVR's channel 18). Three of
+      the four came within a minute of a "Human detected, Intrusion" on the same camera; the 21:54:59 one had no other detection near
+      it. The camera has face detection on (`/ISAPI/Smart/FaceDetect/1`: enabled, sensitivity 4, highlights on) and a
+      `facedetection-1` trigger with only "record" and "center" actions. The event text has no target box and no picture:
+      `<eventType>facedetection</eventType>`, `<eventState>active</eventState>`, `<eventDescription>facedetection alarm</eventDescription>`,
+      the channel and the time, nothing else. So KVision can log it and flash the tile, but cannot draw a face frame from it.
+      **Not done:** KVision still files it as "Unrecognised event" (`vcaKind()` in `hikvisionevents.cpp` does not know
+      `facedetection`). Idea: log it as "Face detected" in Detection.log and show a tile notice, with no frame.
 - [ ] **Audio at the Front Door does not sound by day.** The likely cause is the camera's own audible alarm hours
       (00:00-05:45, 21:00-24:00). Not tested by triggering the event by day and by night. The other cameras with limited
       hours are in the all-cameras table (orange).
