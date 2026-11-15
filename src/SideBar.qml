@@ -2477,7 +2477,7 @@ FocusScope {
                                 }
 
                                 SelectableLabel {
-                                    text: qsTr("Show a frame for these kinds of report")
+                                    text: qsTr("Show a tile frame highlight and label for these kinds of report")
                                     textColor: "#8898a6"
                                     font.pixelSize: 11
                                     wrapMode: TextEdit.Wrap
@@ -2508,7 +2508,7 @@ FocusScope {
                                 }
 
                                 SelectableLabel {
-                                    text: qsTr("Show a frame for these targets")
+                                    text: qsTr("Show a tile frame highlight and label for these targets")
                                     textColor: "#8898a6"
                                     font.pixelSize: 11
                                     wrapMode: TextEdit.Wrap
