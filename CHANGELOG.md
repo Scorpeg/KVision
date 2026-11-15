@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
   layout"), so it can be undone from the same window.
 
 ### Fixed
+* **The right-click menu and its Stream Select and Quick tools sub-menus no longer run off the screen** when the camera cell is small and near an edge. They stay inside the window, and a sub-menu opens to the left when there is no room on the right.
 * **The camera pick-lists in Camera Tools now look like something you click.** They had the same colour as the window. They now have a lighter box, an orange drop-down arrow and an orange outline when the mouse is over them.
 * **Status notices (Camera Tools, backups, background logging) are no longer hidden behind other windows.** The small message at
   the bottom of the screen used to be part of the main window, so the Settings window (where Camera Tools is) and any other

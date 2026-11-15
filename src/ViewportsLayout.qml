@@ -20,6 +20,14 @@ FocusScope {
         playerPool.releaseAll();
     }
 
+    // Opens a sub-menu beside its menu item: to the right, or to the left when there is no room on the right.
+    function popupBeside(sub, item) {
+        var p = item.mapToItem(null, 0, 0);
+        var w = Math.max(sub.implicitWidth, sub.width, 200);
+        var x = (p.x + item.width + w > rootWindow.width - 6) ? -w : item.width;
+        sub.popup(item, x, 0);
+    }
+
     // Quick tools > Rule lines: read the camera's switch and set it the other way, then say what the camera now says.
     property string ruleMenuIp: ""      // the camera the menu asked about, while the answer is awaited
     property string ruleMenuName: ""
@@ -1076,6 +1084,7 @@ FocusScope {
 
                     Menu {
                         id: contextMenu
+                        margins: 6 // keeps the menu inside the window, even for a small cell near an edge
                         
                         // When "Stream Select" is clicked, the menu auto-closes (Qt default
                         // for triggered items) which would instantly kill the submenu via
@@ -1245,7 +1254,7 @@ FocusScope {
                             
                             onHoveredChanged: {
                                 if (hovered && enabled) {
-                                    streamSubMenu.popup(streamSelectMenuItem, streamSelectMenuItem.width, 0);
+                                    root.popupBeside(streamSubMenu, streamSelectMenuItem);
                                 }
                             }
                             
@@ -1253,7 +1262,7 @@ FocusScope {
                                 // Mark the submenu to survive the parent menu's
                                 // auto-close, then open it.
                                 contextMenu.keepSubMenuOpen = true;
-                                streamSubMenu.popup(streamSelectMenuItem, streamSelectMenuItem.width, 0);
+                                root.popupBeside(streamSubMenu, streamSelectMenuItem);
                             }
                         }
 
@@ -1454,13 +1463,13 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
-                                    quickToolsSubMenu.popup(quickToolsMenuItem, quickToolsMenuItem.width, 0);
+                                    root.popupBeside(quickToolsSubMenu, quickToolsMenuItem);
                                 }
                             }
 
                             onTriggered: {
                                 contextMenu.keepSubMenuOpen = true;
-                                quickToolsSubMenu.popup(quickToolsMenuItem, quickToolsMenuItem.width, 0);
+                                root.popupBeside(quickToolsSubMenu, quickToolsMenuItem);
                             }
                         }
 
@@ -1558,6 +1567,7 @@ FocusScope {
 
                     Menu {
                         id: quickToolsSubMenu
+                        margins: 6 // keeps the menu inside the window, even for a small cell near an edge
 
                         topPadding: 5
                         bottomPadding: 5
@@ -1761,6 +1771,7 @@ FocusScope {
 
                     Menu {
                         id: streamSubMenu
+                        margins: 6 // keeps the menu inside the window, even for a small cell near an edge
                         
                         topPadding: 5
                         bottomPadding: 5
