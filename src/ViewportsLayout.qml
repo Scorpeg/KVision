@@ -20,6 +20,50 @@ FocusScope {
         playerPool.releaseAll();
     }
 
+    // Keeps a menu inside the window. Qt places it before its entries have their final size (some only appear when the
+    // menu is about to show), so the first time it can end up partly off screen. This moves it back once the size is known.
+    function fitMenu(m) {
+        if (!m || !m.visible || !m.parent)
+            return;
+        var p = m.parent.mapToItem(null, m.x, m.y);
+        var dx = 0, dy = 0;
+        if (p.x + m.width > rootWindow.width - 6)
+            dx = rootWindow.width - 6 - m.width - p.x;
+        if (p.y + m.height > rootWindow.height - 6)
+            dy = rootWindow.height - 6 - m.height - p.y;
+        if (p.x + dx < 6)
+            dx = 6 - p.x;
+        if (p.y + dy < 6)
+            dy = 6 - p.y;
+        if (dx !== 0)
+            m.x += dx;
+        if (dy !== 0)
+            m.y += dy;
+    }
+    property var fitPending: []
+    Timer {
+        id: fitTimer
+        interval: 40
+        repeat: false
+        onTriggered: {
+            var l = root.fitPending;
+            root.fitPending = [];
+            for (var i = 0; i < l.length; i++)
+                root.fitMenu(l[i]);
+        }
+    }
+    function popupFitted(m, item, x, y) {
+        if (item)
+            m.popup(item, x, y);
+        else
+            m.popup();
+        root.fitMenu(m);
+        var l = root.fitPending;
+        l.push(m);
+        root.fitPending = l;
+        fitTimer.restart(); // and again once the entries have settled
+    }
+
     // Opens a sub-menu beside its menu item: to the right, or to the left when there is no room on the right.
     function popupBeside(sub, item) {
         var p = item.mapToItem(null, 0, 0);
@@ -31,7 +75,7 @@ FocusScope {
             y = rootWindow.height - 6 - h - p.y; // no room below: slide up so the last item is still on screen
         if (p.y + y < 6)
             y = 6 - p.y;
-        sub.popup(item, x, y);
+        root.popupFitted(sub, item, x, y);
     }
 
     // Quick tools > Rule lines: read the camera's switch and set it the other way, then say what the camera now says.
@@ -961,7 +1005,7 @@ FocusScope {
                             if (mouse.button === Qt.RightButton) {
                                 if (generalSettings.enableContextMenu) {
                                     root.pendingSwapSourceIndex = -1;
-                                    contextMenu.popup();
+                                    root.popupFitted(contextMenu, null, 0, 0);
                                 }
                                 return;
                             }
