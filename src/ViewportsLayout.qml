@@ -24,8 +24,14 @@ FocusScope {
     function popupBeside(sub, item) {
         var p = item.mapToItem(null, 0, 0);
         var w = Math.max(sub.implicitWidth, sub.width, 200);
+        var h = Math.max(sub.implicitHeight, sub.height);
         var x = (p.x + item.width + w > rootWindow.width - 6) ? -w : item.width;
-        sub.popup(item, x, 0);
+        var y = 0;
+        if (p.y + h > rootWindow.height - 6)
+            y = rootWindow.height - 6 - h - p.y; // no room below: slide up so the last item is still on screen
+        if (p.y + y < 6)
+            y = 6 - p.y;
+        sub.popup(item, x, y);
     }
 
     // Quick tools > Rule lines: read the camera's switch and set it the other way, then say what the camera now says.
