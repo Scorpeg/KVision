@@ -101,6 +101,94 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
 - [ ] **Old camera quirk:** Cabin Inside (192.0.0.11, firmware V5.4.800) returns a configuration export even without a key,
       so its file may not be encrypted. Treat it as sensitive.
 
+## To investigate: camera controls found in the Hik-Connect app (14 Nov 2026)
+
+Found by reading the Hik-Connect 5.4.0 and 7.0.220 apps (files only, nothing installed) and by asking the BackYard Left
+camera (192.0.0.60, DS-2CD2347G2-LSU/SL, firmware V5.7.23) what it supports. All four are on-demand controls KVision does
+not have yet. Decide where each goes (right-click Quick tools menu, Camera Tools tab, or both) and show it only on cameras
+that report the feature.
+
+### 6. [x] Flashing light (built-in strobe) - built, in the Quick tools menu
+- **Built:** Quick tools > "Activate Flashing Light". It sends `PUT /ISAPI/Event/triggers/notifications/whiteLightAlarm/trigger?format=json`
+  with `{"WhiteLightAlarmTrigger":{"triggerType":"start"}}`, and the camera runs its own programmed cycle (duration 1 to 60 s,
+  set on the camera). There is no stop item on purpose. Shown only on cameras whose `.../whiteLightAlarm/capabilities?format=json`
+  answers with `WhiteLightAlarmCap`. Tested working.
+- **Does not flash on a G3 (DS-2CD2387G3-LIS2UY/SL, firmware V5.8.40, 192.168.20.137):** the camera answers OK (`statusCode 1`)
+  to the trigger, with and without the app's extra `whiteLightTriggerSchedule:false` flag, but the light does not flash
+  (watched three times). The Hik-Connect app does not make it flash either. It flashes on the 192.0.0.x cameras. The web page
+  has no manual strobe test (its scripts only read and write the light's settings), so no other call was found. That camera's
+  supplement light is in `colorVuWhiteLight` mode (limit 15); whether another mode (`eventIntelligence`) lets the trigger
+  flash is not tried, because it changes the camera's night picture.
+- **Conclusion: the G3 has no on-demand strobe.** Tried on 192.168.20.137, all with no flash:
+  1. the trigger call, three times (the camera answers OK each time);
+  2. the same with the app's extra `whiteLightTriggerSchedule:false`;
+  3. the day/night idea from hikvision_bridge issue #52 (https://github.com/yannik2480/hikvision_bridge/issues/52);
+  4. the alarm-input workaround from openvigil (https://github.com/sm26449/openvigil, `app/camctl.py`): add a `whiteLight`
+     notification to `/ISAPI/Event/triggers/IO-1`, then set `/ISAPI/System/IO/inputs/1` `<triggering>` to `low` for 15 s
+     while watching. Everything was put back and read back identical to the backup.
+  The web page has no strobe test (its `ManualWhiteLight` is the steady supplement-light brightness, 0 to 100). Both GitHub
+  projects say newer IPC firmware has no manual strobe; it flashes only when a linked detection fires. The 192.0.0.x
+  cameras (G2) still flash from the trigger call (192.0.0.60 verified). Not tried: linking `whiteLight` to a real detection
+  event such as line crossing, which would flash on a real event only.
+- **Decision (user):** keep the item visible on every camera that lists the strobe and rely on the tooltip, because a future firmware may add the call.
+- **For now:** the menu item stays on every camera that lists the strobe. Its notice says "command accepted", not "flashing", and its tooltip warns that some newer cameras accept the command without flashing.
+
+### 7. [x] Warning message (siren / spoken warning) - built, in the Quick tools menu, works on the G3
+- **Built:** Quick tools > "Play Warning Message". On a camera that lists `isSupportAudioTest` it reads the camera's saved sound
+  (`.../AudioAlarm?format=json`: audioClass, alertAudioID or customAudioID) and sends the web page's own Test call,
+  `PUT /ISAPI/Event/triggers/notifications/AudioAlarm/<id>/test?format=json` (no body). The id is the alert sound number, 12
+  for a prompt sound, or 12 plus the custom number (15 when above 3). Otherwise, or if that fails, it falls back to the
+  app's `PUT .../AudioAlarm/trigger?format=json` with `{"AudioAlarmTrigger":{"triggerType":"start"}}`.
+- **Tested:** played on the G3 (192.168.20.137, sound 3 at volume 66, once). The app's trigger call does not play on that
+  camera, which is why the Test call is used first.
+- **Shown only** on cameras whose `.../AudioAlarm/capabilities?format=json` answers with `AudioAlarmCap`.
+- **No stop** (the sound ends by itself after its repeat count, 1 to 50).
+
+### 8. [x] Noise filter (audio) - built, goes in the Quick tools menu
+- **Found:** `/ISAPI/System/TwoWayAudio/channels/1` has `<noisereduce>` (true or false). The web page shows it as
+  Configuration > Video/Audio > Audio > "Environmental Noise Filtering". It is an on/off switch on the camera.
+- **Levels:** the app's 0 to 5 levels are not on the camera. They are `setANRParam` in the phone app's own player, saved
+  on the phone only. A level setting would have to be a filter inside KVision's player (not looked at yet).
+- **Verified:** switching it on and off on a real camera clearly changes the live sound at high volume. A write, a read
+  back and a restore on 192.0.0.60 worked and left every other field unchanged.
+- **Built:** Quick tools > "Noise filter (camera sound)", a tick item that reads the camera when the menu opens, then
+  flips it and reads it back. Hidden on a camera without the address (Doorbell, 192.168.20.156).
+
+### 9. [ ] Reboot camera
+- **Not yet tried.** The app has `ISAPI/System/reboot` (the newer one also takes a child-device ID for recorders).
+  Normally `PUT /ISAPI/System/reboot` with no body. The camera is off for about a minute and the stream drops.
+- **To decide:** a clear confirmation first, a wait-and-reconnect, and whether it can be used on the recorder itself.
+  Never run it on the Driveway camera (192.168.20.22), which was locked out earlier.
+- **Unverified:** the address, the empty body and the downtime come from general knowledge of Hikvision cameras, not
+  from a test.
+
+### 10. [ ] Event destination test - goes in Settings > Camera Tools
+- **Why:** a quick way to check that a camera is sending its events to the right place. Would suit "Check detection setup".
+- **Found:** the app has `Event/notification/httpHosts`, with capabilities and a `.../httpHosts/<id>/test` call.
+- **Not yet tried.** Read the host list first (read only). The test call makes the camera send a message, so ask before
+  using it.
+
+### 11. [ ] Camera clock and NTP - goes in Settings > Camera Tools
+- **Why:** a camera whose clock is more than a few minutes off breaks digest login (already noted under "Ideas not taken").
+- **Found:** `System/time`, `System/time/timeZone`, `System/time/ntpServers/<id>`, and `System/time/capabilities`.
+- **Idea:** read the camera time with `GET /ISAPI/System/time`, warn in the Setup check if it differs from this computer,
+  and maybe offer to set it. Reading is safe. Setting needs a confirmation.
+
+### 12. [ ] Firmware version and update check - goes in Settings > Camera Tools
+- **Why:** show the firmware version and an "update available" mark.
+- **Found:** `System/deviceInfo` (firmware version, already read by the Setup check) and `System/onlineUpgrade/...`
+  (`capabilities`, `SearchDevInfo`, `SearchStatus`, `upgrade`, `CancelUpgrade`).
+- **Idea:** show only. Do not start an upgrade from KVision. Whether this camera can check for an update by itself is
+  not known yet (read `onlineUpgrade/capabilities` first).
+
+### 13. [ ] Supplement light and dehaze
+- **Why:** simple on-demand helpers for night views.
+- **Found:** `Image/channels/<id>/supplementLight` (with `/capabilities`), `.../irLight`, `.../ircutFilter` and
+  `.../dehaze`.
+- **Not yet tried.** Read the capabilities first to see what each camera allows. Change one field, read it back, and
+  restore the old value afterwards.
+
+
 ## Ideas not taken from the Node-RED project (on purpose)
 
 - Alarm panel, doorbell, speaker and access-control nodes: outside what KVision is for.

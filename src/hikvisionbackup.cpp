@@ -67,13 +67,13 @@ int curlGet(const QString &url, const QString &user, const QString &pass, int ma
 
 // PUT a small JSON text to a camera with curl. Returns the HTTP status (0 when it could not connect).
 int curlPutJson(const QString &url, const QString &user, const QString &pass, int maxSeconds, const QByteArray &json,
-                QByteArray *body)
+                QByteArray *body, const QString &contentType = QStringLiteral("application/json"))
 {
     QStringList args;
     args << QStringLiteral("-s") << QStringLiteral("-k") << QStringLiteral("--anyauth") << QStringLiteral("-u")
          << QStringLiteral("%1:%2").arg(user, pass) << QStringLiteral("--max-time") << QString::number(maxSeconds)
          << QStringLiteral("-X") << QStringLiteral("PUT") << QStringLiteral("-d") << QString::fromUtf8(json)
-         << QStringLiteral("-H") << QStringLiteral("Content-Type: application/json")
+         << QStringLiteral("-H") << QStringLiteral("Content-Type: %1").arg(contentType)
          << QStringLiteral("-w") << QStringLiteral("%{http_code}") << url;
     QProcess p;
     p.start(QStringLiteral("curl"), args);
@@ -198,6 +198,208 @@ RuleLinesAnswer ruleLinesOne(const HikvisionBackup::Cam &cam, int mode)
     a.state = stateText(isOn);
     a.message = isOn == want ? QStringLiteral("rule lines on the stream are now %1").arg(a.state)
                              : QStringLiteral("the camera still says %1").arg(a.state);
+    return a;
+}
+
+// The camera's "Environmental Noise Filtering" switch (web page: Configuration > Video/Audio > Audio). It is the
+// <noisereduce> field of the two-way audio channel, so it sits next to the talk-back settings but it cleans the live
+// sound as well (heard on a real camera). There are no levels on the camera: the 0-5 levels in Hik-Connect are a
+// filter in that app's own player.
+// Read: GET /ISAPI/System/TwoWayAudio/channels/1 (XML). Change: the same text goes back with only the value of
+// <noisereduce> replaced, so every other setting is sent exactly as the camera gave it.
+// mode: 0 only read, 1 turn on, 2 turn off, 3 turn it the other way (read first). A refused login is never retried.
+RuleLinesAnswer noiseFilterOne(const HikvisionBackup::Cam &cam, int mode)
+{
+    RuleLinesAnswer a;
+    a.state = QStringLiteral("error");
+    if (cam.user.isEmpty() || cam.pass.isEmpty()) {
+        a.message = QStringLiteral("no login saved for this camera (a blank password is never sent)");
+        return a;
+    }
+    const QString url = QStringLiteral("http://%1:%2/ISAPI/System/TwoWayAudio/channels/1").arg(cam.ip).arg(cam.httpPort);
+    auto explain = [&](int code) -> bool {
+        if (code == 0)
+            a.message = QStringLiteral("could not connect");
+        else if (code == 401) {
+            a.refused = true;
+            a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+        } else if (code == 404 || code == 403 || code == 501) {
+            a.state = QStringLiteral("unavailable");
+            a.message = QStringLiteral("this camera has no noise filter switch");
+        } else
+            a.message = QStringLiteral("the camera answered HTTP %1").arg(code);
+        return code != 200;
+    };
+    const QRegularExpression rx(QStringLiteral("<noisereduce>\\s*(true|false)\\s*</noisereduce>"));
+    auto readState = [&](QString *xml, bool *on, QString *why) -> bool {
+        QByteArray body;
+        const int code = curlGet(url, cam.user, cam.pass, 8, QString(), &body);
+        if (explain(code)) {
+            *why = a.message;
+            return false;
+        }
+        const QString text = QString::fromUtf8(body);
+        const QRegularExpressionMatch m = rx.match(text);
+        if (!m.hasMatch()) {
+            a.state = QStringLiteral("unavailable");
+            *why = QStringLiteral("this camera has no noise filter switch");
+            return false;
+        }
+        *xml = text;
+        *on = m.captured(1) == QLatin1String("true");
+        return true;
+    };
+
+    QString xml, why;
+    bool nowOn = false;
+    if (!readState(&xml, &nowOn, &why)) {
+        a.message = why;
+        return a;
+    }
+    auto stateText = [](bool on) { return on ? QStringLiteral("on") : QStringLiteral("off"); };
+    if (mode == 0) {
+        a.state = stateText(nowOn);
+        a.message = QStringLiteral("noise filter is %1").arg(a.state);
+        return a;
+    }
+    if (mode == 3)
+        mode = nowOn ? 2 : 1;
+    const bool want = (mode == 1);
+    if (nowOn == want) {
+        a.state = stateText(want);
+        a.message = QStringLiteral("already %1, nothing changed").arg(a.state);
+        return a;
+    }
+    QString out = xml;
+    out.replace(rx, QStringLiteral("<noisereduce>%1</noisereduce>").arg(want ? QStringLiteral("true") : QStringLiteral("false")));
+    QByteArray reply;
+    const int putCode = curlPutJson(url, cam.user, cam.pass, 10, out.toUtf8(), &reply, QStringLiteral("application/xml"));
+    if (putCode != 200 || !QString::fromUtf8(reply).contains(QStringLiteral("<statusCode>1</statusCode>"))) {
+        a.state = QStringLiteral("error");
+        a.message = putCode == 200 ? QStringLiteral("the camera did not accept the change") : (explain(putCode), a.message);
+        return a;
+    }
+    // Read it back: only report success for what the camera now says.
+    QString xml2;
+    bool isOn = false;
+    if (!readState(&xml2, &isOn, &why)) {
+        a.state = QStringLiteral("error");
+        a.message = QStringLiteral("changed, but could not read it back: %1").arg(why);
+        return a;
+    }
+    a.state = stateText(isOn);
+    a.message = isOn == want ? QStringLiteral("noise filter is now %1").arg(a.state)
+                             : QStringLiteral("the camera still says %1").arg(a.state);
+    return a;
+}
+
+// The camera's built-in flashing light (the web page's white light alarm). The camera has it when
+//   GET /ISAPI/Event/triggers/notifications/whiteLightAlarm/capabilities?format=json
+// answers with a "WhiteLightAlarmCap". Start and stop (checked on a real camera, where it flashed):
+//   PUT /ISAPI/Event/triggers/notifications/whiteLightAlarm/trigger?format=json
+//   {"WhiteLightAlarmTrigger":{"triggerType":"start"}} or "stop"
+// The camera stops the flashing by itself after its own duration (1 to 60 seconds, set on the camera), so there is no
+// stop command here. mode: 0 only check that the camera has it, 1 start. A refused login is never retried.
+RuleLinesAnswer strobeOne(const HikvisionBackup::Cam &cam, int mode, bool siren = false)
+{
+    RuleLinesAnswer a;
+    a.state = QStringLiteral("error");
+    if (cam.user.isEmpty() || cam.pass.isEmpty()) {
+        a.message = QStringLiteral("no login saved for this camera (a blank password is never sent)");
+        return a;
+    }
+    // siren: the camera's warning message (web page: Event > Audio Alarm) instead of the flashing light. Same shape:
+    //   GET  .../notifications/AudioAlarm/capabilities?format=json   has "AudioAlarmCap" when the camera can play it
+    //   PUT  .../notifications/AudioAlarm/trigger?format=json         {"AudioAlarmTrigger":{"triggerType":"start"}}
+    // (the body is the one Hik-Connect sends). It plays the sound, volume and number of times already set on the camera.
+    const QString base = QStringLiteral("http://%1:%2/ISAPI/Event/triggers/notifications/%3").arg(cam.ip).arg(cam.httpPort)
+                             .arg(siren ? QStringLiteral("AudioAlarm") : QStringLiteral("whiteLightAlarm"));
+    const QString capKey = siren ? QStringLiteral("AudioAlarmCap") : QStringLiteral("WhiteLightAlarmCap");
+    const QString trigKey = siren ? QStringLiteral("AudioAlarmTrigger") : QStringLiteral("WhiteLightAlarmTrigger");
+    const QString what = siren ? QStringLiteral("warning message") : QStringLiteral("flashing light");
+    QByteArray body;
+    const int code = curlGet(base + QStringLiteral("/capabilities?format=json"), cam.user, cam.pass, 8, QString(), &body);
+    if (code == 0) {
+        a.message = QStringLiteral("could not connect");
+        return a;
+    }
+    if (code == 401) {
+        a.refused = true;
+        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+        return a;
+    }
+    if (code != 200 || !QJsonDocument::fromJson(body).object().contains(capKey)) {
+        a.state = QStringLiteral("unavailable");
+        a.message = QStringLiteral("this camera has no %1").arg(what);
+        return a;
+    }
+    if (mode == 0) {
+        a.state = QStringLiteral("available");
+        a.message = QStringLiteral("this camera has a %1").arg(what);
+        return a;
+    }
+    // The web page's own "Test" button plays the camera's saved sound with
+    //   PUT .../AudioAlarm/<id>/test?format=json   (no body)
+    // where <id> is the chosen alert sound (audioClass "alertAudio": alertAudioID), 12 for a prompt sound, or 12 plus
+    // the custom sound number (15 when that is above 3). Cameras that list isSupportAudioTest answer this call even
+    // when they ignore the app's AudioAlarm/trigger (seen on a DS-2CD2387G3). The trigger call below is the fallback.
+    if (siren) {
+        const QJsonObject cap = QJsonDocument::fromJson(body).object().value(QStringLiteral("AudioAlarmCap")).toObject();
+        if (cap.value(QStringLiteral("isSupportAudioTest")).toBool()) {
+            QByteArray setBody;
+            const int sc = curlGet(base + QStringLiteral("?format=json"), cam.user, cam.pass, 8, QString(), &setBody);
+            if (sc == 401) {
+                a.refused = true;
+                a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+                return a;
+            }
+            const QJsonObject s = QJsonDocument::fromJson(setBody).object().value(QStringLiteral("AudioAlarm")).toObject();
+            if (sc == 200 && !s.isEmpty()) {
+                const QString cls = s.value(QStringLiteral("audioClass")).toString();
+                int id = s.value(QStringLiteral("audioID")).toInt(0);
+                if (cls == QLatin1String("alertAudio"))
+                    id = s.value(QStringLiteral("alertAudioID")).toInt(id);
+                else if (cls == QLatin1String("promptAudio"))
+                    id = 12;
+                else if (cls == QLatin1String("customAudio")) {
+                    const int n = s.value(QStringLiteral("customAudioID")).toInt(0);
+                    id = n > 3 ? 15 : 12 + n;
+                }
+                if (id > 0) {
+                    QByteArray testReply;
+                    const int tc = curlPutJson(base + QStringLiteral("/%1/test?format=json").arg(id), cam.user, cam.pass, 10,
+                                               QByteArray(), &testReply);
+                    if (tc == 401) {
+                        a.refused = true;
+                        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+                        return a;
+                    }
+                    if (tc == 200 && QJsonDocument::fromJson(testReply).object().value(QStringLiteral("statusCode")).toInt() == 1) {
+                        a.state = QStringLiteral("started");
+                        a.message = QStringLiteral("warning message started (the camera plays the sound set on the camera)");
+                        return a;
+                    }
+                }
+            }
+        }
+    }
+    const QJsonObject trig{{trigKey, QJsonObject{{QStringLiteral("triggerType"), QStringLiteral("start")}}}};
+    QByteArray reply;
+    const int putCode = curlPutJson(base + QStringLiteral("/trigger?format=json"), cam.user, cam.pass, 10,
+                                    QJsonDocument(trig).toJson(QJsonDocument::Compact), &reply);
+    if (putCode == 401) {
+        a.refused = true;
+        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+        return a;
+    }
+    if (putCode != 200 || QJsonDocument::fromJson(reply).object().value(QStringLiteral("statusCode")).toInt() != 1) {
+        a.message = putCode == 200 ? QStringLiteral("the camera did not accept the command")
+                                   : QStringLiteral("the camera answered HTTP %1").arg(putCode);
+        return a;
+    }
+    a.state = QStringLiteral("started");
+    a.message = siren ? QStringLiteral("warning message started (the camera plays the sound set on the camera)")
+                      : QStringLiteral("flashing light command accepted by the camera (it stops by itself after its own time)");
     return a;
 }
 
@@ -466,6 +668,113 @@ void HikvisionBackup::runRuleLines(const QString &ip, int mode)
             m_ruleBusy = false;
             emit ruleBusyChanged();
             emit ruleLinesResult(found.ip, a.state, a.message);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+void HikvisionBackup::checkNoiseFilter(const QString &ip)
+{
+    runNoiseFilter(ip, 0);
+}
+
+void HikvisionBackup::toggleNoiseFilter(const QString &ip)
+{
+    runNoiseFilter(ip, 3);
+}
+
+void HikvisionBackup::runNoiseFilter(const QString &ip, int mode)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        emit noiseFilterResult(ip, QStringLiteral("error"), QStringLiteral("That camera is not in the list. Refresh the list and try again."));
+        return;
+    }
+    m_ruleBusy = true; // shares the one-at-a-time flag with the rule lines, so the two never run together
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, found, mode]() {
+        const RuleLinesAnswer a = noiseFilterOne(found, mode);
+        QMetaObject::invokeMethod(this, [this, found, mode, a]() {
+            qInfo() << "[NoiseFilter]" << found.ip << (mode == 0 ? "read:" : "switch over:") << a.state << "-" << a.message;
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit noiseFilterResult(found.ip, a.state, a.message);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+void HikvisionBackup::checkStrobe(const QString &ip)
+{
+    runStrobe(ip, 0);
+}
+
+void HikvisionBackup::startStrobe(const QString &ip)
+{
+    runStrobe(ip, 1);
+}
+
+void HikvisionBackup::checkWarning(const QString &ip)
+{
+    runStrobe(ip, 0, true);
+}
+
+void HikvisionBackup::startWarning(const QString &ip)
+{
+    runStrobe(ip, 1, true);
+}
+
+void HikvisionBackup::runStrobe(const QString &ip, int mode, bool siren)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        const QString msg = QStringLiteral("That camera is not in the list. Refresh the list and try again.");
+        if (siren)
+            emit warningResult(ip, QStringLiteral("error"), msg);
+        else
+            emit strobeResult(ip, QStringLiteral("error"), msg);
+        return;
+    }
+    m_ruleBusy = true; // shares the one-at-a-time flag with the other camera switches
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, found, mode, siren]() {
+        const RuleLinesAnswer a = strobeOne(found, mode, siren);
+        QMetaObject::invokeMethod(this, [this, found, mode, siren, a]() {
+            qInfo() << (siren ? "[Warning]" : "[Strobe]") << found.ip << (mode == 0 ? "check:" : "start:") << a.state << "-" << a.message;
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            if (siren)
+                emit warningResult(found.ip, a.state, a.message);
+            else
+                emit strobeResult(found.ip, a.state, a.message);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();

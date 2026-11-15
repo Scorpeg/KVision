@@ -95,8 +95,10 @@ FocusScope {
         if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "")
             return;
         var k = root.ruleKnown[ip];
-        if (k && Date.now() - k.at < 20000)
+        if (k && Date.now() - k.at < 20000) {
+            root.refreshNoiseState(ip);
             return;
+        }
         if (HikvisionBackup.cameraCount() === 0) {
             root.ruleReadIp = ip;
             root.ruleMenuLoading = false;
@@ -119,15 +121,191 @@ FocusScope {
         }
         HikvisionBackup.toggleRuleLines(ip);
     }
+    // Quick tools > Noise filter: the camera's own "Environmental Noise Filtering" switch. Read when the menu opens
+    // (after the rule lines read, because the two share one worker), set the other way on a click.
+    property string noiseMenuIp: ""
+    property string noiseMenuName: ""
+    property bool noiseMenuLoading: false
+    property var noiseKnown: ({})      // camera address -> {on: bool, none: bool, at: ms}
+    property int noiseKnownRev: 0
+    function noiseIsOn(ip) {
+        var rev = root.noiseKnownRev;
+        return !!ip && !!root.noiseKnown[ip] && root.noiseKnown[ip].on;
+    }
+    function noiseHas(ip) {
+        var rev = root.noiseKnownRev;
+        return !!ip && !(root.noiseKnown[ip] && root.noiseKnown[ip].none);
+    }
+    function refreshNoiseState(ip) {
+        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "")
+            return;
+        var k = root.noiseKnown[ip];
+        if (k && Date.now() - k.at < 20000) {
+            root.refreshStrobeState(ip);
+            return;
+        }
+        if (HikvisionBackup.cameraCount() === 0)
+            return; // the rule lines read loads the list; this one follows it
+        HikvisionBackup.checkNoiseFilter(ip);
+    }
+    function toggleNoiseFilter(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        root.noiseMenuIp = ip;
+        root.noiseMenuName = name || ip;
+        rootWindow.showNotice(qsTr("Noise filter") + "\n" + root.noiseMenuName + "\n" + qsTr("asking the camera..."), "#00f5d4", 0);
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.noiseMenuLoading = true;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        HikvisionBackup.toggleNoiseFilter(ip);
+    }
+    // Quick tools > Flashing light: the camera's built-in strobe. Whether the camera has one is asked when the menu
+    // opens (after the noise filter read, because the switches share one worker).
+    property string strobeMenuIp: ""
+    property string strobeMenuName: ""
+    property bool strobeMenuLoading: false
+    property var strobeKnown: ({})     // camera address -> {has: bool, at: ms}
+    property int strobeKnownRev: 0
+    function strobeHas(ip) {
+        var rev = root.strobeKnownRev;
+        return !!ip && !!root.strobeKnown[ip] && root.strobeKnown[ip].has;
+    }
+    function refreshStrobeState(ip) {
+        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "" || root.strobeMenuIp !== "")
+            return;
+        var k = root.strobeKnown[ip];
+        if (k && Date.now() - k.at < 600000) {
+            root.refreshWarnState(ip);
+            return;
+        }
+        if (HikvisionBackup.cameraCount() === 0)
+            return;
+        HikvisionBackup.checkStrobe(ip);
+    }
+    function runStrobe(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        root.strobeMenuIp = ip;
+        root.strobeMenuName = name || ip;
+        rootWindow.showNotice(qsTr("Flashing light") + "\n" + root.strobeMenuName + "\n" + qsTr("asking the camera..."), "#00f5d4", 0);
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.strobeMenuLoading = true;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        HikvisionBackup.startStrobe(ip);
+    }
+    // Quick tools > Play Warning Message: the camera's own warning sound. Asked when the menu opens, after the flashing
+    // light read (the switches share one worker).
+    property string warnMenuIp: ""
+    property string warnMenuName: ""
+    property bool warnMenuLoading: false
+    property var warnKnown: ({})       // camera address -> {has: bool, at: ms}
+    property int warnKnownRev: 0
+    function warnHas(ip) {
+        var rev = root.warnKnownRev;
+        return !!ip && !!root.warnKnown[ip] && root.warnKnown[ip].has;
+    }
+    function refreshWarnState(ip) {
+        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "" || root.strobeMenuIp !== "" || root.warnMenuIp !== "")
+            return;
+        var k = root.warnKnown[ip];
+        if (k && Date.now() - k.at < 600000)
+            return;
+        if (HikvisionBackup.cameraCount() === 0)
+            return;
+        HikvisionBackup.checkWarning(ip);
+    }
+    function runWarning(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        root.warnMenuIp = ip;
+        root.warnMenuName = name || ip;
+        rootWindow.showNotice(qsTr("Warning message") + "\n" + root.warnMenuName + "\n" + qsTr("asking the camera..."), "#00f5d4", 0);
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.warnMenuLoading = true;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        HikvisionBackup.startWarning(ip);
+    }
     Connections {
         target: HikvisionBackup
         function onCamerasLoaded(cameras) {
-            if (root.ruleMenuLoading && root.ruleMenuIp !== "") {
+            if (root.warnMenuLoading && root.warnMenuIp !== "") {
+                root.warnMenuLoading = false;
+                HikvisionBackup.startWarning(root.warnMenuIp);
+            } else if (root.strobeMenuLoading && root.strobeMenuIp !== "") {
+                root.strobeMenuLoading = false;
+                HikvisionBackup.startStrobe(root.strobeMenuIp);
+            } else if (root.noiseMenuLoading && root.noiseMenuIp !== "") {
+                root.noiseMenuLoading = false;
+                HikvisionBackup.toggleNoiseFilter(root.noiseMenuIp);
+            } else if (root.ruleMenuLoading && root.ruleMenuIp !== "") {
                 root.ruleMenuLoading = false;
                 HikvisionBackup.toggleRuleLines(root.ruleMenuIp);
             } else if (root.ruleReadIp !== "" && root.ruleMenuIp === "" && !HikvisionBackup.ruleBusy) {
                 HikvisionBackup.checkRuleLines(root.ruleReadIp);
             }
+        }
+        function onNoiseFilterResult(ip, state, message) {
+            if (state === "on" || state === "off" || state === "unavailable") {
+                var k = root.noiseKnown;
+                k[ip] = { "on": state === "on", "none": state === "unavailable", "at": Date.now() };
+                root.noiseKnown = k;
+                root.noiseKnownRev++;
+            }
+            if (root.noiseMenuIp === "")
+                Qt.callLater(function() { root.refreshStrobeState(ip); });
+            if (root.noiseMenuIp === "" || ip !== root.noiseMenuIp)
+                return;
+            var name = root.noiseMenuName;
+            root.noiseMenuIp = "";
+            var head = qsTr("Noise filter") + "\n" + name + "\n";
+            if (state === "on")
+                rootWindow.showNotice(head + qsTr("ON: ") + message, "#00ff66", 6000);
+            else if (state === "off")
+                rootWindow.showNotice(head + qsTr("OFF: ") + message, "#00f5d4", 6000);
+            else
+                rootWindow.showNotice(head + message, "#ff3333", 10000);
+        }
+        function onStrobeResult(ip, state, message) {
+            if (state === "available" || state === "unavailable") {
+                var k = root.strobeKnown;
+                k[ip] = { "has": state === "available", "at": Date.now() };
+                root.strobeKnown = k;
+                root.strobeKnownRev++;
+            }
+            if (root.strobeMenuIp === "")
+                Qt.callLater(function() { root.refreshWarnState(ip); });
+            if (root.strobeMenuIp === "" || ip !== root.strobeMenuIp)
+                return;
+            var name = root.strobeMenuName;
+            root.strobeMenuIp = "";
+            var head = qsTr("Flashing light") + "\n" + name + "\n";
+            if (state === "started")
+                rootWindow.showNotice(head + message, "#00ff66", 6000);
+            else
+                rootWindow.showNotice(head + message, "#ff3333", 10000);
+        }
+        function onWarningResult(ip, state, message) {
+            if (state === "available" || state === "unavailable") {
+                var k = root.warnKnown;
+                k[ip] = { "has": state === "available", "at": Date.now() };
+                root.warnKnown = k;
+                root.warnKnownRev++;
+            }
+            if (root.warnMenuIp === "" || ip !== root.warnMenuIp)
+                return;
+            var name = root.warnMenuName;
+            root.warnMenuIp = "";
+            var head = qsTr("Warning message") + "\n" + name + "\n";
+            if (state === "started")
+                rootWindow.showNotice(head + message, "#00ff66", 6000);
+            else
+                rootWindow.showNotice(head + message, "#ff3333", 10000);
         }
         function onRuleLinesResult(ip, state, message) {
             if (state === "on" || state === "off") {
@@ -136,8 +314,11 @@ FocusScope {
                 root.ruleKnown = k;
                 root.ruleKnownRev++;
             }
+            var wasRead = (root.ruleReadIp === ip);
             if (root.ruleReadIp === ip)
                 root.ruleReadIp = "";
+            if (wasRead && root.ruleMenuIp === "")
+                Qt.callLater(function() { root.refreshNoiseState(ip); });
             if (root.ruleMenuIp === "" || ip !== root.ruleMenuIp)
                 return;
             var name = root.ruleMenuName;
@@ -1855,6 +2036,117 @@ FocusScope {
                                 var player = playerPool.activePlayersMap[model.index];
                                 if (player)
                                     root.toggleRuleLines(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+
+                        MenuItem {
+                            id: noiseFilterMenuItem
+                            text: (root.noiseIsOn(quickToolsSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Noise filter (camera sound)")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.noiseHas(quickToolsSubMenu.ruleIp)
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: noiseFilterMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: noiseFilterMenuItem.enabled ? (noiseFilterMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: noiseFilterMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: noiseFilterMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Switch the camera's own \"Environmental Noise Filtering\" (web page: Video/Audio > Audio), which cleans the sound the camera sends. The camera is read first and then set the other way. Only this camera is changed.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.toggleNoiseFilter(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+
+                        MenuItem {
+                            id: strobeStartMenuItem
+                            text: qsTr("Activate Flashing Light")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.strobeHas(quickToolsSubMenu.ruleIp)
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: strobeStartMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: strobeStartMenuItem.enabled ? (strobeStartMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: strobeStartMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: strobeStartMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Make the camera's own flashing light flash now. It runs its programmed cycle and stops by itself (the time is set on the camera, 1 to 60 seconds). Some newer cameras (for example the G3 series) accept the command but have no on-demand strobe, so nothing flashes. Only this camera is changed.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.runStrobe(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+
+                        MenuItem {
+                            id: warnMenuItem
+                            text: qsTr("Play Warning Message")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.warnHas(quickToolsSubMenu.ruleIp)
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: warnMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: warnMenuItem.enabled ? (warnMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: warnMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: warnMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Make the camera play its own warning sound now. It is loud. The sound, volume and number of times are the ones set on the camera (web page: Event > Audio Alarm). Only this camera is changed.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.runWarning(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
                     }

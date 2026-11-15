@@ -52,6 +52,18 @@ public:
     Q_INVOKABLE void setRuleLines(const QString &ip, bool on);
     // Reads the camera's switch and sets it the other way (the right-click menu). The answer comes in ruleLinesResult().
     Q_INVOKABLE void toggleRuleLines(const QString &ip);
+    // The camera's "Environmental Noise Filtering" switch (<noisereduce> in the two-way audio settings). Read only, or
+    // read and then set the other way, with a read back. The answer comes in noiseFilterResult().
+    Q_INVOKABLE void checkNoiseFilter(const QString &ip);
+    Q_INVOKABLE void toggleNoiseFilter(const QString &ip);
+    // The camera's built-in flashing light. checkStrobe only asks whether the camera has one; start sends the
+    // camera's own trigger (it stops by itself after its own time). The answer comes in strobeResult().
+    Q_INVOKABLE void checkStrobe(const QString &ip);
+    Q_INVOKABLE void startStrobe(const QString &ip);
+    // The camera's warning message (a sound the camera plays: the sound, volume and number of times are the ones set on
+    // the camera). Same idea as the flashing light. The answer comes in warningResult().
+    Q_INVOKABLE void checkWarning(const QString &ip);
+    Q_INVOKABLE void startWarning(const QString &ip);
     Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
@@ -67,6 +79,12 @@ signals:
     void ruleBusyChanged();
     // state is "on", "off", "unavailable" (the camera has no such switch) or "error"; message says what happened.
     void ruleLinesResult(const QString &ip, const QString &state, const QString &message);
+    // state is "on", "off", "unavailable" (the camera has no such switch) or "error"; message says what happened.
+    void noiseFilterResult(const QString &ip, const QString &state, const QString &message);
+    // state is "available", "unavailable" (no flashing light), "started" or "error".
+    void strobeResult(const QString &ip, const QString &state, const QString &message);
+    // state is "available", "unavailable" (no warning message), "started" or "error".
+    void warningResult(const QString &ip, const QString &state, const QString &message);
     void ruleLinesAllProgress(const QString &name, int done, int total);
     void ruleLinesAllFinished(const QString &summary, bool ok);
 
@@ -86,6 +104,8 @@ public:
 
 private:
     void runRuleLines(const QString &ip, int mode);
+    void runNoiseFilter(const QString &ip, int mode);
+    void runStrobe(const QString &ip, int mode, bool siren = false);
     void runRuleLinesAll(int mode);
     void startLoad(const QByteArray &json, const QString &configPath);
     void start(const QList<Cam> &cams, bool single, const QString &overrideUser, const QString &overridePass);
