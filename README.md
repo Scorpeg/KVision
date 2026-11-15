@@ -27,7 +27,7 @@ cd KVision
 The installer asks for your password once (to install the packages KVision needs), builds the program, and adds **KVision** to your applications menu. The first build takes a few minutes. When it says "Done", open KVision from the menu.
 
 - **Keep the KVision folder where it is.** The menu entry points to it.
-- **Update:** `cd KVision && ./install.sh --update`. A new release shows as a green notice in the settings window.
+- **Update:** `cd KVision && ./install.sh --update`. A new release shows as a green notice in the settings window. It also restarts the background detection logger if that is running. Close and reopen KVision afterwards.
 - **Remove:** `./install.sh --uninstall` removes the menu entry and the build. Your settings in `~/.config/KVision` are kept. Delete the folder to remove everything.
 - **Do not run it as root.** Run it as your normal user.
 - Tested on Linux Mint 22.3. Other Debian-family systems with Qt 5 should work. On other distributions, see the manual steps below.

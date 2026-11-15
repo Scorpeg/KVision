@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+* **`./install.sh --update` restarts the background detection logger** when it is running, so it does not keep running the old build after an update. Nothing happens when the logger is not installed or not running. KVision itself still has to be closed and reopened.
+
 ## [3.7.0] - 14 Nov 2026
 
 ### Added

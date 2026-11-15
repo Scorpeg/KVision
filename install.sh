@@ -2,7 +2,7 @@
 # KVision installer for Debian, Ubuntu and Linux Mint.
 #
 #   ./install.sh              install dependencies, build, add an application-menu entry
-#   ./install.sh --update     pull the latest version, rebuild, refresh the menu entry
+#   ./install.sh --update     pull the latest version, rebuild, refresh the menu entry, restart the background logger
 #   ./install.sh --uninstall  remove the menu entry and the build (keeps this folder and your settings)
 #
 # Only the dependency step uses sudo. KVision itself is installed for the current user.
@@ -88,6 +88,17 @@ EOF
     command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$DATA_HOME/icons/hicolor" 2>/dev/null || true
 }
 
+# The background detection logger (a systemd user service, set up from KVision's General settings) keeps running the old
+# build until it is restarted, so restart it after an update. Nothing happens when it is not installed or not running.
+restart_background_logger() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    if systemctl --user is-active --quiet kvision-events.service 2>/dev/null; then
+        say "Restarting the background detection logger"
+        systemctl --user restart kvision-events.service 2>/dev/null \
+            || echo "Could not restart it. Run: systemctl --user restart kvision-events"
+    fi
+}
+
 finish() {
     local version
     version=$("$ROOT/build/kvision" --version 2>/dev/null | head -n1 || true)
@@ -110,6 +121,7 @@ do_update() {
     install_dependencies
     build
     add_menu_entry
+    restart_background_logger
     finish
 }
 
