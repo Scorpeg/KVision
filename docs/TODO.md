@@ -210,7 +210,7 @@ that report the feature.
   The results use the same card as the detection setup check (`SetupCheckList.qml`): a green tick for a good clock and firmware,
   orange for "update may be available" or a clock that is off, and red for "none noted for this model yet" (the setup check's
   "problem" state, which also turns the card's dot red). The Check all window and the single-check box both embed that list, so
-  there is no separate card or colour code. Each card also has "Open camera web page" and "Check this camera again".
+  there is no separate card or color code. Each card also has "Open camera web page" and "Check this camera again".
   A matching firmware is not called "fine": the summary reads "Clock fine, firmware matches your note of <day>", and the
   line says the note was typed in by hand on that day and is not a check with Hikvision, plus the day of the check. The day is saved
   with each note (`NewestFirmwareDate` in the config file, ISO text; a note saved before this has no day and says so). Save records
