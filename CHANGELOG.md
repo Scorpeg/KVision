@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.7.0] - 14 Nov 2026
+
 ### Added
 * **Right-click on a camera: new "Quick tools" sub-menu.** Force Fit, Reload, Check detection setup and Change settings moved into it, so the main menu is shorter. It also has a new entry, **Rule lines on/off (VCA lines)**, that reads that one camera's own switch for drawing its rule lines and boxes on the video stream and sets it the other way. A notice says what the camera now says. Only the camera you right-clicked is changed, and a camera with no such switch (a panoramic or dual-lens one) says so. The entry shows a tick when that camera's rule lines are on, like Force Fit; the camera is asked (read only) when the sub-menu opens.
 * **Overlay text from MQTT can feed several cameras and topics.** The window now holds a list of entries. Each entry is one
@@ -32,23 +34,6 @@ All notable changes to this project will be documented in this file.
   cameras too" copies the other layout's cameras instead. The layout as it was is saved first ("Before applying another
   layout"), so it can be undone from the same window.
 
-### Fixed
-* **The right-click menu and its Stream Select and Quick tools sub-menus no longer run off the screen** when the camera cell is small and near an edge. They stay inside the window, and a sub-menu opens to the left when there is no room on the right. This also holds the very first time the menu is opened, when some entries only appear as it opens.
-* **The camera pick-lists in Camera Tools now look like something you click.** They had the same colour as the window. They now have a lighter box, an orange drop-down arrow and an orange outline when the mouse is over them.
-* **Status notices (Camera Tools, backups, background logging) are no longer hidden behind other windows.** The small message at
-  the bottom of the screen used to be part of the main window, so the Settings window (where Camera Tools is) and any other
-  window covered it, and you could press a button and see nothing. It is now a window of its own that stays on top, never takes
-  the focus or the clicks, and goes away with the main window when that is minimized.
-* The overlay text Test button now says the broker's number is in Celsius and, when Fahrenheit is chosen, shows the converted number too, for example "The broker gave -4.94 C, which is 23.11 F".
-* **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
-  behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and
-  stayed without detection until KVision was restarted. Now the tile reads the recorder's camera list in the background
-  (the window never waits for it) and asks again every 20 seconds until it answers. A recorder that is set Offline is still
-  not asked at all.
-* A device that answered "no detection stream" (for example while it was still starting up) was never asked again. It is
-  now asked once every 30 minutes, and detection starts if it answers.
-
-### Added
 * **Backup / Restore button next to every layout in Presets.** It opens a list of saved copies of that one layout (grid size,
   cameras and positions). "Back up now" saves a copy with an optional note. "Restore" replaces only that layout, after a
   confirmation, and first saves the layout as it is now ("Before restore"), so a restore can be undone. Recorders, settings
@@ -74,13 +59,6 @@ All notable changes to this project will be documented in this file.
   naturally 4:3 has no black bars in a 16:9 tile (the picture is slightly stretched). It is kept per camera in the settings
   (`forceFitCameras`), not in the layout, so the layout is not changed and every tile of that camera follows it.
 
-### Fixed
-* **Slow start with a network unplugged.** A tile did not know its recorder's address until after it checked whether the
-  recorder was set Offline, so the first check always passed and the tile asked the unreachable recorder for the camera's
-  address, which froze the window for 4 seconds per tile. A tile now reads its address first, and uses the lookup that
-  remembers a failure for 30 seconds.
-
-### Added
 * **The setup check warns about target size limits.** Each smart-event zone on a camera has a "Max Target Size" and a "Min Target
   Size" box on the camera's rule page, kept in the camera apart from the zone. A Max box shrunk by accident while drawing makes
   the camera ignore every person bigger than it, and nothing says so. For line crossing, intrusion, region entrance and region
@@ -88,7 +66,6 @@ All notable changes to this project will be documented in this file.
   words, when a Max box is under 70% of the picture's height or width (for example "Zone 1 ignores targets taller than 14% of
   the picture"), or a Min box is over 5%. It only reads the camera. A camera that does not offer the setting is not mentioned.
 
-### Added
 * **Rule lines on the video stream can be switched on and off from Camera Tools.** A new "Rule lines on the video stream" box
   picks a camera and has Check, Turn on and Turn off. It is the camera's own switch (web page: VCA > Smart Event > General
   Settings > Metadata > Enable Stream Rule and Sub-Stream, which work as a pair), so the camera draws its line, intrusion and
@@ -101,6 +78,36 @@ All notable changes to this project will be documented in this file.
   another camera. A camera that answers a read but lists the setting as "notSupport" in its capabilities (the panoramic
   cameras) is counted as having no switch, not as a failure. (A recorder itself has no such switch over the network; its own screen menu button is not reachable.)
   Found by the owner: on a G3 camera this switch draws the target boxes on the video stream as well as the rule lines.
+
+* **Choose where each camera's detection events come from.** The *Choose cameras* window (detection settings) now has a
+  *Reports: camera / NVR* choice for every camera behind a recorder, and *All from camera* / *All from NVR* for a whole
+  recorder. A camera can take its events from its own connection or from the recorder's, and the two can be mixed. Each camera
+  is read from one place only, so nothing is logged twice. A camera with no choice of its own follows the general *Event
+  source* setting. The background logger follows the same choices. Cameras that are their own recorder are not affected.
+* **The detection events window says where each picture came from.** Every new log line ends with `via camera` or `via NVR`:
+  the connection the report and its picture arrived on. The picture viewer's caption shows *picture from the camera* or *picture
+  from the NVR*, and the picture button's tooltip says the same. The list has a new *Source* column right after the
+  address (Camera, or NVR; a dash for older lines) for every entry, since a picture always comes from the device that reported the event, so the window's smallest width is a little larger. Lines written before this
+  have no marker and show as before.
+* **Motion that names no target can be logged and shown.** Some cameras (a panoramic camera's plain motion zone, for one) report
+  that something moved but not what, because their motion detection is not a smart event. KVision kept that off the detection
+  log. Two new choices in the detection settings, both off by default: write each movement to the detection log (one line when
+  it starts, the next only after 10 seconds without motion, so a recorder's one-a-second repeats do not flood it), and show a
+  *MOTION* frame for it on the tile.
+* **Hide unlabelled motion in the detection log window.** A new tick box leaves out the motion reports that did not say what
+  moved, so the list shows only labelled motion and smart events. It works with the other filters.
+* **A picture for labelled motion.** Motion that names a target (human, vehicle, animal or other) is not a smart event and
+  brings no picture, so KVision now asks the camera for a still when one is reported: at most one every 30 seconds for each
+  camera, so a constant stream cannot fill the disk. These pictures are kept apart from the smart-event ones, with their own
+  smaller limit (a quarter of *Pictures kept per camera*), and show in the detection log window like the others. Motion that
+  names no target gets no picture.
+* **Choose the browser KVision opens web pages in.** A new *Web browser* box in General settings picks the browser used for
+  every page KVision opens: a camera's own page (right-click *Open Web UI*, the globe button on a recorder, the setup check)
+  and the project's links. It lists the browsers installed here (from their launcher files) or takes a command of your own
+  (`%u` is where the address goes), with a *Test* button. The chosen browser is started directly, so it is used even when
+  another browser is already open; a browser that is already running just opens a new tab. Only http and https addresses are
+  opened, the address is passed as one argument and never through a shell, and a browser that cannot be started falls back to
+  the system default. The default is *System default*, so nothing changes until you choose.
 
 ### Changed
 * **A recorder can be set "Offline" when its network is not connected.** The "Mute" box in the recorder monitoring window is now
@@ -139,43 +146,31 @@ All notable changes to this project will be documented in this file.
   diagnostics, the web browser, saving and media). Each section is one short page instead of a long scroll. Nothing moved out of
   Settings, and every choice saves as before.
 
-### Added
-* **Choose where each camera's detection events come from.** The *Choose cameras* window (detection settings) now has a
-  *Reports: camera / NVR* choice for every camera behind a recorder, and *All from camera* / *All from NVR* for a whole
-  recorder. A camera can take its events from its own connection or from the recorder's, and the two can be mixed. Each camera
-  is read from one place only, so nothing is logged twice. A camera with no choice of its own follows the general *Event
-  source* setting. The background logger follows the same choices. Cameras that are their own recorder are not affected.
-* **The detection events window says where each picture came from.** Every new log line ends with `via camera` or `via NVR`:
-  the connection the report and its picture arrived on. The picture viewer's caption shows *picture from the camera* or *picture
-  from the NVR*, and the picture button's tooltip says the same. The list has a new *Source* column right after the
-  address (Camera, or NVR; a dash for older lines) for every entry, since a picture always comes from the device that reported the event, so the window's smallest width is a little larger. Lines written before this
-  have no marker and show as before.
-* **Motion that names no target can be logged and shown.** Some cameras (a panoramic camera's plain motion zone, for one) report
-  that something moved but not what, because their motion detection is not a smart event. KVision kept that off the detection
-  log. Two new choices in the detection settings, both off by default: write each movement to the detection log (one line when
-  it starts, the next only after 10 seconds without motion, so a recorder's one-a-second repeats do not flood it), and show a
-  *MOTION* frame for it on the tile.
-* **Hide unlabelled motion in the detection log window.** A new tick box leaves out the motion reports that did not say what
-  moved, so the list shows only labelled motion and smart events. It works with the other filters.
-* **A picture for labelled motion.** Motion that names a target (human, vehicle, animal or other) is not a smart event and
-  brings no picture, so KVision now asks the camera for a still when one is reported: at most one every 30 seconds for each
-  camera, so a constant stream cannot fill the disk. These pictures are kept apart from the smart-event ones, with their own
-  smaller limit (a quarter of *Pictures kept per camera*), and show in the detection log window like the others. Motion that
-  names no target gets no picture.
-* **Choose the browser KVision opens web pages in.** A new *Web browser* box in General settings picks the browser used for
-  every page KVision opens: a camera's own page (right-click *Open Web UI*, the globe button on a recorder, the setup check)
-  and the project's links. It lists the browsers installed here (from their launcher files) or takes a command of your own
-  (`%u` is where the address goes), with a *Test* button. The chosen browser is started directly, so it is used even when
-  another browser is already open; a browser that is already running just opens a new tab. Only http and https addresses are
-  opened, the address is passed as one argument and never through a shell, and a browser that cannot be started falls back to
-  the system default. The default is *System default*, so nothing changes until you choose.
-
-### Changed
 * **Safer settings file.** KVision keeps one copy of the settings file per day (`KVision.conf.daily-YYYY-MM-DD`, the last 14
   days) as well as the `.bak` copy that is replaced at every start. A new start also waits up to 10 seconds for a previous
   window that is still shutting down, so two windows do not write the same settings file at once.
 
 ### Fixed
+* **The right-click menu and its Stream Select and Quick tools sub-menus no longer run off the screen** when the camera cell is small and near an edge. They stay inside the window, and a sub-menu opens to the left when there is no room on the right. This also holds the very first time the menu is opened, when some entries only appear as it opens.
+* **The camera pick-lists in Camera Tools now look like something you click.** They had the same colour as the window. They now have a lighter box, an orange drop-down arrow and an orange outline when the mouse is over them.
+* **Status notices (Camera Tools, backups, background logging) are no longer hidden behind other windows.** The small message at
+  the bottom of the screen used to be part of the main window, so the Settings window (where Camera Tools is) and any other
+  window covered it, and you could press a button and see nothing. It is now a window of its own that stays on top, never takes
+  the focus or the clicks, and goes away with the main window when that is minimized.
+* The overlay text Test button now says the broker's number is in Celsius and, when Fahrenheit is chosen, shows the converted number too, for example "The broker gave -4.94 C, which is 23.11 F".
+* **The on-screen detection frame now comes back by itself when a recorder returns or is set back from Offline.** A camera
+  behind a recorder is found through the recorder. If the recorder was not answering at that moment, the tile gave up and
+  stayed without detection until KVision was restarted. Now the tile reads the recorder's camera list in the background
+  (the window never waits for it) and asks again every 20 seconds until it answers. A recorder that is set Offline is still
+  not asked at all.
+* A device that answered "no detection stream" (for example while it was still starting up) was never asked again. It is
+  now asked once every 30 minutes, and detection starts if it answers.
+
+* **Slow start with a network unplugged.** A tile did not know its recorder's address until after it checked whether the
+  recorder was set Offline, so the first check always passed and the tile asked the unreachable recorder for the camera's
+  address, which froze the window for 4 seconds per tile. A tile now reads its address first, and uses the lookup that
+  remembers a failure for 30 seconds.
+
 * **Detection events window: the controls are no longer pushed off the edge.** A long camera name in the *Only this camera*
   box, or a long notice at the bottom, used to widen the window's contents so *Refresh* and *Load 10 more* ended up past the
   right edge. Both now shorten with "..." (the notice shows in full on hover), and the window cannot be made narrower than
