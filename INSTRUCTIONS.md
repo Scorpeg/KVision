@@ -1,13 +1,8 @@
 # User Manual for KVision
 
-<a href="https://buymeacoffee.com/arkanis" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="42" style="height: 42px !important; width: auto !important;"></a>
-
-> [!TIP]
-> **Support KVision:** If you find this software useful and enjoy using it, you can support its development by [buying me a coffee](https://buymeacoffee.com/arkanis)! ☕
-
 **KVision** is a Linux desktop viewer for Hikvision cameras and NVR/DVR recorders. It shows many live video streams (RTSP/ONVIF) at once, plays back recordings from the recorder, and listens to the cameras' detection reports (people, vehicles, line crossing, intrusion and more) to draw a frame on the tile and keep a log with pictures.
 
-The program has been optimized for stability, smooth operation (60 FPS), and minimal system resource consumption.
+This manual describes KVision 3.7. The Changelog tab in the options window lists what changed in each release.
 
 ---
 
@@ -193,7 +188,7 @@ If KVision connects to your NVR, retrieves the camera names, but the video feeds
 
 ### Troubleshooting System Scaling (KDE Plasma)
 
-Starting from version 2.4.4, KVision automatically detects and correctly applies fractional desktop scaling (e.g., 125%, 145%, 150%) configured in KDE Plasma settings by enforcing native High DPI pass-through policies in Qt. The user interface should now scale correctly out-of-the-box without any manual intervention.
+KVision automatically detects and correctly applies fractional desktop scaling (e.g., 125%, 145%, 150%) configured in KDE Plasma settings by enforcing native High DPI pass-through policies in Qt. The user interface should scale correctly out-of-the-box without any manual intervention.
 
 #### Native Wayland Support
 
@@ -211,7 +206,7 @@ sudo apt install qtwayland5
 
 #### Manual Scaling Override (Legacy/Fallback)
 
-If you are running an older version, an unusual configuration, or simply wish to manually force a different scaling factor than the rest of the system, you can still override the application scaling using environment variables.
+If you are running an unusual configuration, or simply wish to manually force a different scaling factor than the rest of the system, you can still override the application scaling using environment variables.
 
 For example, to force **150%** scaling, launch the application from the terminal with:
 ```bash
@@ -384,12 +379,11 @@ The options window (`SideBar`, opened with the **Options** button) shows five ta
 A dialog for the selected tile. It has:
 * **Active Stream Connection**: the **Primary Stream URL** (RTSP/ONVIF) and a **Secondary Backup URL** for manual configurations. A camera that came from a recorder fills these in for you.
 * **Channel Options**: the **FFmpeg options** for this tile, and a tick box that leaves this tile out of global FFmpeg changes.
-  > [!TIP]
-  > For the fastest stream connection and maximum stability over RTSP, the recommended parameters are:
-  > ```ini
-  > -analyzeduration 0 -probesize 500000 -fflags nobuffer -flags low_delay -rtsp_transport tcp
-  > ```
-  > See the note on `-analyzeduration` under Settings below before using `0` on streams that have no audio.
+  * **Tip:** for the fastest stream connection and maximum stability over RTSP, the recommended parameters are:
+    ```ini
+    -analyzeduration 0 -probesize 500000 -fflags nobuffer -flags low_delay -rtsp_transport tcp
+    ```
+    See the note on `-analyzeduration` under Settings below before using `0` on streams that have no audio.
 * Muting and unmuting a tile is done with the **M** key or the speaker button on the tile, not in this dialog.
 
 ### 2. Layout & Grid Tools (hamburger button on the top bar)
@@ -413,7 +407,7 @@ This page has six sections, chosen with the buttons along its top: **Detection**
 * **Language selection**: Interface language. English is the only language shipped in this version, so the choice has no other effect.
 * **UI Preferences**: Hide/show viewport status labels or control badges (such as auto-hiding the control overlays in the bottom right corner of tiles unless hovering).
 * **Default FFmpeg Options & Bulk Update**: Allows configuring global FFmpeg options applied to new viewports (recommended: `-analyzeduration 100000 -probesize 500000 -fflags nobuffer -flags low_delay`).
-  * > **[RECOMMENDATION]** If you are migrating from an older version of KVision (prior to v2.4.5), it is highly recommended to change `-analyzeduration 0` to `-analyzeduration 100000` in the global settings and click "Update all cameras". Setting `0` on streams without an audio track causes delays in switching because FFmpeg will block for a hardcoded 5-second timeout waiting for audio packets. Setting a very low value (e.g., 100000 microseconds = 0.1s) completely resolves this issue while maintaining instant switching.
+  * **Recommendation:** if your streams are slow to switch, or you are carrying settings over from an old KVision, change `-analyzeduration 0` to `-analyzeduration 100000` in the global settings and click "Update all cameras". Setting `0` on streams without an audio track causes delays in switching because FFmpeg will block for a hardcoded 5-second timeout waiting for audio packets. Setting a very low value (e.g., 100000 microseconds = 0.1s) completely resolves this issue while maintaining instant switching.
   * **Update all cameras button**: The **Update all cameras** button applies these global options to all configured viewports.
   * **Low-latency flags (`nobuffer`, `low_delay`)**:
     * `-fflags nobuffer` disables internal demuxer packet buffering to eliminate streaming lag over time, but might cause stuttering if your network connection to the camera is unstable.
