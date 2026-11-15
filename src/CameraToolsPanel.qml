@@ -161,11 +161,18 @@ ColumnLayout {
                     enabled: !HikvisionBackup.busy
 
                     background: Rectangle {
-                        implicitHeight: 32
-                        color: "#0f151b"
-                        border.color: backupCameraCombo.activeFocus ? "#ff7a00" : "#2a3540"
+                        implicitHeight: 34
+                        color: "#1b2733"
+                        border.color: backupCameraCombo.popup.visible || backupCameraCombo.hovered ? "#ff7a00" : "#5a6b7b"
                         border.width: 1
                         radius: 4
+                    }
+                    indicator: Text {
+                        x: backupCameraCombo.width - width - 10
+                        y: (backupCameraCombo.height - height) / 2
+                        text: "\u25BE"
+                        color: "#ff7a00"
+                        font.pixelSize: 18
                     }
                     contentItem: Text {
                         text: backupCameraCombo.displayText
@@ -173,6 +180,7 @@ ColumnLayout {
                         font.pixelSize: 11
                         verticalAlignment: Text.AlignVCenter
                         leftPadding: 10
+                        rightPadding: 28
                         elide: Text.ElideRight
                     }
                     delegate: ItemDelegate {
@@ -505,6 +513,63 @@ ColumnLayout {
                 onCurrentIndexChanged: {
                     rootPanel.ruleState = "";
                     rootPanel.ruleMessage = "";
+                }
+
+                background: Rectangle {
+                    implicitHeight: 34
+                    color: "#1b2733"
+                    border.color: ruleCameraCombo.popup.visible || ruleCameraCombo.activeFocus ? "#ff7a00" : (ruleCameraCombo.hovered ? "#ff7a00" : "#5a6b7b")
+                    border.width: 1
+                    radius: 4
+                }
+                indicator: Text {
+                    x: ruleCameraCombo.width - width - 10
+                    y: (ruleCameraCombo.height - height) / 2
+                    text: "\u25BE"
+                    color: "#ff7a00"
+                    font.pixelSize: 18
+                }
+                contentItem: Text {
+                    text: ruleCameraCombo.displayText
+                    color: ruleCameraCombo.enabled ? "white" : "#8898a6"
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 28
+                    elide: Text.ElideRight
+                }
+                delegate: ItemDelegate {
+                    width: ruleCameraCombo.width
+                    height: 32
+                    contentItem: Text {
+                        text: modelData.name + "  (" + modelData.ip + ")"
+                        color: hovered ? "#ff7a00" : "white"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    background: Rectangle {
+                        color: hovered ? "#2a3540" : "transparent"
+                        radius: 4
+                    }
+                }
+                popup: Popup {
+                    y: ruleCameraCombo.height + 2
+                    width: ruleCameraCombo.width
+                    implicitHeight: Math.min(320, ruleCameraCombo.popup.visible ? contentItem.implicitHeight : 0)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: ruleCameraCombo.popup.visible ? ruleCameraCombo.delegateModel : null
+                        currentIndex: ruleCameraCombo.highlightedIndex
+                    }
+                    background: Rectangle {
+                        color: "#0f151b"
+                        border.color: "#ff7a00"
+                        border.width: 1
+                        radius: 6
+                    }
                 }
             }
 
