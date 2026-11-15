@@ -1030,7 +1030,8 @@ ColumnLayout {
                         // -LSU/SL ending, may find nothing.
                         var m = /^[A-Za-z0-9-]*?\d{3,}(?:[A-Za-z]\d)?/.exec(rootPanel.healthModel);
                         var term = encodeURIComponent((m ? m[0] : rootPanel.healthModel.split("/")[0]).toLowerCase());
-                        Qt.openUrlExternally("https://www.hikvision.com/en/search/?keyword=" + term + "&q=" + term + "&active=Products");
+                        // WebBrowser.open uses the browser chosen in the general settings (Qt.openUrlExternally would use the system default).
+                        WebBrowser.open("https://www.hikvision.com/en/search/?keyword=" + term + "&q=" + term + "&active=Products");
                     }
                     ToolTip.visible: hovered
                     ToolTip.delay: 600
