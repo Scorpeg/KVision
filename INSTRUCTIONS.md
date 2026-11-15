@@ -223,13 +223,14 @@ env QT_FONT_DPI=96 QT_SCALE_FACTOR=1.5 kvision
 
 To configure the connection to a Hikvision recorder:
 1. Open the options window and go to the **Recorders** tab (server icon).
-2. Enter the device access details:
+2. **Optional: find the device.** Click **Scan network**. KVision asks every network this computer is connected to for Hikvision devices (about 4 seconds) and lists what answers, with the model, address, serial number and which of your networks heard it. Click a row to fill in the name, IP address and ports, then type the user name and password. A row can carry notes: *Already added*, *Not activated: set a password on the device first*, and *Different subnet from this computer* (the device cannot be reached until its address is changed or a route exists). If nothing is found, the device may be on another subnet or VLAN, a switch or access point may block multicast, or the device may have discovery turned off; enter its address by hand. A camera that sits behind a recorder you have already added is not listed, because that recorder already gives you the camera. The scan only listens for answers and sends no password.
+3. Enter the device access details:
    * **IP Address**: The network address of the recorder.
    * **Port**: The SDK network port (default is `8000`).
    * **Username**: User name (e.g., `admin`).
    * **Password**: Password to access the recorder.
-3. Click **Connect & Discover** (or **Save & Update**).
-4. Upon successful connection, the application will automatically detect all active cameras (channels) connected to the NVR/DVR and add them to the list.
+4. Click **Connect & Discover** (or **Save & Update**).
+5. Upon successful connection, the application will automatically detect all active cameras (channels) connected to the NVR/DVR and add them to the list.
 5. **Generate Grid**: On each recorder card, click the four-squares icon (tooltip *Generate Grid*). It creates a new, separate layout containing every camera of that recorder in the smallest square-ish grid that fits them (for example 17 cameras give a 5x4 grid), names it after the recorder, and switches to it. It can be used any number of times, and each click makes another layout, so delete extras in the **Presets** tab. A layout is also created automatically the first time you add a recorder.
 6. **Displaying Camera Lists (NvrCamerasWindow)**: Clicking the computer monitor icon button on any recorder's card opens a dedicated window showing all detected camera channels as interactive tiles.
 7. **Generating Thumbnails (Generate thumbnails)**: In the NVR cameras list window, a *„Generate thumbnails”* button is available. Clicking it commands the application to pull single frames from each channel's Sub Stream in the background, setting them as the tile background thumbnails. This provides a quick visual preview of each camera without launching full live feeds.

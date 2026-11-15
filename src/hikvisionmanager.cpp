@@ -339,6 +339,20 @@ QVariantMap HikvisionManager::proxyCameraIfCached(const QString &nvrIp, int chan
     return m_proxyCache.value(cleanIp).value(channelId);
 }
 
+bool HikvisionManager::isBehindKnownRecorder(const QString &cameraIp) const
+{
+    const QString ip = cameraIp.trimmed();
+    if (ip.isEmpty())
+        return false;
+    for (auto rec = m_proxyCache.constBegin(); rec != m_proxyCache.constEnd(); ++rec) {
+        for (auto ch = rec.value().constBegin(); ch != rec.value().constEnd(); ++ch) {
+            if (ch.value().value(QStringLiteral("ip")).toString() == ip)
+                return true;
+        }
+    }
+    return false;
+}
+
 void HikvisionManager::prefetchProxyChannels(const QString &nvrIp, int httpPort, const QString &username, const QString &password)
 {
     QString cleanIp = nvrIp.trimmed();

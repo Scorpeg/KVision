@@ -176,6 +176,7 @@ set(PROJ_FILES
     src/viewportslayoutmodel.cpp src/viewportslayoutmodel.h
     src/viewportslayoutscollectionmodel.cpp src/viewportslayoutscollectionmodel.h
     src/hikvisionmanager.cpp src/hikvisionmanager.h
+    src/hikvisionprobe.cpp src/hikvisionprobe.h
     src/hikvisionplayer.cpp src/hikvisionplayer.h
     src/thumbnailprovider.cpp src/thumbnailprovider.h
     src/hikvisionisapi.cpp src/hikvisionisapi.h

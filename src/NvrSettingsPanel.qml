@@ -29,6 +29,74 @@ ColumnLayout {
     property int editingIndex: -1
     property bool isDiscovering: false
 
+    // LAN scan (Hikvision SADP Probe) results shown above the form
+    property var scanResults: []
+    property string scanNote: ""
+
+    function isRecorderAdded(ip) {
+        for (var i = 0; i < recorders.length; ++i) {
+            if (recorders[i] && recorders[i].ip === ip)
+                return true;
+        }
+        return false;
+    }
+
+    // Bumped when a recorder's camera list arrives, so the results list is filtered again
+    property int proxyRevision: 0
+
+    // A camera behind a recorder that is already added is reached through that recorder, so it is not offered
+    function visibleScanResults() {
+        var rev = proxyRevision; // dependency for the binding
+        var out = [];
+        for (var i = 0; i < scanResults.length; ++i) {
+            if (!HikvisionManager.isBehindKnownRecorder(scanResults[i].ip))
+                out.push(scanResults[i]);
+        }
+        return out;
+    }
+
+    function startScan() {
+        scanResults = [];
+        scanNote = "";
+        // Make sure each added recorder's camera list is known before the answers arrive
+        for (var r = 0; r < recorders.length; ++r) {
+            var rec = recorders[r];
+            if (rec && rec.ip && rec.username && rec.password)
+                HikvisionManager.prefetchProxyChannels(rec.ip, rec.httpPort || 80, rec.username, rec.password);
+        }
+        HikvisionProbe.start();
+    }
+
+    // Fills the form from a scan result; credentials are still typed by the user
+    function useScanResult(dev) {
+        ipField.text = dev.ip;
+        portField.text = String(dev.sdkPort);
+        httpPortField.text = String(dev.httpPort);
+        if (nameField.text.trim().length === 0)
+            nameField.text = dev.name;
+        rootPanel.statusMessage = "";
+        passField.forceActiveFocus();
+    }
+
+    Connections {
+        target: HikvisionProbe
+        function onDeviceFound(device) {
+            var list = rootPanel.scanResults.slice();
+            list.push(device);
+            rootPanel.scanResults = list;
+        }
+        function onScanFinished(count, networks, failed) {
+            if (networks === 0)
+                rootPanel.scanNote = qsTr("LNG_00593");
+            else if (count === 0)
+                rootPanel.scanNote = qsTr("LNG_00594").arg(networks);
+            else if (failed > 0)
+                rootPanel.scanNote = qsTr("LNG_00595").arg(networks).arg(networks + failed);
+            else
+                rootPanel.scanNote = "";
+        }
+    }
+
 
     // ── NvrCamerasWindow Component ──────────────────────────────────────
     // Declared here (outside the Repeater) so its QML creation context
@@ -97,6 +165,10 @@ ColumnLayout {
             var states = Object.assign({}, rootPanel.activeSessionIps);
             states[ip] = loggedIn;
             rootPanel.activeSessionIps = states;
+        }
+
+        function onProxyChannelsReady(nvrIp, ok) {
+            rootPanel.proxyRevision++;
         }
 
         function onDiscoveryFinished(ip, cameras, success, errorMsg) {
@@ -295,6 +367,90 @@ ColumnLayout {
             width: parent.width
             spacing: 8
             enabled: !rootPanel.isDiscovering
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    text: HikvisionProbe.scanning ? qsTr("LNG_00592") : qsTr("LNG_00591")
+                    onClicked: HikvisionProbe.scanning ? HikvisionProbe.stop() : rootPanel.startScan()
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: rootPanel.scanNote
+                    visible: text.length > 0 && !HikvisionProbe.scanning
+                    color: "#ff7a00"
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            ListView {
+                id: scanList
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(contentHeight, 190)
+                visible: count > 0
+                clip: true
+                spacing: 3
+                model: { rootPanel.proxyRevision; return rootPanel.visibleScanResults(); }
+                ScrollBar.vertical: ScrollBar {}
+
+                delegate: Rectangle {
+                    property bool added: rootPanel.isRecorderAdded(modelData.ip)
+                    width: scanList.width
+                    height: 40
+                    radius: 4
+                    color: rowArea.containsMouse ? "#24313d" : "#0f151b"
+                    border.color: "#2a3540"
+                    opacity: added ? 0.5 : 1.0
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: 8
+                        spacing: 1
+
+                        Text {
+                            width: parent.width
+                            elide: Text.ElideRight
+                            color: "white"
+                            font.pixelSize: 11
+                            text: (modelData.kind === "nvr" ? qsTr("LNG_00596") : qsTr("LNG_00597"))
+                                  + "  " + modelData.name + "  " + modelData.ip
+                        }
+                        Text {
+                            width: parent.width
+                            elide: Text.ElideRight
+                            font.pixelSize: 9
+                            color: (!modelData.activated || !modelData.sameSubnet) ? "#ff7a00" : "#8898a6"
+                            text: {
+                                var parts = [];
+                                if (added)
+                                    parts.push(qsTr("LNG_00598"));
+                                if (!modelData.activated)
+                                    parts.push(qsTr("LNG_00599"));
+                                if (!modelData.sameSubnet)
+                                    parts.push(qsTr("LNG_00600"));
+                                parts.push(qsTr("LNG_00601").arg(modelData.interfaceIp));
+                                if (modelData.serial)
+                                    parts.push(modelData.serial);
+                                return parts.join("  |  ");
+                            }
+                        }
+                    }
+
+                    MouseArea {
+                        id: rowArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: !parent.added
+                        onClicked: rootPanel.useScanResult(modelData)
+                    }
+                }
+            }
 
             ColumnLayout {
                 spacing: 2

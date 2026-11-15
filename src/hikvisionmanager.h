@@ -53,6 +53,8 @@ public:
     Q_INVOKABLE QVariantMap proxyCameraCached(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
     // The remembered answer only: never waits for the recorder, empty when the recorder's camera list has not been read yet.
     Q_INVOKABLE QVariantMap proxyCameraIfCached(const QString &nvrIp, int channelId) const;
+    // True when the address is one of the cameras behind a recorder whose camera list is remembered (so it is already reachable through that recorder).
+    Q_INVOKABLE bool isBehindKnownRecorder(const QString &cameraIp) const;
     // Reads a recorder's camera list on a background thread (so the window never waits for an unreachable recorder) and
     // remembers it; proxyChannelsReady() follows. Does nothing when the list is already known or being read, and not more
     // often than every 15 seconds after a failure, so it can simply be called again until the recorder answers.
