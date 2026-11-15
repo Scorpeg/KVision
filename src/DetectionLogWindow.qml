@@ -62,6 +62,44 @@ Window {
         { "label": qsTr("Other smart events"), "kinds": "Loitering,People gathering,Rapid movement,Parking,Unattended object,Object removed" }
     ]
 
+    // What can be left out (the opposite of the two lists above). Ticked keys are kept in hiddenTargets / hiddenKinds.
+    readonly property var hideTargetChoices: [
+        { "label": qsTr("Human"), "key": "human" },
+        { "label": qsTr("Vehicle"), "key": "vehicle" },
+        { "label": qsTr("Animal"), "key": "animal" },
+        { "label": qsTr("Other"), "key": "other" },
+        { "label": qsTr("Unnamed motion"), "key": "unnamed" }
+    ]
+    readonly property var hideKindChoices: [
+        { "label": qsTr("Line crossing"), "key": "Line crossing" },
+        { "label": qsTr("Intrusion"), "key": "Intrusion" },
+        { "label": qsTr("Region entrance"), "key": "Region entrance" },
+        { "label": qsTr("Region exit"), "key": "Region exit" },
+        { "label": qsTr("Tracking"), "key": "Tracking" },
+        { "label": qsTr("Motion"), "key": "Motion" },
+        { "label": qsTr("Face detection"), "key": "Face detection" },
+        { "label": qsTr("Other smart events"), "key": "Loitering,People gathering,Rapid movement,Parking,Unattended object,Object removed" }
+    ]
+    property var hiddenTargets: ({})
+    property var hiddenKinds: ({})
+
+    // The keys of the ticked choices, joined with commas.
+    function hiddenList(choices, ticked) {
+        var out = [];
+        for (var i = 0; i < choices.length; ++i)
+            if (ticked[choices[i].key])
+                out.push(choices[i].key);
+        return out.join(",");
+    }
+
+    function tickedCount(ticked) {
+        var n = 0;
+        for (var k in ticked)
+            if (ticked[k])
+                ++n;
+        return n;
+    }
+
     function rangeFromMs() {
         var h = rangeBox.currentIndex >= 0 ? logWin.rangeChoices[rangeBox.currentIndex].hours : 0;
         var now = new Date();
@@ -89,7 +127,8 @@ Window {
                                                logWin.rangeFromMs(), logWin.rangeToMs(),
                                                logWin.targetChoices[targetBox.currentIndex].key,
                                                logWin.kindChoices[kindBox.currentIndex].kinds,
-                                               hideUnlabelledBox.checked);
+                                               logWin.hiddenList(logWin.hideTargetChoices, logWin.hiddenTargets),
+                                               logWin.hiddenList(logWin.hideKindChoices, logWin.hiddenKinds));
         logWin.total = r.total;
         var list = reset ? [] : logWin.entries.slice();
         for (var i = 0; i < r.entries.length; ++i)
@@ -609,22 +648,6 @@ Window {
                 ToolTip.text: qsTr("Only events of this type.")
             }
 
-            CheckBox {
-                id: hideUnlabelledBox
-                text: qsTr("Hide unlabelled motion")
-                onToggled: logWin.load(true)
-                ToolTip.visible: hovered
-                ToolTip.delay: 600
-                ToolTip.text: qsTr("Leave out motion reports that did not say what moved (no human, vehicle or animal)")
-                contentItem: Text {
-                    leftPadding: hideUnlabelledBox.indicator.width + 6
-                    text: hideUnlabelledBox.text
-                    color: "#eeeeee"
-                    font.pixelSize: 12
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-
             Item { Layout.fillWidth: true }
 
             Text {
@@ -825,6 +848,86 @@ Window {
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
+
+            Text {
+                text: qsTr("Leave out:")
+                color: "#8899aa"
+                font.pixelSize: 12
+            }
+
+            Button {
+                id: hideTargetsButton
+                readonly property int n: logWin.tickedCount(logWin.hiddenTargets)
+                text: n > 0 ? qsTr("Targets (%1)").arg(n) : qsTr("Targets")
+                implicitWidth: 120
+                onClicked: hideTargetsMenu.popup(0, -hideTargetsMenu.implicitHeight)
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("Tick the targets to leave out of the list. \"Unnamed motion\" is motion that did not say what moved.")
+                Menu {
+                    id: hideTargetsMenu
+                    Repeater {
+                        model: logWin.hideTargetChoices
+                        MenuItem {
+                            text: modelData.label
+                            checkable: true
+                            checked: !!logWin.hiddenTargets[modelData.key]
+                            onTriggered: {
+                                var t = Object.assign({}, logWin.hiddenTargets);
+                                t[modelData.key] = checked;
+                                logWin.hiddenTargets = t;
+                                logWin.load(true);
+                            }
+                        }
+                    }
+                    MenuSeparator { }
+                    MenuItem {
+                        text: qsTr("Clear")
+                        enabled: hideTargetsButton.n > 0
+                        onTriggered: {
+                            logWin.hiddenTargets = ({});
+                            logWin.load(true);
+                        }
+                    }
+                }
+            }
+
+            Button {
+                id: hideKindsButton
+                readonly property int n: logWin.tickedCount(logWin.hiddenKinds)
+                text: n > 0 ? qsTr("Types (%1)").arg(n) : qsTr("Types")
+                implicitWidth: 120
+                onClicked: hideKindsMenu.popup(0, -hideKindsMenu.implicitHeight)
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("Tick the types of event to leave out of the list")
+                Menu {
+                    id: hideKindsMenu
+                    Repeater {
+                        model: logWin.hideKindChoices
+                        MenuItem {
+                            text: modelData.label
+                            checkable: true
+                            checked: !!logWin.hiddenKinds[modelData.key]
+                            onTriggered: {
+                                var t = Object.assign({}, logWin.hiddenKinds);
+                                t[modelData.key] = checked;
+                                logWin.hiddenKinds = t;
+                                logWin.load(true);
+                            }
+                        }
+                    }
+                    MenuSeparator { }
+                    MenuItem {
+                        text: qsTr("Clear")
+                        enabled: hideKindsButton.n > 0
+                        onTriggered: {
+                            logWin.hiddenKinds = ({});
+                            logWin.load(true);
+                        }
+                    }
+                }
+            }
 
             Text {
                 text: qsTr("%1 shown").arg(logWin.entries.length)

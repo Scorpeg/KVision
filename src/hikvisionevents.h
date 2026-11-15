@@ -100,8 +100,10 @@ public:
     // filter is used the whole range is read and the result also carries "total", the number of matching entries.
     Q_INVOKABLE QVariantMap readDetections(int skip, int count, const QString &configDir, const QString &filterIp = QString(),
                                            qint64 fromMs = 0, qint64 toMs = 0, const QString &target = QString(), const QString &kinds = QString(),
-                                           bool hideUnlabelledMotion = false) const;
-    // hideUnlabelledMotion leaves out motion reports that named no target (written as "Object detected, Motion").
+                                           const QString &hideTargets = QString(), const QString &hideKinds = QString()) const;
+    // hideTargets and hideKinds are the opposite of target and kinds: lists of what to leave out. hideTargets takes
+    // human, vehicle, animal, other and unnamed (motion that named no target, written as "Object detected, Motion");
+    // hideKinds takes the log's words for the type, like kinds.
     // What the newest event picture from a camera showed: a map with state ("on" if the picture carries the red
     // target frame, "off" if the camera sent a clean picture, empty if none has been seen since KVision started)
     // and time. address is the camera's own address. The picture is only looked at, never kept.

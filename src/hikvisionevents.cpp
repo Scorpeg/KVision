@@ -962,7 +962,7 @@ void HikvisionEvents::logFrame(const QString &ip, const QString &text, int tile,
 
 QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &configDir, const QString &filterIp,
                                             qint64 fromMs, qint64 toMs, const QString &target, const QString &kinds,
-                                            bool hideUnlabelledMotion) const
+                                            const QString &hideTargets, const QString &hideKinds) const
 {
     QVariantMap result;
     QVariantList entries;
@@ -971,6 +971,10 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
     // No type chosen means every kind of event, including plain labelled motion (motion has no picture).
     // Choosing "Motion" lists only those.
     const QStringList wantKinds = splitList(kinds);
+    QStringList skipTargets;
+    for (const QString &t : splitList(hideTargets))
+        skipTargets << t.trimmed().toLower();
+    const QStringList skipKinds = splitList(hideKinds);
     const bool filtering = true;
     int total = 0;
     QFile f(configDir + QStringLiteral("/logs/Detection.log"));
@@ -1086,9 +1090,13 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
                 const QString kindNow = e.value(QStringLiteral("kind")).toString();
                 if (!wantKinds.isEmpty() && !wantKinds.contains(kindNow))
                     continue;
-                if (hideUnlabelledMotion && kindNow == QLatin1String("Motion")
-                    && e.value(QStringLiteral("target")).toString().compare(QLatin1String("Object"), Qt::CaseInsensitive) == 0)
+                if (skipKinds.contains(kindNow))
                     continue;
+                if (!skipTargets.isEmpty()) {
+                    const QString raw = e.value(QStringLiteral("target")).toString().toLower();
+                    if (skipTargets.contains(raw == QLatin1String("object") ? QStringLiteral("unnamed") : raw))
+                        continue;
+                }
                 if (!wantTarget.isEmpty()) {
                     QString tg = e.value(QStringLiteral("target")).toString().toLower();
                     if (tg == QLatin1String("object"))
