@@ -884,7 +884,7 @@ ColumnLayout {
 
             Text {
                 property var sel: healthCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[healthCameraCombo.currentIndex] : null
-                text: {
+                text: Utils.healthRich((function() {
                     if (HikvisionBackup.ruleBusy)
                         return "Asking the camera...";
                     if (!sel)
@@ -896,7 +896,8 @@ ColumnLayout {
                     if (rootPanel.healthState === "unavailable")
                         return "Not available: " + rootPanel.healthMessage + ".";
                     return "Problem: " + rootPanel.healthMessage + ".";
-                }
+                })())
+                textFormat: Text.StyledText
                 color: (rootPanel.healthState === "ok") ? "#00ff66" : ((rootPanel.healthState === "warn") ? "#ff9f43" : ((rootPanel.healthState === "error") ? "#ff6666" : "#8898a6"))
                 font.pixelSize: 11
                 wrapMode: Text.Wrap

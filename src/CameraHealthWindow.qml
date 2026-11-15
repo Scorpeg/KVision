@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
+import CCTV_Viewer.Utils 1.0
 
 // The result of "Camera clock and firmware > Check all": one card per camera, filled in as each camera answers.
 // It only reads. Nothing on a camera is changed.
@@ -163,8 +164,9 @@ Window {
                         }
 
                         Text {
-                            text: model.status === "unavailable" ? qsTr("Not available: %1").arg(model.message)
-                                  : (model.status === "error" ? qsTr("Problem: %1").arg(model.message) : model.message)
+                            textFormat: Text.StyledText
+                            text: Utils.healthRich(model.status === "unavailable" ? qsTr("Not available: %1").arg(model.message)
+                                  : (model.status === "error" ? qsTr("Problem: %1").arg(model.message) : model.message))
                             color: model.status === "warn" ? "#e0a040" : (model.status === "error" ? "#ff6666" : "#c8d2dc")
                             font.pixelSize: 11
                             wrapMode: Text.Wrap
