@@ -38,6 +38,30 @@ FocusScope {
     property string ruleMenuIp: ""      // the camera the menu asked about, while the answer is awaited
     property string ruleMenuName: ""
     property bool ruleMenuLoading: false // waiting for the camera list before the switch can be read
+    property var ruleKnown: ({})       // camera address -> {on: bool, at: ms}: what the camera last said
+    property int ruleKnownRev: 0       // changes whenever ruleKnown does, so the menu tick follows it
+    property string ruleReadIp: ""     // a read started only to show the tick
+    function ruleIsOn(ip) {
+        var rev = root.ruleKnownRev;
+        return !!ip && !!root.ruleKnown[ip] && root.ruleKnown[ip].on;
+    }
+    // Reads the camera's switch (read only) when the Quick tools menu opens, so the tick is right. Not more than once
+    // every 20 seconds per camera.
+    function refreshRuleState(ip) {
+        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "")
+            return;
+        var k = root.ruleKnown[ip];
+        if (k && Date.now() - k.at < 20000)
+            return;
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.ruleReadIp = ip;
+            root.ruleMenuLoading = false;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        root.ruleReadIp = ip;
+        HikvisionBackup.checkRuleLines(ip);
+    }
     function toggleRuleLines(ip, name) {
         if (!ip || HikvisionBackup.ruleBusy)
             return;
@@ -57,9 +81,19 @@ FocusScope {
             if (root.ruleMenuLoading && root.ruleMenuIp !== "") {
                 root.ruleMenuLoading = false;
                 HikvisionBackup.toggleRuleLines(root.ruleMenuIp);
+            } else if (root.ruleReadIp !== "" && root.ruleMenuIp === "" && !HikvisionBackup.ruleBusy) {
+                HikvisionBackup.checkRuleLines(root.ruleReadIp);
             }
         }
         function onRuleLinesResult(ip, state, message) {
+            if (state === "on" || state === "off") {
+                var k = root.ruleKnown;
+                k[ip] = { "on": state === "on", "at": Date.now() };
+                root.ruleKnown = k;
+                root.ruleKnownRev++;
+            }
+            if (root.ruleReadIp === ip)
+                root.ruleReadIp = "";
             if (root.ruleMenuIp === "" || ip !== root.ruleMenuIp)
                 return;
             var name = root.ruleMenuName;
@@ -1573,6 +1607,12 @@ FocusScope {
 
                     Menu {
                         id: quickToolsSubMenu
+                        property string ruleIp: ""
+                        onAboutToShow: {
+                            var p = playerPool.activePlayersMap[model.index];
+                            ruleIp = (p && p.isHikvision && !p.isQuickPlayback) ? p.detectionLogIp() : "";
+                            root.refreshRuleState(ruleIp);
+                        }
                         margins: 6 // keeps the menu inside the window, even for a small cell near an edge
 
                         topPadding: 5
@@ -1740,7 +1780,7 @@ FocusScope {
 
                         MenuItem {
                             id: ruleLinesMenuItem
-                            text: qsTr("Rule lines on/off (VCA lines)")
+                            text: (root.ruleIsOn(quickToolsSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Rule lines on/off (VCA lines)")
                             visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             enabled: visible && !HikvisionBackup.ruleBusy
                             height: visible ? implicitHeight : 0
