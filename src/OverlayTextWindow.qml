@@ -12,9 +12,9 @@ import CCTV_Viewer.Hikvision 1.0
 Window {
     id: win
 
-    width: 560
+    width: 640
     height: 900
-    minimumWidth: 500
+    minimumWidth: 580
     minimumHeight: 520
     color: "#0f151b"
     title: qsTr("Overlay text from MQTT")
