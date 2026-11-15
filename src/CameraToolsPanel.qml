@@ -1025,9 +1025,10 @@ ColumnLayout {
                     }
                     onClicked: {
                         // The search wants keyword, q and active=Products (an address that works: ...?keyword=ds-2cd2347&q=ds-2cd2347&active=Products).
-                        // The term is the start of the model name, up to its first run of three or more digits (DS-2CD2347G2-LSU/SL
-                        // gives ds-2cd2347), like that address: the full name with its G2-LSU/SL ending may find nothing.
-                        var m = /^[A-Za-z0-9-]*?\d{3,}/.exec(rootPanel.healthModel);
+                        // The term is the start of the model name: up to its first run of three or more digits, plus the generation
+                        // (a letter and a digit: G2, G3) when there is one. DS-2CD2347G2-LSU/SL gives ds-2cd2347g2. The full name, with its
+                        // -LSU/SL ending, may find nothing.
+                        var m = /^[A-Za-z0-9-]*?\d{3,}(?:[A-Za-z]\d)?/.exec(rootPanel.healthModel);
                         var term = encodeURIComponent((m ? m[0] : rootPanel.healthModel.split("/")[0]).toLowerCase());
                         Qt.openUrlExternally("https://www.hikvision.com/en/search/?keyword=" + term + "&q=" + term + "&active=Products");
                     }

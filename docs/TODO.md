@@ -183,9 +183,10 @@ that report the feature.
 ### 12. [~] Firmware version and update check - version shown, "update may be available" from a note you keep; apply NOT built
 - **Built:** the "Camera clock and firmware" box shows each camera's firmware version, build date and model (`System/deviceInfo`).
   After a Check, a row appears with the model: type the newest firmware version you see on Hikvision's page for that model and
-  press Save (stored in the config file under `NewestFirmware`, one value per model). "Open Hikvision page" opens Hikvision's product search for the start of the model name in your browser
-  (DS-2CD2347G2-LSU/SL gives `https://www.hikvision.com/en/search/?keyword=ds-2cd2347&q=ds-2cd2347&active=Products`, the form the
-  user found works; the first form tried, without `q` and `active=Products`, found no products). Check and Check all then say "Update may be available" (orange) when the camera's version is
+  press Save (stored in the config file under `NewestFirmware`, one value per model). "Open Hikvision page" opens Hikvision's product search for the start of the model name, with its generation, in your browser
+  (DS-2CD2347G2-LSU/SL gives `https://www.hikvision.com/en/search/?keyword=ds-2cd2347g2&q=ds-2cd2347g2&active=Products`; the G3 model
+  gives `ds-2cd2387g3`; the user confirmed the G2 and G3 forms work. The first form tried, without `q` and `active=Products`, found
+  no products, and the form without the generation lists several generations together). Check and Check all then say "Update may be available" (orange) when the camera's version is
   lower than the note, "matches" when equal, "newer than the note" when higher, and "none noted for this model yet" otherwise.
   The versions are compared number by number (V5.8.9 is older than V5.8.40). It always says "may be", never "is".
 - **Tested:** the comparison and the per-model storage (model names contain "/", which is stored as "|") with a small test program
