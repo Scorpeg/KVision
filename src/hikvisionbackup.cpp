@@ -464,6 +464,66 @@ int compareVersions(const QString &a, const QString &b)
     return 0;
 }
 
+// Restarts one camera (never a recorder): PUT /ISAPI/System/reboot with no body (the web page's own call). The camera is asked
+// for its deviceInfo first, to make sure it is a camera and to be sure the login works; a deviceType with NVR or DVR in it is
+// refused, because a recorder with one or two channels is listed here like a camera. One try with the camera's own address and
+// login, never through a recorder; a refused login is not tried again. Nothing is read back: the camera is going away.
+// state: "started" (the camera accepted it), "sent" (it was sent but the camera gave no answer, which a restarting camera may do),
+// "unavailable" (this device has no such call) or "error".
+RuleLinesAnswer rebootOne(const HikvisionBackup::Cam &cam)
+{
+    RuleLinesAnswer a;
+    a.state = QStringLiteral("error");
+    if (cam.user.isEmpty() || cam.pass.isEmpty()) {
+        a.message = QStringLiteral("no login saved for this camera (a blank password is never sent)");
+        return a;
+    }
+    auto refused = [&]() {
+        a.refused = true;
+        a.message = QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)");
+        return a;
+    };
+    const QString base = QStringLiteral("http://%1:%2/ISAPI/System/").arg(cam.ip).arg(cam.httpPort);
+    QByteArray info;
+    const int ic = curlGet(base + QStringLiteral("deviceInfo"), cam.user, cam.pass, 8, QString(), &info);
+    if (ic == 0) {
+        a.message = QStringLiteral("could not connect");
+        return a;
+    }
+    if (ic == 401)
+        return refused();
+    if (ic != 200) {
+        a.message = QStringLiteral("the camera answered HTTP %1 when asked what it is, so nothing was sent").arg(ic);
+        return a;
+    }
+    const QString type = QRegularExpression(QStringLiteral("<deviceType>([^<]*)</deviceType>")).match(QString::fromUtf8(info)).captured(1).trimmed();
+    if (type.contains(QLatin1String("NVR"), Qt::CaseInsensitive) || type.contains(QLatin1String("DVR"), Qt::CaseInsensitive)) {
+        a.message = QStringLiteral("this is a recorder (%1), not a camera: KVision does not restart recorders").arg(type);
+        return a;
+    }
+    QByteArray reply;
+    const int pc = curlPutJson(base + QStringLiteral("reboot"), cam.user, cam.pass, 15, QByteArray(), &reply, QStringLiteral("application/xml"));
+    if (pc == 401)
+        return refused();
+    if (pc == 404 || pc == 501 || (pc == 403 && QString::fromUtf8(reply).contains(QLatin1String("notSupport")))) {
+        a.state = QStringLiteral("unavailable");
+        a.message = QStringLiteral("this camera has no restart call");
+        return a;
+    }
+    if (pc == 0) {
+        a.state = QStringLiteral("sent");
+        a.message = QStringLiteral("the restart was sent, but the camera did not answer (a camera that is already restarting may not)");
+        return a;
+    }
+    if (pc == 200 && QString::fromUtf8(reply).contains(QStringLiteral("<statusCode>1</statusCode>"))) {
+        a.state = QStringLiteral("started");
+        a.message = QStringLiteral("the camera accepted the restart and goes offline for a minute or two");
+        return a;
+    }
+    a.message = pc == 200 ? QStringLiteral("the camera did not accept the restart") : QStringLiteral("the camera answered HTTP %1").arg(pc);
+    return a;
+}
+
 QVariantMap healthItem(const QString &state, const QString &label, const QString &detail)
 {
     return QVariantMap{{QStringLiteral("state"), state}, {QStringLiteral("label"), label}, {QStringLiteral("detail"), detail}};
@@ -1070,6 +1130,41 @@ void HikvisionBackup::setNewestFirmware(const QString &model, const QString &ver
         s.setValue(newestKey(model), QDate::currentDate().toString(Qt::ISODate));
     }
     s.sync();
+}
+
+void HikvisionBackup::rebootCamera(const QString &ip)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        emit rebootResult(ip, QStringLiteral("error"), QStringLiteral("That camera is not in the list. Refresh the list and try again."));
+        return;
+    }
+    m_ruleBusy = true; // shares the one-at-a-time flag with the other camera tools
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, found]() {
+        const RuleLinesAnswer a = rebootOne(found);
+        QMetaObject::invokeMethod(this, [this, found, a]() {
+            qInfo() << "[Reboot]" << found.ip << found.name << a.state << "-" << a.message;
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit rebootResult(found.ip, a.state, a.message);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
 }
 
 void HikvisionBackup::checkHealth(const QString &ip)

@@ -1065,6 +1065,182 @@ ColumnLayout {
         }
     }
 
+    // ── Reboot a camera: for a camera that is not on a tile. The right-click "Reboot Camera" does the same for a tile. ──
+    ConfirmDialog {
+        id: rebootToolConfirm
+        title: qsTr("Reboot camera")
+        iconSource: "qrc:/images/icon-warning.svg"
+        confirmButtonText: qsTr("Reboot")
+        property string camIp: ""
+        property string camName: ""
+        message: qsTr("Restart %1 (%2)?").arg(camName).arg(camIp) + "\n\n"
+                 + qsTr("The camera goes offline for a minute or two: its video stops and nothing is recorded from it meanwhile. Only this camera is restarted.")
+        onAccepted: {
+            rootWindow.showNotice(qsTr("Reboot camera") + "\n" + camName + "\n" + qsTr("asking the camera..."), "#ff9f43", 0);
+            HikvisionBackup.rebootCamera(camIp);
+        }
+    }
+    property string rebootResultText: ""
+    property string rebootResultState: ""
+    Connections {
+        target: HikvisionBackup
+        function onRebootResult(ip, state, message) {
+            var sel = rebootCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[rebootCameraCombo.currentIndex] : null;
+            if (sel && sel.ip === ip) {
+                rootPanel.rebootResultState = state;
+                rootPanel.rebootResultText = message;
+            }
+            var ok = (state === "started" || state === "sent");
+            // The tile's own menu shows its notice; this one is for a restart started from this box.
+            if (rebootToolConfirm.camIp === ip)
+                rootWindow.showNotice(qsTr("Reboot camera") + "\n" + (sel && sel.ip === ip ? sel.name : ip) + "\n" + message, ok ? "#ff9f43" : "#ff3333", ok ? 12000 : 10000);
+        }
+    }
+
+    Frame {
+        Layout.fillWidth: true
+        background: Rectangle {
+            color: "#1c242c"
+            radius: 6
+            border.color: "#2a3540"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            Text {
+                text: "Reboot a camera"
+                color: "white"
+                font.pixelSize: 13
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            ComboBox {
+                id: rebootCameraCombo
+                Layout.fillWidth: true
+                enabled: !HikvisionBackup.ruleBusy
+                model: rootPanel.backupCameraModel
+                textRole: "name"
+                onCurrentIndexChanged: {
+                    rootPanel.rebootResultState = "";
+                    rootPanel.rebootResultText = "";
+                }
+
+                background: Rectangle {
+                    implicitHeight: 34
+                    color: "#1b2733"
+                    border.color: rebootCameraCombo.popup.visible || rebootCameraCombo.activeFocus ? "#ff7a00" : (rebootCameraCombo.hovered ? "#ff7a00" : "#5a6b7b")
+                    border.width: 1
+                    radius: 4
+                }
+                indicator: Text {
+                    x: rebootCameraCombo.width - width - 10
+                    y: (rebootCameraCombo.height - height) / 2
+                    text: "\u25BE"
+                    color: "#ff7a00"
+                    font.pixelSize: 18
+                }
+                contentItem: Text {
+                    text: rebootCameraCombo.displayText
+                    color: rebootCameraCombo.enabled ? "white" : "#8898a6"
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 28
+                    elide: Text.ElideRight
+                }
+                delegate: ItemDelegate {
+                    width: rebootCameraCombo.width
+                    height: 32
+                    contentItem: Text {
+                        text: modelData.name + "  (" + modelData.ip + ")"
+                        color: hovered ? "#ff7a00" : "white"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    background: Rectangle {
+                        color: hovered ? "#2a3540" : "transparent"
+                        radius: 4
+                    }
+                }
+                popup: Popup {
+                    y: rebootCameraCombo.height + 2
+                    width: rebootCameraCombo.width
+                    implicitHeight: Math.min(320, rebootCameraCombo.popup.visible ? contentItem.implicitHeight : 0)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: rebootCameraCombo.popup.visible ? rebootCameraCombo.delegateModel : null
+                        currentIndex: rebootCameraCombo.highlightedIndex
+                    }
+                    background: Rectangle {
+                        color: "#0f151b"
+                        border.color: "#ff7a00"
+                        border.width: 1
+                        radius: 6
+                    }
+                }
+            }
+
+            Text {
+                visible: rootPanel.rebootResultText !== ""
+                text: rootPanel.rebootResultText
+                color: (rootPanel.rebootResultState === "started" || rootPanel.rebootResultState === "sent") ? "#ff9f43" : "#ff6666"
+                font.pixelSize: 11
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    id: rebootToolBtn
+                    text: "Reboot this camera"
+                    enabled: !HikvisionBackup.ruleBusy && rebootCameraCombo.currentIndex >= 0
+                    contentItem: Text {
+                        text: rebootToolBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: rebootToolBtn.pressed ? "#b01c18" : (rebootToolBtn.hovered ? "#e0241f" : "#c9201b")
+                        radius: 4
+                        opacity: rebootToolBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: {
+                        var sel = rootPanel.backupCameraModel[rebootCameraCombo.currentIndex];
+                        rootPanel.rebootResultState = "";
+                        rootPanel.rebootResultText = "";
+                        rebootToolConfirm.camIp = sel.ip;
+                        rebootToolConfirm.camName = sel.name;
+                        rebootToolConfirm.open();
+                    }
+                }
+            }
+
+            Text {
+                text: "Restarts the chosen camera, after you confirm. It is offline for a minute or two: its video stops and nothing is recorded from it meanwhile. "
+                      + "Only that camera is restarted, with its own address and saved login, one try; a recorder is never restarted. The same is in the right-click "
+                      + "Quick tools menu of a tile."
+                color: "#8898a6"
+                font.pixelSize: 9
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
     ColumnLayout {
         id: betweenColumn
         Layout.fillWidth: true

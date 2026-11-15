@@ -165,13 +165,20 @@ that report the feature.
 - **Built:** Quick tools > "Noise filter (camera sound)", a tick item that reads the camera when the menu opens, then
   flips it and reads it back. Hidden on a camera without the address (Doorbell, 192.168.20.156).
 
-### 9. [ ] Reboot camera
-- **Not yet tried.** The app has `ISAPI/System/reboot` (the newer one also takes a child-device ID for recorders).
-  Normally `PUT /ISAPI/System/reboot` with no body. The camera is off for about a minute and the stream drops.
-- **To decide:** a clear confirmation first, a wait-and-reconnect, and whether it can be used on the recorder itself.
-  Never run it on the Driveway camera (192.168.20.22), which was locked out earlier.
-- **Unverified:** the address, the empty body and the downtime come from general knowledge of Hikvision cameras, not
-  from a test.
+### 9. [x] Reboot camera - built, not yet tried on a real camera
+- **Built:** Quick tools > "Reboot Camera" (a tile's right-click menu) and Settings > Camera Tools > "Reboot a camera" (any camera in the
+  list, for one that is not on a tile). Both ask first ("Restart <name> (<ip>)? ... offline for a minute or two ... nothing is recorded
+  meanwhile"), then call `PUT /ISAPI/System/reboot` with no body on the camera's own address and saved login (never through a recorder),
+  one try, and a refused login is not tried again. Before sending, the camera is asked for `deviceInfo` and anything whose `deviceType`
+  contains NVR or DVR is refused (a recorder with one or two channels is listed like a camera, and it must never be restarted).
+- **Checked on the real cameras, read only:** a GET on `System/reboot` answers 403 `methodNotAllowed` on every camera (192.0.0.4, .30, .60,
+  .108, .150; 192.168.20.51, .66, .88, .90, .97, .137), which means the address exists and wants another method; the doorbell
+  (192.168.20.185) answers 404. No camera lists a "reboot supported" flag in `System/capabilities`, so the menu item shows on every camera.
+- **Tested with fakes on 127.0.0.1 only (the shipped `rebootOne` code in a test program):** accepted -> "started"; `notSupport` ->
+  "unavailable"; refused login -> stops after the first answer, no restart sent, no retry; a recorder's `deviceType` NVR -> refused, no PUT
+  sent. **No real camera has been restarted.**
+- **Not yet known:** whether each real camera really restarts from this call (the web page's own call is the same address), and how long each
+  takes to come back.
 
 ### 10. [ ] Event destination test - goes in Settings > Camera Tools, NOT BUILT (probably not useful)
 - **Found:** the app has `Event/notification/httpHosts` with a `.../httpHosts/<id>/test` call.

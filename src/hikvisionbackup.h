@@ -78,6 +78,9 @@ public:
     // The day that note was saved, like "14 Nov 2026" (empty when there is no note or it was saved before days were kept).
     // Saving a note again, even with the same version, sets it to today: that is how a note is marked as checked again.
     Q_INVOKABLE QString newestFirmwareDay(const QString &model) const;
+    // Restarts one camera (never a recorder) with the camera's own address and login. The caller must have asked the user first.
+    // One try; a refused login is not tried again. The answer comes in rebootResult().
+    Q_INVOKABLE void rebootCamera(const QString &ip);
     Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
@@ -106,6 +109,8 @@ signals:
     // One camera of checkHealthAll() has answered (same card as healthResult()).
     void healthAllItem(const QVariantMap &card);
     void healthAllFinished(const QString &summary, bool ok);
+    // state is "started" (accepted), "sent" (sent, no answer: a restarting camera may not answer), "unavailable" or "error".
+    void rebootResult(const QString &ip, const QString &state, const QString &message);
     void ruleLinesAllProgress(const QString &name, int done, int total);
     void ruleLinesAllFinished(const QString &summary, bool ok);
 

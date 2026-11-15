@@ -231,10 +231,37 @@ FocusScope {
         }
         HikvisionBackup.startWarning(ip);
     }
+    // Quick tools > Reboot Camera: asks first (the camera goes offline for a minute or two), then restarts only that camera.
+    property string rebootMenuIp: ""
+    property string rebootMenuName: ""
+    property bool rebootMenuLoading: false
+    function askReboot(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        rebootConfirm.camIp = ip;
+        rebootConfirm.camName = name || ip;
+        rebootConfirm.open();
+    }
+    function runReboot(ip, name) {
+        if (!ip || HikvisionBackup.ruleBusy)
+            return;
+        root.rebootMenuIp = ip;
+        root.rebootMenuName = name || ip;
+        rootWindow.showNotice(qsTr("Reboot camera") + "\n" + root.rebootMenuName + "\n" + qsTr("asking the camera..."), "#ff9f43", 0);
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.rebootMenuLoading = true;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
+        HikvisionBackup.rebootCamera(ip);
+    }
     Connections {
         target: HikvisionBackup
         function onCamerasLoaded(cameras) {
-            if (root.warnMenuLoading && root.warnMenuIp !== "") {
+            if (root.rebootMenuLoading && root.rebootMenuIp !== "") {
+                root.rebootMenuLoading = false;
+                HikvisionBackup.rebootCamera(root.rebootMenuIp);
+            } else if (root.warnMenuLoading && root.warnMenuIp !== "") {
                 root.warnMenuLoading = false;
                 HikvisionBackup.startWarning(root.warnMenuIp);
             } else if (root.strobeMenuLoading && root.strobeMenuIp !== "") {
@@ -304,6 +331,17 @@ FocusScope {
             var head = qsTr("Warning message") + "\n" + name + "\n";
             if (state === "started")
                 rootWindow.showNotice(head + message, "#00ff66", 6000);
+            else
+                rootWindow.showNotice(head + message, "#ff3333", 10000);
+        }
+        function onRebootResult(ip, state, message) {
+            if (root.rebootMenuIp === "" || ip !== root.rebootMenuIp)
+                return;
+            var name = root.rebootMenuName;
+            root.rebootMenuIp = "";
+            var head = qsTr("Reboot camera") + "\n" + name + "\n";
+            if (state === "started" || state === "sent")
+                rootWindow.showNotice(head + message, "#ff9f43", 12000);
             else
                 rootWindow.showNotice(head + message, "#ff3333", 10000);
         }
@@ -2149,6 +2187,42 @@ FocusScope {
                                     root.runWarning(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
+
+                        MenuItem {
+                            id: rebootMenuItem
+                            text: qsTr("Reboot Camera")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: rebootMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: rebootMenuItem.enabled ? (rebootMenuItem.hovered ? "#ff9f43" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: rebootMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: rebootMenuItem.hovered ? "#ff9f43" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Restart this camera. You are asked first. The camera is offline for a minute or two, so its video stops and nothing is recorded meanwhile. Only this camera is restarted, never the recorder.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.askReboot(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
                     }
 
                     Menu {
@@ -2576,6 +2650,18 @@ FocusScope {
                 addCameraDialog.targetIndex = d.focusIndex;
             }
         }
+    }
+
+    ConfirmDialog {
+        id: rebootConfirm
+        title: qsTr("Reboot camera")
+        iconSource: "qrc:/images/icon-warning.svg"
+        confirmButtonText: qsTr("Reboot")
+        property string camIp: ""
+        property string camName: ""
+        message: qsTr("Restart %1 (%2)?").arg(camName).arg(camIp) + "\n\n"
+                 + qsTr("The camera goes offline for a minute or two: its video stops and nothing is recorded from it meanwhile. Only this camera is restarted.")
+        onAccepted: root.runReboot(camIp, camName)
     }
 
     ConfirmDialog {
