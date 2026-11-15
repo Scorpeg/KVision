@@ -746,6 +746,7 @@ ColumnLayout {
     property var healthCard: ({})       // the last answer for the chosen camera, in the shape the setup check's list draws
     property string healthModel: ""     // its model, read by Check; empty until then
     property string healthNewest: ""    // the newest firmware the user noted for that model
+    property string healthNewestDay: "" // the day that note was saved, like "14 Nov 2026"
     Connections {
         target: HikvisionBackup
         function onHealthResult(card) {
@@ -756,6 +757,7 @@ ColumnLayout {
             rootPanel.healthCard = card;
             rootPanel.healthModel = card.model || "";
             rootPanel.healthNewest = rootPanel.healthModel !== "" ? HikvisionBackup.newestFirmware(rootPanel.healthModel) : "";
+            rootPanel.healthNewestDay = rootPanel.healthModel !== "" ? HikvisionBackup.newestFirmwareDay(rootPanel.healthModel) : "";
             newestField.text = rootPanel.healthNewest;
         }
     }
@@ -812,6 +814,7 @@ ColumnLayout {
                     rootPanel.healthCard = ({});
                     rootPanel.healthModel = "";
                     rootPanel.healthNewest = "";
+                    rootPanel.healthNewestDay = "";
                     newestField.text = "";
                 }
 
@@ -974,8 +977,9 @@ ColumnLayout {
 
                 Button {
                     id: noteSaveBtn
-                    text: qsTr("Save")
-                    enabled: rootPanel.healthModel !== "" && newestField.text.trim() !== rootPanel.healthNewest
+                    text: newestField.text.trim() === "" ? qsTr("Remove note")
+                          : (newestField.text.trim() === rootPanel.healthNewest ? qsTr("Confirm today") : qsTr("Save"))
+                    enabled: rootPanel.healthModel !== "" && (newestField.text.trim() !== "" || rootPanel.healthNewest !== "")
                     contentItem: Text {
                         text: noteSaveBtn.text
                         color: "white"
@@ -993,9 +997,10 @@ ColumnLayout {
                     onClicked: {
                         HikvisionBackup.setNewestFirmware(rootPanel.healthModel, newestField.text);
                         rootPanel.healthNewest = newestField.text.trim();
+                        rootPanel.healthNewestDay = HikvisionBackup.newestFirmwareDay(rootPanel.healthModel);
                         rootWindow.showNotice(rootPanel.healthNewest === ""
                             ? qsTr("Note removed for %1").arg(rootPanel.healthModel)
-                            : qsTr("Noted %1 as the newest firmware for %2").arg(rootPanel.healthNewest).arg(rootPanel.healthModel), "#00ff66", 5000);
+                            : qsTr("Noted %1 as the newest firmware for %2, checked by hand on %3").arg(rootPanel.healthNewest).arg(rootPanel.healthModel).arg(rootPanel.healthNewestDay), "#00ff66", 5000);
                         if (!HikvisionBackup.ruleBusy && healthCameraCombo.currentIndex >= 0)
                             HikvisionBackup.checkHealth(rootPanel.backupCameraModel[healthCameraCombo.currentIndex].ip);
                     }
@@ -1034,6 +1039,18 @@ ColumnLayout {
                     ToolTip.delay: 600
                     ToolTip.text: qsTr("Opens Hikvision's own search for this model in your browser. Find the model's page, read the current firmware version there, and type it here.")
                 }
+            }
+
+            Text {
+                visible: rootPanel.healthModel !== ""
+                text: rootPanel.healthNewest === "" ? qsTr("No newest firmware noted for this model yet.")
+                      : (rootPanel.healthNewestDay !== ""
+                         ? qsTr("Noted by hand: %1, last confirmed on %2. Press \"Confirm today\" after you look at Hikvision's page again.").arg(rootPanel.healthNewest).arg(rootPanel.healthNewestDay)
+                         : qsTr("Noted by hand: %1 (the day was not recorded). Press \"Confirm today\" after you look at Hikvision's page again.").arg(rootPanel.healthNewest))
+                color: rootPanel.healthNewest === "" ? "#ff6666" : "#8898a6"
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
             }
 
             Text {

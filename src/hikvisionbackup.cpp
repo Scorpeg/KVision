@@ -3,6 +3,7 @@
 #include "hikvisionmanager.h"
 #include "offlinerecorders.h"
 
+#include <QDate>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
@@ -416,6 +417,15 @@ struct HealthAnswer {
 };
 
 const char *kNewestFirmwareGroup = "NewestFirmware";
+// The day each note was typed in and saved (ISO text), under the same key. A note saved before this existed has no day.
+const char *kNewestFirmwareDateGroup = "NewestFirmwareDate";
+
+// "14 Nov 2026" from an ISO day (always English, like the rest of the check's text), or "" when there is none.
+QString niceDay(const QString &iso)
+{
+    const QDate d = QDate::fromString(iso, Qt::ISODate);
+    return d.isValid() ? QLocale::c().toString(d, QStringLiteral("d MMM yyyy")) : QString();
+}
 
 // The model name has a "/" in it (DS-2CD2387G3-LIS2UY/SL), which QSettings would read as a sub-group.
 QString newestKey(const QString &model)
@@ -480,8 +490,8 @@ QVariantMap healthCard(const HikvisionBackup::Cam &cam, const QVariantList &item
     r.insert(QStringLiteral("camPort"), cam.httpPort);
     r.insert(QStringLiteral("problems"), problems);
     r.insert(QStringLiteral("warnings"), warnings);
-    r.insert(QStringLiteral("summary"), shorts.isEmpty() ? QStringLiteral("Clock and firmware fine") : shorts.join(QStringLiteral(", ")));
-    r.insert(QStringLiteral("time"), QTime::currentTime().toString(QStringLiteral("hh:mm:ss")));
+    r.insert(QStringLiteral("summary"), shorts.isEmpty() ? QStringLiteral("Clock fine") : shorts.join(QStringLiteral(", ")));
+    r.insert(QStringLiteral("time"), QLocale::c().toString(QDateTime::currentDateTime(), QStringLiteral("d MMM yyyy hh:mm:ss")));
     r.insert(QStringLiteral("firmware"), firmware);
     r.insert(QStringLiteral("model"), model);
     r.insert(QStringLiteral("items"), items);
@@ -494,7 +504,7 @@ QVariantMap healthCard(const HikvisionBackup::Cam &cam, const QVariantList &item
 //   GET /ISAPI/System/time/ntpServers  (only to name the time server when the camera uses NTP)
 // A clock that is more than two minutes off is "warn": it makes event times wrong and can break the login of some
 // cameras. Nothing is ever written. A refused login is never retried.
-HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QString> &newest)
+HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QString> &newest, const QMap<QString, QString> &newestDay)
 {
     HealthAnswer a;
     // A card with a single line for a camera that could not be read at all.
@@ -533,6 +543,8 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
     QVariantList items;
     QStringList shorts;
     QStringList plain;
+    QString okShort; // the card's summary when nothing needs a look: says what the firmware was compared with
+    const QString checkedOn = QLocale::c().toString(QDate::currentDate(), QStringLiteral("d MMM yyyy"));
     auto add = [&](const QString &state, const QString &label, const QString &detail, const QString &shortText = QString()) {
         items << healthItem(state, label, detail);
         plain << QStringLiteral("%1: %2").arg(label, detail);
@@ -593,25 +605,40 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
         if (!model.isEmpty() && !fw.isEmpty()) {
             const QString note = newest.value(newestKey(model));
             const QString label = QStringLiteral("Newest firmware");
+            const QString noted = niceDay(newestDay.value(newestKey(model)));
+            // What the note is: typed in by hand, and when. It is the only source, so say so.
+            const QString how = noted.isEmpty() ? QStringLiteral("typed in by hand (day not recorded)")
+                                                : QStringLiteral("typed in by hand on %1").arg(noted);
             if (note.isEmpty()) {
                 add(QStringLiteral("problem"), label, QStringLiteral("none noted for this model yet (type it in Settings > Camera Tools)"),
                     QStringLiteral("No newest firmware noted"));
             } else {
                 const int cmp = compareVersions(fw, note);
-                if (cmp == -1)
-                    add(QStringLiteral("warning"), label, QStringLiteral("update may be available: newest noted for this model is %1, this camera has %2").arg(note, fw),
+                if (cmp == -1) {
+                    add(QStringLiteral("warning"), label,
+                        QStringLiteral("update may be available: the newest noted for this model is %1 (%2), this camera has %3. Checked %4.").arg(note, how, fw, checkedOn),
                         QStringLiteral("Update may be available"));
-                else if (cmp == 0)
-                    add(QStringLiteral("ok"), label, QStringLiteral("matches the newest noted for this model (%1)").arg(note));
-                else if (cmp == 1)
-                    add(QStringLiteral("note"), label, QStringLiteral("this camera is newer than the newest noted (%1): update the note").arg(note));
-                else
-                    add(QStringLiteral("note"), label, QStringLiteral("the newest noted (%1) could not be compared with %2").arg(note, fw));
+                } else if (cmp == 0) {
+                    add(QStringLiteral("ok"), label,
+                        QStringLiteral("matches %1, the newest noted for this model (%2). That is your own note, not a check with Hikvision. Checked %3.").arg(note, how, checkedOn));
+                    okShort = noted.isEmpty() ? QStringLiteral("Clock fine, firmware matches your note")
+                                              : QStringLiteral("Clock fine, firmware matches your note of %1").arg(noted);
+                } else if (cmp == 1) {
+                    add(QStringLiteral("note"), label,
+                        QStringLiteral("this camera is newer than the newest noted (%1, %2): update the note. Checked %3.").arg(note, how, checkedOn));
+                    okShort = QStringLiteral("Clock fine, firmware newer than your note");
+                } else {
+                    add(QStringLiteral("note"), label,
+                        QStringLiteral("the newest noted (%1, %2) could not be compared with %3. Checked %4.").arg(note, how, fw, checkedOn));
+                    okShort = QStringLiteral("Clock fine, firmware not compared");
+                }
             }
         }
     } else {
         add(QStringLiteral("warning"), QStringLiteral("Firmware"), QStringLiteral("could not be read (HTTP %1)").arg(ic), QStringLiteral("Firmware not read"));
     }
+    if (shorts.isEmpty() && !okShort.isEmpty())
+        shorts << okShort;
     a.message = plain.join(QLatin1Char('\n'));
     a.result = healthCard(cam, items, shorts, model, fw);
     return a;
@@ -1000,6 +1027,23 @@ QMap<QString, QString> HikvisionBackup::readNewestFirmware() const
     return out;
 }
 
+QMap<QString, QString> HikvisionBackup::readNewestFirmwareDays() const
+{
+    QMap<QString, QString> out;
+    if (m_configPath.isEmpty())
+        return out;
+    QSettings s(m_configPath, QSettings::IniFormat);
+    s.beginGroup(QLatin1String(kNewestFirmwareDateGroup));
+    for (const QString &k : s.childKeys())
+        out.insert(k, s.value(k).toString().trimmed());
+    return out;
+}
+
+QString HikvisionBackup::newestFirmwareDay(const QString &model) const
+{
+    return niceDay(readNewestFirmwareDays().value(newestKey(model)));
+}
+
 QString HikvisionBackup::newestFirmware(const QString &model) const
 {
     return readNewestFirmware().value(newestKey(model));
@@ -1011,10 +1055,20 @@ void HikvisionBackup::setNewestFirmware(const QString &model, const QString &ver
         return;
     QSettings s(m_configPath, QSettings::IniFormat);
     s.beginGroup(QLatin1String(kNewestFirmwareGroup));
-    if (version.trimmed().isEmpty())
+    s.endGroup();
+    s.beginGroup(QLatin1String(kNewestFirmwareDateGroup));
+    s.remove(newestKey(model));
+    s.endGroup();
+    s.beginGroup(QLatin1String(kNewestFirmwareGroup));
+    if (version.trimmed().isEmpty()) {
         s.remove(newestKey(model));
-    else
+    } else {
+        // Saving again, even the same version, records today as the day it was checked by hand.
         s.setValue(newestKey(model), version.trimmed());
+        s.endGroup();
+        s.beginGroup(QLatin1String(kNewestFirmwareDateGroup));
+        s.setValue(newestKey(model), QDate::currentDate().toString(Qt::ISODate));
+    }
     s.sync();
 }
 
@@ -1046,8 +1100,9 @@ void HikvisionBackup::checkHealth(const QString &ip)
         m_ruleWorker->deleteLater();
     }
     const QMap<QString, QString> newest = readNewestFirmware();
-    m_ruleWorker = QThread::create([this, found, newest]() {
-        const HealthAnswer a = healthOne(found, newest);
+    const QMap<QString, QString> newestDay = readNewestFirmwareDays();
+    m_ruleWorker = QThread::create([this, found, newest, newestDay]() {
+        const HealthAnswer a = healthOne(found, newest, newestDay);
         QMetaObject::invokeMethod(this, [this, found, a]() {
             qInfo() << "[Health]" << found.ip << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
             m_ruleBusy = false;
@@ -1074,7 +1129,8 @@ void HikvisionBackup::checkHealthAll()
         m_ruleWorker->deleteLater();
     }
     const QMap<QString, QString> newest = readNewestFirmware();
-    m_ruleWorker = QThread::create([this, cams, newest]() {
+    const QMap<QString, QString> newestDay = readNewestFirmwareDays();
+    m_ruleWorker = QThread::create([this, cams, newest, newestDay]() {
         int good = 0, needLook = 0;
         QSet<QString> refusedLogins;
         int n = 0;
@@ -1090,7 +1146,7 @@ void HikvisionBackup::checkHealthAll()
                 QMetaObject::invokeMethod(this, [this, cam, n, total = int(cams.size())]() {
                     emit healthAllProgress(cam.name, n, total);
                 }, Qt::QueuedConnection);
-                a = healthOne(cam, newest);
+                a = healthOne(cam, newest, newestDay);
                 if (a.refused && !login.isEmpty())
                     refusedLogins.insert(login);
             }

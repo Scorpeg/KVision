@@ -192,6 +192,10 @@ that report the feature.
   orange for "update may be available" or a clock that is off, and red for "none noted for this model yet" (the setup check's
   "problem" state, which also turns the card's dot red). The Check all window and the single-check box both embed that list, so
   there is no separate card or colour code. Each card also has "Open camera web page" and "Check this camera again".
+  A matching firmware is not called "fine": the summary reads "Clock fine, firmware matches your note of <day>", and the
+  line says the note was typed in by hand on that day and is not a check with Hikvision, plus the day of the check. The day is saved
+  with each note (`NewestFirmwareDate` in the config file, ISO text; a note saved before this has no day and says so). Save records
+  today; "Confirm today" renews it for the same version; an empty field shows "Remove note".
   The versions are compared number by number (V5.8.9 is older than V5.8.40). It always says "may be", never "is".
 - **Tested:** the comparison and the per-model storage (model names contain "/", which is stored as "|") with a small test program
   (10 version cases, all as expected); the box itself has not been tried by a person yet.

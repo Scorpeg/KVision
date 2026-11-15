@@ -75,6 +75,9 @@ public:
     // An empty version removes the note. Stored in the config file under NewestFirmware.
     Q_INVOKABLE QString newestFirmware(const QString &model) const;
     Q_INVOKABLE void setNewestFirmware(const QString &model, const QString &version);
+    // The day that note was saved, like "14 Nov 2026" (empty when there is no note or it was saved before days were kept).
+    // Saving a note again, even with the same version, sets it to today: that is how a note is marked as checked again.
+    Q_INVOKABLE QString newestFirmwareDay(const QString &model) const;
     Q_INVOKABLE int cameraCount() const { return m_cams.size(); }
     // The same for every camera of the loaded list, one after the other. A camera without the switch is skipped and
     // counted; a login that one camera refused is not sent to another. The result comes in ruleLinesAllFinished().
@@ -125,6 +128,7 @@ private:
     void runNoiseFilter(const QString &ip, int mode);
     void runStrobe(const QString &ip, int mode, bool siren = false);
     QMap<QString, QString> readNewestFirmware() const;
+    QMap<QString, QString> readNewestFirmwareDays() const;
     void runRuleLinesAll(int mode);
     void startLoad(const QByteArray &json, const QString &configPath);
     void start(const QList<Cam> &cams, bool single, const QString &overrideUser, const QString &overridePass);
