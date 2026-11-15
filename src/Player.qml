@@ -1237,6 +1237,10 @@ FocusScope {
                  : (root.targetType === "vehicle" ? qsTr("VEHICLE")
                  : (root.targetType === "animal" ? qsTr("ANIMAL") : qsTr("MOTION")));
         var kind = root.targetSource;
+        // A rule (line, intrusion...) that fired on a target the camera could not classify says OTHER, as the detection
+        // log does, so it is not mistaken for the plain motion report.
+        if (root.targetType === "other" && kind !== "" && kind !== "MOTION")
+            base = qsTr("OTHER");
         if (kind === "MOTION" && base === qsTr("MOTION"))
             kind = "";
         return base + (kind !== "" ? sep + kind : "");
