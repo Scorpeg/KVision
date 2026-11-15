@@ -191,6 +191,8 @@ private:
     // Returns true if a whole picture was there (so the event is done with).
     bool judgePicture(Conn *c, const QByteArray &data);
     // Remembers the target rectangle an event names, so the picture that follows it can be judged.
+    // A "facedetection" report: logged, a still taken, and a label shown on the tile (it has no box to frame).
+    void handleFace(Conn *c, const QString &ip, const QString &body, const QString &cameraTime, int eventChannel);
     void notePictureRect(Conn *c, const QString &body, int eventChannel, const QString &cameraTime, const QString &kind);
     // A recorder sends a link to the picture instead of the picture. Downloads it with the connection's login
     // (one try, and only from the connection's own address), then keeps and judges it like an attached one.

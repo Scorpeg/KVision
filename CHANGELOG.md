@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+* **Face detection reports are used.** A camera with face detection on (a DS-2CD2483G2-I did) sends "facedetection" while a face is in view. KVision used to put it in the "unrecognised events" log. Now the first report of a run is written to the detection log as "Face detected, Face detection" with a still picture (taken from the camera, or the recorder when that is the chosen event source), the tile shows a purple "FACE DETECTED" label for the usual hold time, and the Detection Log window can filter on "Face detection". The report names no box, so there is no frame around the face. The label follows the "Other smart events" and "Other" target choices.
 * **Quick tools has three new camera controls.** Each shows only on a camera that reports the feature, and each changes only the camera you right-clicked.
   * **Noise filter (camera sound):** the camera's own "Environmental Noise Filtering" switch (web page: Video/Audio > Audio). It shows a tick when on. The camera is read when the menu opens, the switch is set the other way, and the notice says what the camera now reports. It is an on/off switch; the 0 to 5 levels in Hik-Connect are a filter in the phone app and are not on the camera.
   * **Activate Flashing Light:** makes the camera's built-in light flash, and the camera stops it by itself after its own programmed time. Some newer cameras (a G3 was tried) accept the command but have no on-demand strobe, so nothing flashes there; the tooltip says so.

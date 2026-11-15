@@ -96,8 +96,12 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
       `facedetection-1` trigger with only "record" and "center" actions. The event text has no target box and no picture:
       `<eventType>facedetection</eventType>`, `<eventState>active</eventState>`, `<eventDescription>facedetection alarm</eventDescription>`,
       the channel and the time, nothing else. So KVision can log it and flash the tile, but cannot draw a face frame from it.
-      **Not done:** KVision still files it as "Unrecognised event" (`vcaKind()` in `hikvisionevents.cpp` does not know
-      `facedetection`). Idea: log it as "Face detected" in Detection.log and show a tile notice, with no frame.
+      **Built (tested with a fake camera, not yet with the real one):** `handleFace()` in `hikvisionevents.cpp` writes the first
+      report of a run to Detection.log as `Face detected, Face detection, <camera>` (the next line only after 10 s without one, like
+      plain motion), takes a still from whichever device is the camera's chosen event source (the camera today; the recorder when the
+      source is set to NVR), and shows a purple "FACE DETECTED" label on the tile for the usual hold time, with no frame. It follows
+      the "Other smart events" and "Other" target choices. The Detection Log window has a "Face detection" type. Not tried with the real
+      camera or with the NVR as the source (that picture would be the recorder's smaller still).
 - [ ] **Audio at the Front Door does not sound by day.** The likely cause is the camera's own audible alarm hours
       (00:00-05:45, 21:00-24:00). Not tested by triggering the event by day and by night. The other cameras with limited
       hours are in the all-cameras table (orange).

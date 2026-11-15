@@ -815,7 +815,7 @@ FocusScope {
     // seconds after each report. Only standalone cameras are watched for now; a camera behind a
     // recorder is reached through the recorder, which does not stream these events per camera.
     property string targetType: ""
-    property string targetSource: "" // MOTION, LINE, INTRUSION, ENTER or EXIT: the kind of report behind the frame
+    property string targetSource: "" // MOTION, LINE, INTRUSION, ENTER, EXIT or FACE: the kind of report behind the frame
     property bool targetWatching: false
     readonly property bool targetWanted: (typeof generalSettings !== "undefined") && generalSettings.showTargetIndicator
                                           && root.isHikvision && !root.isQuickPlayback && root.recorderIp !== ""
@@ -1231,6 +1231,8 @@ FocusScope {
     // The words on the frame: the target, then what kind of report it was, e.g. "HUMAN \u2013 LINE" or
     // "HUMAN \u2013 MOTION". A target the camera did not name reads just "MOTION", not "MOTION - MOTION".
     function targetCaption(sep) {
+        if (root.targetType === "face")
+            return qsTr("FACE DETECTED"); // a face report names no box and no target kind
         var base = root.targetType === "human" ? qsTr("HUMAN")
                  : (root.targetType === "vehicle" ? qsTr("VEHICLE")
                  : (root.targetType === "animal" ? qsTr("ANIMAL") : qsTr("MOTION")));
@@ -1739,7 +1741,7 @@ FocusScope {
             // tiles (still readable). They never grow beyond full size.
             readonly property real labelScale: Math.max(0.55, Math.min(1.0, 0.4977 + height * 0.000773))
             border.width: Math.max(2, Math.round(4 * labelScale))
-            border.color: root.targetSource === "TRACKING" ? "#ffb703" : (root.targetType === "human" ? "#ff5a36" : (root.targetType === "vehicle" ? "#2d8cff" : "#2ecc71"))
+            border.color: root.targetSource === "TRACKING" ? "#ffb703" : (root.targetType === "face" ? "#b45cff" : root.targetType === "human" ? "#ff5a36" : (root.targetType === "vehicle" ? "#2d8cff" : "#2ecc71"))
             visible: root.targetType !== ""
             opacity: visible ? 1.0 : 0.0
 

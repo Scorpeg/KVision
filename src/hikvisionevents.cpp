@@ -285,6 +285,10 @@ void HikvisionEvents::onReadyRead(const QString &ip)
         const int camChannel = chanRx.match(body).captured(1).toInt();
         if (!sourceAllowed(c, camChannel))
             continue; // this camera's reports are taken from the other connection (the camera's own, or the recorder's)
+        if (type == QLatin1String("facedetection")) {
+            handleFace(c, ip, body, camTime, camChannel);
+            continue;
+        }
         if (type != QLatin1String("VMD")) {
             // A smart event (line crossing, intrusion, region entrance or exit...). The camera names
             // the target inside the rule. All of them go to the detection log and show the tile's
@@ -382,6 +386,33 @@ void HikvisionEvents::onReadyRead(const QString &ip)
         c->jsonScanned = qMax(0, c->jsonScanned - consumed);
     }
     judgePicture(c, c->buffer);
+}
+
+// A camera with face detection on sends "facedetection" while a face is in view, about once a second. The report names no box and
+// brings no picture, so there is nothing to frame. The first one of a run is written to the detection log (the next line only after
+// kMotionQuietMs without one) and a still is taken from the device that sent it (the camera or the recorder, whichever is the
+// camera's chosen event source; sourceAllowed() has already dropped the other connection's copy); every one keeps the tile's "FACE DETECTED" label up.
+// It follows the "Other smart events" and "Other" target choices of the on-screen settings, which are on unless switched off.
+void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body, const QString &cameraTime, int eventChannel)
+{
+    static const QRegularExpression stateRx(QStringLiteral("<eventState>([^<]*)</eventState>"));
+    if (stateRx.match(body).captured(1) != QLatin1String("active"))
+        return;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const QString key = ip + QStringLiteral("|face|") + QString::number(eventChannel);
+    const qint64 lastMs = m_motionSeen.value(key, 0);
+    m_motionSeen.insert(key, nowMs);
+    if (nowMs - lastMs >= kMotionQuietMs) {
+        logDetection(c, QStringLiteral("face"), QStringLiteral("Face detection"), cameraTime, eventChannel);
+        QDateTime when = QDateTime::fromString(cameraTime, Qt::ISODate);
+        if (!when.isValid())
+            when = QDateTime::currentDateTime();
+        takeSnapshot(ip, eventChannel > 0 ? eventChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Face detection"));
+    }
+    if (!m_allowedKinds.contains(QStringLiteral("other")) || !m_allowedTargets.contains(QStringLiteral("other")))
+        return; // other smart events, or the "other" target, are switched off for the screen
+    qDebug() << "[Events] face from" << ip << "channel" << eventChannel;
+    emit targetDetected(ip, QStringLiteral("face"), QStringLiteral("FACE"), eventChannel);
 }
 
 void HikvisionEvents::notePictureRect(Conn *c, const QString &body, int eventChannel, const QString &cameraTime, const QString &kind)

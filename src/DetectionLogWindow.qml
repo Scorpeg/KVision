@@ -58,6 +58,7 @@ Window {
         { "label": qsTr("Region exit"), "kinds": "Region exit" },
         { "label": qsTr("Tracking"), "kinds": "Tracking" },
         { "label": qsTr("Motion"), "kinds": "Motion" },
+        { "label": qsTr("Face detection"), "kinds": "Face detection" },
         { "label": qsTr("Other smart events"), "kinds": "Loitering,People gathering,Rapid movement,Parking,Unattended object,Object removed" }
     ]
 
@@ -528,7 +529,7 @@ Window {
 
     function targetColor(target) {
         var t = String(target).toLowerCase();
-        return t === "human" ? "#ff5a36" : (t === "vehicle" ? "#2d8cff" : "#2ecc71");
+        return t === "human" ? "#ff5a36" : (t === "vehicle" ? "#2d8cff" : (t === "face" ? "#b45cff" : "#2ecc71"));
     }
 
     onVisibleChanged: {
