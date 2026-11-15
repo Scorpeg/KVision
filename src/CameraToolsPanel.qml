@@ -1023,7 +1023,14 @@ ColumnLayout {
                         radius: 4
                         opacity: notePageBtn.enabled ? 1.0 : 0.4
                     }
-                    onClicked: Qt.openUrlExternally("https://www.hikvision.com/en/search/?keyword=" + encodeURIComponent(rootPanel.healthModel))
+                    onClicked: {
+                        // The search wants keyword, q and active=Products (an address that works: ...?keyword=ds-2cd2347&q=ds-2cd2347&active=Products).
+                        // The term is the start of the model name, up to its first run of three or more digits (DS-2CD2347G2-LSU/SL
+                        // gives ds-2cd2347), like that address: the full name with its G2-LSU/SL ending may find nothing.
+                        var m = /^[A-Za-z0-9-]*?\d{3,}/.exec(rootPanel.healthModel);
+                        var term = encodeURIComponent((m ? m[0] : rootPanel.healthModel.split("/")[0]).toLowerCase());
+                        Qt.openUrlExternally("https://www.hikvision.com/en/search/?keyword=" + term + "&q=" + term + "&active=Products");
+                    }
                     ToolTip.visible: hovered
                     ToolTip.delay: 600
                     ToolTip.text: qsTr("Opens Hikvision's own search for this model in your browser. Find the model's page, read the current firmware version there, and type it here.")
