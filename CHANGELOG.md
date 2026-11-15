@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 ### Changed
 * **`./install.sh --update` restarts the background detection logger** when it is running, so it does not keep running the old build after an update. Nothing happens when the logger is not installed or not running. KVision itself still has to be closed and reopened.
 
+### Documentation
+* **User manual brought up to date** (the Instructions button). Three new sections: the right-click menu and Quick tools, detection events (tile labels, settings, the log window and its files), and Camera Tools. Fixed what no longer matched the program: the options window's tabs (Viewport Details and Layout tools are a dialog and a window, not tabs; Import / Export was missing), the language choice (English only), the default snapshot and video folders (`~/Pictures/CCTV`, `~/Videos/CCTV`), and leftover Polish button names. Removed the note that the manual is machine translated.
+
 ## [3.7.0] - 14 Nov 2026
 
 ### Added

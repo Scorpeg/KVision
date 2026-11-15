@@ -5,10 +5,7 @@
 > [!TIP]
 > **Support KVision:** If you find this software useful and enjoy using it, you can support its development by [buying me a coffee](https://buymeacoffee.com/arkanis)! ☕
 
-> [!NOTE]
-> This instruction manual has been automatically translated and formatted with the assistance of Artificial Intelligence (AI).
-
-**KVision** is an advanced VMS (Video Management System) class desktop application designed for simultaneous viewing of live video streams (RTSP/ONVIF) and integration with Hikvision NVR/DVR recorders (both in Live mode and Playback archive mode).
+**KVision** is a Linux desktop viewer for Hikvision cameras and NVR/DVR recorders. It shows many live video streams (RTSP/ONVIF) at once, plays back recordings from the recorder, and listens to the cameras' detection reports (people, vehicles, line crossing, intrusion and more) to draw a frame on the tile and keep a log with pictures.
 
 The program has been optimized for stability, smooth operation (60 FPS), and minimal system resource consumption.
 
@@ -26,6 +23,9 @@ The program has been optimized for stability, smooth operation (60 FPS), and min
 9. [Advanced Settings and Customization in Options Window](#9-advanced-settings-and-customization-in-options-window)
 10. [Keyboard Shortcuts and Mouse Controls](#10-keyboard-shortcuts-and-mouse-controls)
 11. [Taking Snapshots and Path Configuration](#11-taking-snapshots-and-path-configuration)
+12. [The Right-Click Menu and Quick Tools](#12-the-right-click-menu-and-quick-tools)
+13. [Detection Events: Frames, Log and Pictures](#13-detection-events-frames-log-and-pictures)
+14. [Camera Tools (Backup, Clock, Firmware, Reboot)](#14-camera-tools-backup-clock-firmware-reboot)
 
 ---
 
@@ -258,7 +258,7 @@ The main window of the program displays the live feed:
 * **Multi-Monitor & Auxiliary Windows**: You can open independent additional (auxiliary) windows to run different grid layouts simultaneously on multiple screens or monitors. To open a new window, use the `Ctrl+N` keyboard shortcut, or click the **"New Window"** button on the hover-slide top toolbar. Each window can be configured with its own grid size and selected preset layout. To ensure maximum stability on multi-monitor configurations, all windows strictly launch centered on the primary display at 90% of its resolution.
 
 ### Viewport Overlay Buttons
-In the bottom-right corner of each camera tile/viewport, a control panel with five functional icons is displayed when hovering the mouse cursor over it (depending on UI preferences):
+In the bottom-right corner of each camera tile/viewport, a control panel with five functional icons is displayed when hovering the mouse cursor over it (depending on UI preferences). A camera that supports them also shows a **microphone** button (hold it to talk through the camera's speaker; right-click it for the speaker volume, which is saved on the camera) and a **PTZ** button that opens the pan/tilt/zoom pad with presets:
 1. **Camera Icon (Snapshot)**: Allows you to take a screenshot from the camera feed. The snapshot is saved in the full, native resolution of the stream directly from the decoder frame buffer, avoiding any losses due to the current size of the viewport tile or screen resolution scaling. Successful snapshot saving is confirmed by the camera icon flashing orange (`#ff7a00`) for exactly 1 second.
 2. **Play Icon (Archive)**: Used to quickly open the recordings archive. Clicking this button automatically launches the timeline `PlaybackWindow` for this specific camera, starting the playback **exactly 15 minutes before the current system time** (a convenient quick backward offset).
 3. **Circular Arrow Icon (Quick Playback / Miniplayer)**: Activates a quick in-viewport playback of camera archive recordings from the last 30 minutes directly inside the camera tile without leaving the live grid or launching the full archive window.
@@ -291,11 +291,11 @@ The top sliding toolbar provides a comprehensive set of navigation and applicati
 2. **Pin Button**: Controls the auto-hiding behavior of the top toolbar. When the pin is pointing vertically (pinned state), the bar is locked in place and remains permanently visible. When the pin is rotated by -45 degrees (unpinned state), the bar automatically slides upward out of view when the mouse leaves its area.
 3. **Full Screen (Green Arrows Icon)**: Instantly switches the active window into fullscreen mode and back. In fullscreen mode, the arrows point inward (collapse), and in windowed mode, they point outward (expand).
 4. **Minimize (Cyan Minimization Icon)**: Minimizes the application window to the taskbar. Restoring it returns the window to its exact previous state (e.g. maximized or fullscreen).
-5. **⚙️ OPTIONS (OPCJE)**: Toggles the configuration options window. If the window is already open, clicking this button closes it.
-6. **📺 NEW WINDOW (NOWE OKNO)**: Opens a new, independent, and fully configurable `Auxiliary Window`, perfect for expanding your camera layouts across multiple monitor setups.
+5. **⚙️ OPTIONS**: Toggles the configuration options window. If the window is already open, clicking this button closes it.
+6. **📺 NEW WINDOW**: Opens a new, independent, and fully configurable `Auxiliary Window`, perfect for expanding your camera layouts across multiple monitor setups.
 7. **ARCHIVE**: Opens an empty `PlaybackWindow` (recordings player) with active timeline and calendar, allowing manual stream and camera channel selections from any configured NVR via the sidebar list.
-8. **INSTRUCTIONS (INSTRUKCJA)**: Opens this manual window, loading the complete user documentation in English or Polish depending on your active locale.
-9. **📊 STATS (STATYSTYKI) Switch**: Toggle switch to slide out the System Statistics monitoring panel from the left screen edge.
+8. **INSTRUCTIONS**: Opens this manual window (the yellow book button).
+9. **📊 STATS Switch**: Toggle switch to slide out the System Statistics monitoring panel from the left screen edge.
 10. **Grid Lock Switch (Padlock)**: Switch that, when turned ON (highlighted in bright orange), disables grid-resizing actions on the adjacent grid buttons, protecting your active camera layout from accidental changes.
 11. **Grid Size Selectors (from 1x1 to 9x9)**: A row of nine buttons that lets you instantly define the row and column structure of your viewport (from a single camera 1x1 view up to 81 simultaneous camera feeds in a 9x9 layout). The currently active size highlights in bright orange.
 12. **More Options (Hamburger Menu with three lines)**: Button opening the sliding `Layout & Grid Tools` toolbox for advanced grid tuning, geometry adjustments, and debugging options (detailed below).
@@ -308,7 +308,7 @@ Opening the Hamburger (More Options) menu brings up a specialized layout toolbox
 3. **Geometry Ratios**: Allows forcing the grid display to specific aspect ratios:
    * **16:9 Aspect Ratio**: Locks and scales the grid container to widescreen 16:9 format (standard for modern IP cameras).
    * **4:3 Aspect Ratio**: Adapts the grid container to the traditional 4:3 ratio (common in legacy analog/IP cameras).
-4. **Grid Operations (Merge Highlighted Cells)**: Access the asymmetric cell merging feature (detailed in Section 9.2).
+4. **Grid Operations (Merge Highlighted Cells)**: Access the asymmetric cell merging feature (detailed in Section 9, item 2).
 
 ---
 
@@ -378,50 +378,53 @@ From the Playback Archive window, you can download selected segments of recordin
 
 ## 9. Advanced Settings and Customization in Options Window
 
-The options and configuration window (`SideBar`) consists of six dedicated tabs:
+The options window (`SideBar`, opened with the **Options** button) shows five tabs: **Recorders**, **Presets**, **Settings**, **Import / Export** and **Changelog**. The two items numbered 1 and 2 below are not tabs: the viewport settings are a dialog opened from a tile's right-click menu (**Quick tools > Change settings**), and the layout tools are the window opened by the hamburger button on the top bar.
 
-### 1. Viewport Details (Monitor Icon)
-Displays advanced parameters of the currently selected grid tile. Allows you to:
-* Type a custom **Primary Stream URL** (RTSP/ONVIF) and a **Secondary Backup URL** for manual configurations.
-* Toggle muting/unmuting the audio channel of the selected camera feed.
-* Input advanced decoder overrides in the **FFmpeg Options Override** text box.
+### 1. Viewport Settings (right-click a tile > Quick tools > Change settings)
+A dialog for the selected tile. It has:
+* **Active Stream Connection**: the **Primary Stream URL** (RTSP/ONVIF) and a **Secondary Backup URL** for manual configurations. A camera that came from a recorder fills these in for you.
+* **Channel Options**: the **FFmpeg options** for this tile, and a tick box that leaves this tile out of global FFmpeg changes.
   > [!TIP]
   > For the fastest stream connection and maximum stability over RTSP, the recommended parameters are:
   > ```ini
   > -analyzeduration 0 -probesize 500000 -fflags nobuffer -flags low_delay -rtsp_transport tcp
   > ```
+  > See the note on `-analyzeduration` under Settings below before using `0` on streams that have no audio.
+* Muting and unmuting a tile is done with the **M** key or the speaker button on the tile, not in this dialog.
 
-### 2. Layout & Grid Tools (Sliders Icon)
-Advanced screen grid customization options:
-* Quick toggle for Full Screen mode.
-* **Asymmetric Cell Merging (Merge Highlighted Cells)**: A highly advanced layout editor. Hold **Ctrl** or **Shift** and click to select multiple adjacent tiles on the grid, or use your keyboard by holding **Shift** and navigating with the **Arrow keys**, then click "Merge Highlighted Cells" to fuse them into a single larger viewport. This allows you to create fully custom asymmetric grid designs (e.g., one huge camera panel with smaller feeds surrounding it).
+### 2. Layout & Grid Tools (hamburger button on the top bar)
+A window with three groups: **Window Division**, **Geometry Ratio** and **Grid Operations**. Turn on its unlock switch first. See Section 5 for the details.
+* **Asymmetric Cell Merging (Merge Highlighted Cells)**: Hold **Ctrl** or **Shift** and click to select several adjacent tiles, or hold **Shift** and use the **Arrow keys**, then click "Merge Highlighted Cells" to join them into one larger tile. This allows asymmetric layouts, for example one large camera with smaller feeds around it.
 
-### 3. Recorders (Server Icon)
+### 3. Recorders tab (Server Icon)
 Full configuration manager for connections to Hikvision NVR/DVR devices (described in detail in Section 3).
 
-### 4. Presets (Star Icon)
+### 4. Presets tab (Star Icon)
 Manager for your saved grid layouts and camera assignments. Allows creating empty grid templates, changing their order, toggling their top-bar visibility (via the "Visible" switch), or activating them in the current window.
 
-### 5. Settings (Gear Icon)
-Allows adjusting global application settings:
+### 5. Settings tab (Gear Icon)
+This page has six sections, chosen with the buttons along its top: **Detection**, **NVR**, **Cameras and display**, **Audio**, **General** and **Camera Tools**. Detection is described in Section 13 and Camera Tools in Section 14. Global application settings include:
 * **Allow running multiple instances**: Checking this box allows launching multiple parallel copies of the KVision process (by default, it restricts runs to a single active instance).
 * **Auto-collapse settings**: Customizes sliding animation timing for the top bar and statistics panel.
 * **Allow swapping viewports**: The checkbox *„Allow swapping viewport places”* enables you to rearrange camera positions on the grid on the fly (Right-click source tile -> Choose "Swap viewports" -> Left-click target tile).
 * **Right-click permissions**: Switches to lock/unlock interactive controls in the right-click context menu (Enable context menu, Allow swapping viewports, Enable 'Remove camera' option, Allow changing viewport settings, Enable stream Main/Sub quality selection).
 * **Auto Unmute**: Automatically unmutes the audio stream of the active viewport when entering Full Screen mode.
 * **Hide Cursor in Full Screen**: The checkbox *„Hide cursor in full screen mode”* automatically hides the mouse cursor after a brief inactivity period during fullscreen viewing to ensure an unobstructed view.
-* **Language selection**: Instantly switches interface translation (System default, Polish, English).
+* **Language selection**: Interface language. English is the only language shipped in this version, so the choice has no other effect.
 * **UI Preferences**: Hide/show viewport status labels or control badges (such as auto-hiding the control overlays in the bottom right corner of tiles unless hovering).
 * **Default FFmpeg Options & Bulk Update**: Allows configuring global FFmpeg options applied to new viewports (recommended: `-analyzeduration 100000 -probesize 500000 -fflags nobuffer -flags low_delay`).
   * > **[RECOMMENDATION]** If you are migrating from an older version of KVision (prior to v2.4.5), it is highly recommended to change `-analyzeduration 0` to `-analyzeduration 100000` in the global settings and click "Update all cameras". Setting `0` on streams without an audio track causes delays in switching because FFmpeg will block for a hardcoded 5-second timeout waiting for audio packets. Setting a very low value (e.g., 100000 microseconds = 0.1s) completely resolves this issue while maintaining instant switching.
-  * **Update all cameras button**: The button *„Zaktualizuj wszystkie kamery”* applies these global options to all configured viewports.
+  * **Update all cameras button**: The **Update all cameras** button applies these global options to all configured viewports.
   * **Low-latency flags (`nobuffer`, `low_delay`)**:
     * `-fflags nobuffer` disables internal demuxer packet buffering to eliminate streaming lag over time, but might cause stuttering if your network connection to the camera is unstable.
     * `-flags low_delay` tells the decoder to output frames immediately, but can cause brief artifacts/smearing in streams that use B-frames under rapid movements.
-  * **Override checkbox**: You can exclude specific viewports from global updates or dynamic defaults by checking **"Nie uwzględniaj zmian w globalnych ustawieniach FFMpeg"** in the individual Viewport Settings dialog. Useful for troubleshooting stuttering cameras.
+  * **Override checkbox**: You can exclude specific viewports from global updates or dynamic defaults by ticking the option that leaves out global FFmpeg changes in the individual Viewport Settings dialog. Useful for troubleshooting stuttering cameras.
 
 
-### 6. Changelog (Clock/Document Icon)
+### 6. Import / Export tab
+Saves your recorders, layouts and settings to a configuration file (`.conf` / `.ini`) and loads one back. Snapshot and video paths are adapted to this computer on import. **Open configuration folder** opens the folder where KVision keeps its settings, logs and event pictures (`~/.config/KVision`).
+
+### 7. Changelog tab (Clock/Document Icon)
 Presents an interactive timeline showing the complete release history, updates, bug fixes, and feature additions of KVision, ensuring you have direct access to program updates details.
 
 ---
@@ -471,16 +474,87 @@ The application allows you to quickly capture high-quality snapshots from any ca
 
 ### Saving Path Configurations:
 1. Go to the **Settings** tab (gear icon in the options window).
-2. Under the **Saving** ("Zapis") section, you can configure the default paths:
-   * **Default snapshots path**: Folder where snapshots will be saved (defaults to `~/Obrazy/CCTV`).
-   * **Default recordings path**: Folder where downloaded MP4 videos will be saved (defaults to `~/Wideo/CCTV`).
+2. Under the **Saving** section, you can configure the default paths:
+   * **Default snapshots path**: Folder where snapshots will be saved (defaults to `~/Pictures/CCTV`).
+   * **Default recordings path**: Folder where downloaded MP4 videos will be saved (defaults to `~/Videos/CCTV`).
 3. Clicking the `...` browser button opens your operating system's native folder selector (Breeze in KDE).
 4. **Browser Button Behavior**: The directory picker opens precisely at the path typed in the text field (if it exists). If the field is empty, invalid, or pointing to a folder you don't have access to, the dialog falls back and opens at your home directory (`~/`).
 
 ### User Interface Settings (UI):
-1. Go to the **Settings** tab (gear icon in the options window) or open the **Options** ("Opcje") window.
-2. In the **User Interface Settings** section, you can customize the visibility of elements overlaid on the camera kafelki/viewports:
+1. Go to the **Settings** tab (gear icon in the options window) or open the **Options** window.
+2. In the **User Interface Settings** section, you can customize the visibility of elements overlaid on the camera tiles:
    * **Show channel status in the top left corner of the viewport** (default enabled) — Displays stream loading, playing, and connection status information.
    * **Show camera info in the bottom left corner of the viewport** (default enabled) — Displays the camera name retrieved from the Hikvision recorder.
    * **Show control icons in the bottom right corner of the viewport only when hovering** (default enabled) — Automatically hides the control button panel (snapshot, archive, 1:1 pixel-to-pixel, region zoom) when the mouse cursor is outside of that specific camera viewport. The icons appear instantly as soon as you move your mouse over the viewport (no click required) and disappear when leaving, maximizing the visibility of your camera streams.
    * **Show info fields only when hovering** (default disabled) — Analogous option that hides the status on top-left and name on bottom-left of viewports, displaying a completely clean camera stream unless the cursor is moved over that specific camera tile.
+
+---
+
+## 12. The Right-Click Menu and Quick Tools
+
+Right-click a camera tile to open its menu. Some entries show only when they apply (for example, the web page entry shows only for a Hikvision camera) or when the matching permission is on in Settings.
+
+* **Replace camera / Add camera**: put a different camera on this tile (see Section 3).
+* **Remove camera**, **Swap viewports**, **Stream selection** (Auto, MAIN only, SUB only), **Playback** and **Snapshot**.
+* **Open camera web UI**: opens the camera's own web page in your browser (the browser can be chosen in Settings > General > Web browser).
+* **Detection frame**: turns the frame and label on or off for this camera only. It works only when the detection frame is switched on in Settings > Detection.
+* **Detection events...**: opens the detection log for this camera (Section 13).
+* **Quick tools**: a sub-menu with:
+  * **Force Fit**: stretches this camera to fill its tile instead of keeping its proportions.
+  * **Reload**: restarts this tile's stream.
+  * **Check detection setup...**: a read-only check of what the camera reports about detection (metadata, zones, rules, where each rule lives, whether it notifies the Surveillance Center). It changes nothing and lists what is missing.
+  * **Change settings**: the Viewport Settings dialog (Section 9, item 1).
+  * **Rule lines on/off (VCA lines)**: switches the camera's own drawing of its rule lines and boxes on the video stream. The camera is read first and then set the other way, and a notice says what it now reports. Only this camera is changed.
+  * **Noise filter (camera sound)**: the camera's own "Environmental Noise Filtering" switch. A tick shows when it is on. It is an on/off switch only.
+  * **Activate Flashing Light**: makes the camera's built-in light flash. The camera stops it after its own programmed time. Some newer cameras (a G3 was tried) accept the command but have no on-demand strobe, so nothing flashes; the tooltip says so.
+  * **Play Warning Message**: makes the camera play the sound, volume and number of times already set on it (its web page: Event > Audio Alarm). **It is loud.**
+  * **Reboot Camera**: restarts this one camera after you confirm. The camera is offline for a minute or two and records nothing meanwhile. A recorder is never restarted from here.
+
+The camera controls in Quick tools show only on a camera that reports the feature, and each one changes only the camera you right-clicked.
+
+---
+
+## 13. Detection Events: Frames, Log and Pictures
+
+Cameras and recorders tell KVision when they detect something. KVision uses those reports in three ways: a **frame and label on the tile**, a **log line**, and a **picture**. They are set up in **Settings > Detection**.
+
+### What the tile shows
+When a camera reports a target, the tile shows a frame with a label, for example **HUMAN - INTRUSION**. The first word is what the camera thinks it saw. The second is which rule fired.
+* **Target words:** HUMAN, VEHICLE, ANIMAL, or **OTHER** when the camera could not classify the target.
+* **Rule words:** LINE, INTRUSION, ENTER, EXIT or SMART (another smart event).
+* **MOTION** alone is plain motion: something moved, and the camera named neither a target nor a rule.
+* **FACE DETECTED** (a purple frame) shows when a camera with face detection reports a face.
+* A new line, intrusion, entrance or exit report holds the label for about ten seconds against plain motion, so a motion report does not replace it.
+* The frame stays for the number of seconds you choose (Settings > Detection) after the last report.
+
+### Settings > Detection
+* **Detection frame**: turns the frames on, sets how long they stay, and lets you pick which kinds of report and which targets draw a frame. These choices change **only the frame and label on the tile** (and the Frames.log file). They do **not** change what the detection log or the saved pictures hold.
+* **Where detection events come from**: for a camera behind a recorder, take its reports from the camera itself or through the recorder. The list can mix the two per camera. Each camera is read from one place only, so nothing is logged twice.
+* **Plain motion**: some cameras (a panoramic camera, for example) can only say that something moved. Two tick boxes choose whether to write it to the log (one line when movement starts, the next only after 10 seconds of stillness) and whether to show a MOTION frame. Both are off by default.
+* **Detection log and pictures**: keep logging after KVision is closed (a small background service), and how many event pictures are kept per camera (the newest ones; older ones are deleted).
+
+### The detection log window
+Open it from a tile's right-click menu (**Detection events...**). Each line shows the time, the target, the type, the camera, its address, the source (Camera or NVR), a picture button and a play button. Ten entries load at a time, with **Load more** for older ones.
+* **Top row (what to show):** *Only this camera*, a time range, a **Targets** menu and a **Types** menu. Each of those picks one thing.
+* **Bottom row (what to leave out):** **Targets** and **Types** buttons that open lists of tick boxes. Tick what you do not want in the list. For example, tick *Unnamed motion* to hide motion that did not say what moved. Each button shows how many items are ticked, and **Clear** unticks them all. The ticks reset when the window is opened again.
+* **Picture button:** shows the picture saved for that event. A report of plain motion with no target has no picture, and a labelled motion report gets a still asked for from the camera (at most one every 30 seconds per camera).
+* **Play button:** opens the recording about 10 seconds before the event. It is dimmed when the recorder no longer has video that old.
+* **Log words:** "Other" in the log means the same as OTHER on the tile: the camera named a target KVision could not class as human, vehicle or animal.
+
+### Log files
+These are kept in `~/.config/KVision/logs` (**Open configuration folder** in the Import / Export tab opens it):
+* `Detection.log`: the detection log shown in the window.
+* `OtherEvents.log`: events a camera sent that KVision has no type for (written with the camera's own type name). Heartbeats and port changes are left out.
+* `Frames.log`: each frame the tile showed, with its words and tile number.
+
+---
+
+## 14. Camera Tools (Backup, Clock, Firmware, Reboot)
+
+**Settings > Camera Tools** works on one camera at a time, using that camera's own address (not the recorder's). A camera uses the recorder's login unless you give it its own username and password. KVision tries a login once and never with a blank password.
+
+* **Camera backup**: *Back up* saves the picked camera's configuration to the `backups` folder next to the settings file, with a small `.json` file beside it. *Back up all cameras* does every camera in turn. *Restore* puts a chosen backup back on the camera it came from only: the serial number must match, a fresh backup is taken first, and nothing is sent if that fails. The camera restarts afterwards.
+* **Camera settings (read only)...**: reads a camera's device and firmware, time and network, video streams, picture settings, detection rules and what each does, the hours of its speaker and light, memory card, recording and users (names only). *All cameras* reads every camera into one table. Nothing in it can change a camera.
+* **Camera clock and firmware**: *Check* shows one camera in the box. *Check all* opens a window with one card per camera, filled in as each camera answers, with a count of how many are fine and how many need a look. It compares each camera's clock with this computer's and shows its firmware version, build date and model. A clock more than two minutes off is flagged. It also shows a note about the newest firmware for that model and a button that opens Hikvision's own page for it. KVision never installs firmware.
+* **Reboot a camera**: restarts a camera that is not on a tile (the right-click **Reboot Camera** does the same for a tile). You are asked first.
+* **Troubleshooting > Unstick event detection**: if a camera accepts connections and heartbeats but sends no detection events, this turns the "center" notification method off and back on for each event of the chosen camera or channel, then restores the original settings.
