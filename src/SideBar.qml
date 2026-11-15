@@ -2476,12 +2476,22 @@ FocusScope {
                                     onMoved: generalSettings.targetHoldSeconds = value
                                 }
 
-                                SelectableLabel {
-                                    text: qsTr("Show a tile frame highlight and label for these kinds of report")
-                                    textColor: "#8898a6"
-                                    font.pixelSize: 11
-                                    wrapMode: TextEdit.Wrap
+                                RowLayout {
                                     Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SelectableLabel {
+                                        text: qsTr("Show a tile frame highlight and label for these kinds of report")
+                                        textColor: "#8898a6"
+                                        font.pixelSize: 11
+                                        wrapMode: TextEdit.Wrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    HelpMark {
+                                        Layout.alignment: Qt.AlignTop
+                                        tip: qsTr("These tick boxes only decide which reports put a coloured border and a label on a tile. They have nothing to do with what the camera detects, or with what is written to the detection log and saved as event pictures: every report the camera names is logged and pictured whatever is ticked here. (Plain motion that names no target has its own setting, \"Write plain motion to the detection log\", and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
+                                    }
                                 }
 
                                 Flow {
@@ -2507,12 +2517,22 @@ FocusScope {
                                     }
                                 }
 
-                                SelectableLabel {
-                                    text: qsTr("Show a tile frame highlight and label for these targets")
-                                    textColor: "#8898a6"
-                                    font.pixelSize: 11
-                                    wrapMode: TextEdit.Wrap
+                                RowLayout {
                                     Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SelectableLabel {
+                                        text: qsTr("Show a tile frame highlight and label for these targets")
+                                        textColor: "#8898a6"
+                                        font.pixelSize: 11
+                                        wrapMode: TextEdit.Wrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    HelpMark {
+                                        Layout.alignment: Qt.AlignTop
+                                        tip: qsTr("These tick boxes only decide which reports put a coloured border and a label on a tile. They have nothing to do with what the camera detects, or with what is written to the detection log and saved as event pictures: every report the camera names is logged and pictured whatever is ticked here. (Plain motion that names no target has its own setting, \"Write plain motion to the detection log\", and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
+                                    }
                                 }
 
                                 Flow {
