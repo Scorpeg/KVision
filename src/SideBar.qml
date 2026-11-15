@@ -2496,6 +2496,7 @@ FocusScope {
                                             { key: "intrusion", label: qsTr("Intrusion") },
                                             { key: "enter", label: qsTr("Region entrance") },
                                             { key: "exit", label: qsTr("Region exit") },
+                                            { key: "face", label: qsTr("Face detection") },
                                             { key: "other", label: qsTr("Other smart events") }
                                         ]
                                         delegate: CheckBox {

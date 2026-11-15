@@ -164,3 +164,16 @@ function snapshotSavePath(recorderName, channelId, cameraName, when) {
     Context.mkpath(folder);
     return folder + "/" + filename;
 }
+
+// The list of kinds of report that may show a frame, with "face" added once for a setting saved before the Face detection
+// checkbox existed: such a setting kept face labels on by way of "other", so face is added only when "other" is still ticked
+// (somebody who unticked it keeps face off). A list that already names face, or an empty one, comes back unchanged.
+function kindsWithFace(kinds) {
+    var items = String(kinds) === "" ? [] : String(kinds).split(",");
+    if (items.indexOf("face") >= 0 || items.indexOf("other") < 0)
+        return items.join(",");
+    var at = items.indexOf("other");
+    items.splice(at, 0, "face");
+    return items.join(",");
+}
+

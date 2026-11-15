@@ -99,8 +99,9 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
       **Built (tested with a fake camera, not yet with the real one):** `handleFace()` in `hikvisionevents.cpp` writes the first
       report of a run to Detection.log as `Face detected, Face detection, <camera>` (the next line only after 10 s without one, like
       plain motion), takes a still from whichever device is the camera's chosen event source (the camera today; the recorder when the
-      source is set to NVR), and shows a purple "FACE DETECTED" label on the tile for the usual hold time, with no frame. It follows
-      the "Other smart events" and "Other" target choices. The Detection Log window has a "Face detection" type. Not tried with the real
+      source is set to NVR), and shows a purple "FACE DETECTED" label on the tile for the usual hold time, with no frame. The label has its own "Face detection"
+      checkbox (key `face` in `targetKinds`); a setting saved before it existed gets `face` added once, when "other" is ticked
+      (`Utils.kindsWithFace`, flag `targetKindsHasFace`). The log line and the picture ignore it. The Detection Log window has a "Face detection" type. Not tried with the real
       camera or with the NVR as the source (that picture would be the recorder's smaller still).
 - [ ] **Audio at the Front Door does not sound by day.** The likely cause is the camera's own audible alarm hours
       (00:00-05:45, 21:00-24:00). Not tested by triggering the event by day and by night. The other cameras with limited

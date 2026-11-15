@@ -310,7 +310,7 @@ ApplicationWindow {
         onTargetSourceOverridesChanged: rootWindow.applyEventLogger()
         // Which kinds of report may show a frame (comma list: motion,line,intrusion,enter,exit,other) and which
         // targets (human,vehicle,animal,other).
-        property string targetKinds: "motion,line,intrusion,enter,exit,other"
+        property string targetKinds: "motion,line,intrusion,enter,exit,face,other"
         property string overlayText: "{}" // JSON: the settings of the MQTT overlay text (Overlay text from MQTT window)
         // Keep logging after the window is closed (the background service). While the window is open every camera is
         // always logged, whether or not a tile shows it; the on-screen frame (showTargetIndicator and the right-click
@@ -638,7 +638,13 @@ ApplicationWindow {
             if (generalSettings.overlayText !== diskOverlayText) {
                 generalSettings.overlayText = diskOverlayText;
             }
-            var diskTargetKinds = String(Context.readSetting("", "targetKinds", "motion,line,intrusion,enter,exit,other"));
+            var diskTargetKinds = String(Context.readSetting("", "targetKinds", "motion,line,intrusion,enter,exit,face,other"));
+            if (!Context.readSetting("", "targetKindsHasFace", false)) {
+                // Once: a setting saved before the Face detection checkbox keeps face labels on (they used to follow "other").
+                diskTargetKinds = Utils.kindsWithFace(diskTargetKinds);
+                Context.writeSetting("", "targetKinds", diskTargetKinds);
+                Context.writeSetting("", "targetKindsHasFace", true);
+            }
             if (generalSettings.targetKinds !== diskTargetKinds) {
                 generalSettings.targetKinds = diskTargetKinds;
             }

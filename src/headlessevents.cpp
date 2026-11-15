@@ -40,7 +40,7 @@ struct Settings {
     bool enabled = false;
     QString recorders;
     QString source = QStringLiteral("camera");
-    QString kinds = QStringLiteral("motion,line,intrusion,enter,exit,other");
+    QString kinds = QStringLiteral("motion,line,intrusion,enter,exit,face,other");
     QString targets = QStringLiteral("human,vehicle,animal,other");
     int pictures = 100;
     bool logMotion = false; // log motion reports that name no target

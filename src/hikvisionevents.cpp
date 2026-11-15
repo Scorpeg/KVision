@@ -392,7 +392,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
 // brings no picture, so there is nothing to frame. The first one of a run is written to the detection log (the next line only after
 // kMotionQuietMs without one) and a still is taken from the device that sent it (the camera or the recorder, whichever is the
 // camera's chosen event source; sourceAllowed() has already dropped the other connection's copy); every one keeps the tile's "FACE DETECTED" label up.
-// It follows the "Other smart events" and "Other" target choices of the on-screen settings, which are on unless switched off.
+// The tile label follows the "Face detection" choice of the on-screen settings (on by default); a face is not a target kind, so the
+// target choices do not apply to it.
 void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body, const QString &cameraTime, int eventChannel)
 {
     static const QRegularExpression stateRx(QStringLiteral("<eventState>([^<]*)</eventState>"));
@@ -409,8 +410,8 @@ void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body
             when = QDateTime::currentDateTime();
         takeSnapshot(ip, eventChannel > 0 ? eventChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Face detection"));
     }
-    if (!m_allowedKinds.contains(QStringLiteral("other")) || !m_allowedTargets.contains(QStringLiteral("other")))
-        return; // other smart events, or the "other" target, are switched off for the screen
+    if (!m_allowedKinds.contains(QStringLiteral("face")))
+        return; // "Face detection" is switched off for the screen (the log and the picture are not affected)
     qDebug() << "[Events] face from" << ip << "channel" << eventChannel;
     emit targetDetected(ip, QStringLiteral("face"), QStringLiteral("FACE"), eventChannel);
 }

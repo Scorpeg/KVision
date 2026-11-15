@@ -228,7 +228,7 @@ private:
     int m_maxPictures = 100;
     QHash<QString, Conn *> m_conns;
     QSet<QString> m_allowedKinds{QStringLiteral("motion"), QStringLiteral("line"), QStringLiteral("intrusion"),
-                                 QStringLiteral("enter"), QStringLiteral("exit"), QStringLiteral("other")};
+                                 QStringLiteral("enter"), QStringLiteral("exit"), QStringLiteral("face"), QStringLiteral("other")};
     QSet<QString> m_allowedTargets{QStringLiteral("human"), QStringLiteral("vehicle"), QStringLiteral("animal"),
                                    QStringLiteral("other")};
     QHash<QString, PictureVerdict> m_pictures; // by camera address
