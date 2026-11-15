@@ -2490,7 +2490,7 @@ FocusScope {
 
                                     HelpMark {
                                         Layout.alignment: Qt.AlignTop
-                                        tip: qsTr("These tick boxes only decide which reports put a colored border and a label on a tile. They have nothing to do with what the camera detects, or with what is written to the detection log and saved as event pictures: every report the camera names is logged and pictured whatever is ticked here. (Plain motion that names no target has its own setting, \"Write plain motion to the detection log\", and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
+                                        tip: qsTr("These tick boxes only change what is drawn on a tile: the colored border and the label. They do not change what the camera detects, what is written to the detection log, or which event pictures are saved. (Plain motion that names no target is logged only if \"Write plain motion to the detection log\" is on, and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
                                     }
                                 }
 
@@ -2531,7 +2531,7 @@ FocusScope {
 
                                     HelpMark {
                                         Layout.alignment: Qt.AlignTop
-                                        tip: qsTr("These tick boxes only decide which reports put a colored border and a label on a tile. They have nothing to do with what the camera detects, or with what is written to the detection log and saved as event pictures: every report the camera names is logged and pictured whatever is ticked here. (Plain motion that names no target has its own setting, \"Write plain motion to the detection log\", and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
+                                        tip: qsTr("These tick boxes only change what is drawn on a tile: the colored border and the label. They do not change what the camera detects, what is written to the detection log, or which event pictures are saved. (Plain motion that names no target is logged only if \"Write plain motion to the detection log\" is on, and Frames.log, which lists what the tiles showed, does follow these tick boxes.)")
                                     }
                                 }
 
