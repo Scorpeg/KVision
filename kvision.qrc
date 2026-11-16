@@ -56,6 +56,8 @@
         <file>src/CameraSettingsWindow.qml</file>
         <file>src/SetupCheckWindow.qml</file>
         <file>src/CameraHealthWindow.qml</file>
+        <file>src/CameraStatusOneWindow.qml</file>
+        <file>src/CameraBitrateWindow.qml</file>
         <file>src/DetectionFramesWindow.qml</file>
         <file>src/OverlayTextWindow.qml</file>
         <file>src/LayoutBackupButton.qml</file>

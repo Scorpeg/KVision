@@ -70,6 +70,15 @@ public:
     // healthResult(); checkHealthAll() goes through every camera and reports in healthAllFinished().
     Q_INVOKABLE void checkHealth(const QString &ip);
     Q_INVOKABLE void checkHealthAll();
+    // Read only. How the camera itself is doing (GET /ISAPI/System/status): uptime, processor, memory, restart count and running time,
+    // wear counters of a lens that moves, fan and heater. One card in the setup check's shape, like checkHealth(); answers with
+    // statusResult(). Used by the right-click Quick tools > Camera status.
+    Q_INVOKABLE void checkStatus(const QString &ip);
+    // The max bitrate of a camera's video streams (the web page's Video > Max. Bitrate). kind is 1 main, 2 sub-stream, 3 third stream; every stream
+    // of that kind is used (a two-lens camera has one per lens). kbps 0 only reads; above 0 writes it to every stream of that kind that accepts it
+    // (the stream's own limit is checked first), reads it back, and notes the old and new value in logs/BitrateChanges.log. One card per camera, as checkStatus().
+    Q_INVOKABLE void streamBitrate(const QString &ip, int kind, int kbps);
+    Q_INVOKABLE void streamBitrateAll(int kind, int kbps);
     // The newest firmware version the user noted for a camera model (typed in from Hikvision's page: the cameras cannot say
     // and the site cannot be read by a program). The clock and firmware check compares the camera's version with it.
     // An empty version removes the note. Stored in the config file under NewestFirmware.
@@ -109,6 +118,11 @@ signals:
     // One camera of checkHealthAll() has answered (same card as healthResult()).
     void healthAllItem(const QVariantMap &card);
     void healthAllFinished(const QString &summary, bool ok);
+    void statusResult(const QVariantMap &card);
+    void streamBitrateResult(const QVariantMap &card);
+    void streamBitrateAllProgress(const QString &name, int done, int total);
+    void streamBitrateAllItem(const QVariantMap &card);
+    void streamBitrateAllFinished(const QString &summary, bool ok);
     // state is "started" (accepted), "sent" (sent, no answer: a restarting camera may not answer), "unavailable" or "error".
     void rebootResult(const QString &ip, const QString &state, const QString &message);
     void ruleLinesAllProgress(const QString &name, int done, int total);

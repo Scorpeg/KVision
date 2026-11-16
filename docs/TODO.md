@@ -240,9 +240,42 @@ that report the feature.
 ## Ideas not taken from the Node-RED project (on purpose)
 
 - Alarm panel, doorbell, speaker and access-control nodes: outside what KVision is for.
-- Network discovery of devices by multicast: KVision adds recorders by address, and we do not want to scan the network.
+- Network discovery of devices by multicast: done on 15 Nov as **Scan network** (Hikvision SADP probe only, on every active
+  network). It finds standalone cameras; a recorder or the cameras behind it may not answer it (192.0.0.x here did not), so
+  adding by address stays. A wider scan (open ports on each address) was offered and not built.
 - Licence-plate recognition: only worth it if a plate camera is added.
 - Other events on the same stream (tamper, defocus, scene change, video loss, storage errors, temperature): worth a
   look later as a separate "camera problem" frame.
 - From reading other Hikvision projects (12 Nov): automatic discovery of devices on the network (SADP), and a warning
   when a camera's clock is more than a few minutes off (digest login fails). Neither done.
+
+## To do after 15 Nov 2026 (see the audit, section 11)
+
+- [ ] **Dual-lens PTZ (192.0.0.115) detection pictures with no target in the box.** The delay is inside the camera (measured
+  on one event; KVision saves the camera's picture byte for byte). Count the unclassified "Other" share of its PTZ-lens events
+  after the target filter change; decide on Line crossing rules 2 and 3 (still `others`); back up the rule pages first. Do not
+  raise `alarmConfidence` (the owner lowered it so events reach KVision).
+- [ ] **Camera load, clock and a restart on 192.0.0.115:** CPU 58 to 89%, memory 91%, clock 2 s behind, and it restarted about 2.5
+  hours before a later read (cause unknown). Read the NVR's settings for channels 14 and 15 (stream type, recording) before dropping
+  any stream; check the NTP source 192.0.0.13.
+- [ ] **Same-second pictures overwrite:** two events of the same kind on one lens in one second share a picture file name, so the
+  second replaces the first. A "keep the first" rule would be a small change in `savePicture`.
+- [ ] **Two-way talk without holding the button:** Hik-Connect 7.0.220 has full-duplex and half-duplex talk, echo cancellation and
+  howling suppression. KVision is hold-to-talk with no echo handling. Choose: click-to-latch, mute the tile while talking, or the
+  system's echo cancellation. Nothing built.
+- [ ] **Try on screen** (built and started, not looked at): the 3D button on the PTZ pad and the 3D badge on a close-up lens (also the
+  High PTZ, which lists 3D positioning); the Status section and colors in Camera settings and the three new table columns; the
+  right-click Camera status window; the Camera settings box; the Max bitrate box and its all-cameras window; the codec in the channel
+  status badge. The 3D text is not in the translation files.
+- [ ] **Max bitrate tool:** try Set on all cameras once (the log shows five single changes by the owner), a constant-rate stream (none
+  seen), and the Doorbell.
+- [ ] **A picture for an older camera's smart event:** check it on the real High PTZ (walk through a zone, look for
+  `192.168.20.90_..._intrusion.jpg` in `logs/pictures`). Then the same for the Doorbell, 192.168.20.97 and 192.0.0.11.
+- [ ] **Restart the background logger** (`./install.sh --update`) so it has the new picture and picture-trimming code.
+- [ ] **The next cost on the main thread is `judgePicture`** (22 to 31% in a profile): record a bad moment before changing it.
+  The freeze itself is fixed (the picture trimming took 92% of the hot seconds, now about 1%).
+- [ ] **Put `perf_event_paranoid` back** to 4 when profiling is finished (`sudo sysctl kernel.perf_event_paranoid=4`).
+- [ ] **Target boxes on live video for non-G3 cameras:** nothing found that makes a G2 draw them (the G3 alone lists
+  `isSupportSmartOverlapParams`). Only KVision drawing its own boxes from event reports remains, and only while an event fires.
+- [ ] **Unit tests:** `ctest` printed only its usage and no `run_unit_tests` binary was found, so the tests were not run this day.
+  Find out how they are meant to be built and run.

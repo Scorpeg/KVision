@@ -88,6 +88,20 @@ QString QmlAVDecoder::name() const
     return isOpen() ? m_avCodecCtx->codec->name : "";
 }
 
+QString QmlAVDecoder::codecLabel() const
+{
+    if (!m_avCodecCtx || !m_avCodecCtx->codec)
+        return QString();
+    switch (m_avCodecCtx->codec_id) {
+    case AV_CODEC_ID_HEVC:       return QStringLiteral("H.265");
+    case AV_CODEC_ID_H264:       return QStringLiteral("H.264");
+    case AV_CODEC_ID_MJPEG:      return QStringLiteral("MJPEG");
+    case AV_CODEC_ID_MPEG4:      return QStringLiteral("MPEG-4");
+    case AV_CODEC_ID_MPEG2VIDEO: return QStringLiteral("MPEG-2");
+    default:                     return QString::fromLatin1(avcodec_get_name(m_avCodecCtx->codec_id)).toUpper();
+    }
+}
+
 bool QmlAVDecoder::decodeAVPacket(const AVPacketPtr &avPacket)
 {
     if (isOpen()) {

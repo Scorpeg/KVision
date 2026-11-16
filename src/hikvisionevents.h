@@ -213,6 +213,12 @@ private:
     // quarter of the "pictures per camera" setting) so they cannot push a camera's smart-event pictures out.
     static constexpr qint64 kMotionPictureGapMs = 30000;
     QHash<QString, qint64> m_motionPictureAt; // "ip|channel" -> when the last one was taken (ms)
+    // A smart event (line, intrusion, region) from a camera that sends no picture with it (an older camera without human or vehicle detection)
+    // gets a still taken from the camera, at most once per kSmartPictureGapMs for each camera, lens and kind of rule. The first report of a
+    // burst is the one that gets it: a camera repeats the same report many times a second while something is in view. The still shows the
+    // scene about a second after the report and has no box, since the camera names no target position.
+    static constexpr qint64 kSmartPictureGapMs = 10000;
+    QHash<QString, qint64> m_smartPictureAt; // "ip|channel|kind" -> when the last one was taken (ms)
     bool sourceAllowed(const Conn *c, int eventChannel) const;
     QHash<QString, QString> m_sourceOverrides; // "recorderIp#channel" -> "camera" or "recorder"
     QString m_defaultSource = QStringLiteral("camera");
@@ -224,6 +230,8 @@ private:
     int pictureLens(const Conn *c, int eventChannel) const;
     // Keeps the newest m_maxPictures pictures of each camera in logs/pictures (or of one camera) and deletes the older ones.
     void prunePictures(const QString &dirPath, const QString &key);
+    void pruneCamera(const QString &dirPath, const QString &key, bool force);
+    QHash<QString, int> m_pictureCount; // camera or lens key -> pictures on disk, as far as is known; absent until the first listing
     QString cameraAddress(const Conn *c, int eventChannel) const;
 
     QNetworkAccessManager *m_net = nullptr;

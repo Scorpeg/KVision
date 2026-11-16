@@ -1,4 +1,5 @@
 #include "hikvisioncamerainfo.h"
+#include "camerastatustext.h"
 
 #include "hikvisionmanager.h"
 
@@ -80,6 +81,13 @@ QVariantMap row(const QString &label, const QString &value)
     return QVariantMap{{QStringLiteral("label"), label}, {QStringLiteral("value"), value}};
 }
 
+// A row with a state (ok, note, warning or problem): the window draws the value in that state's color. The copy to text adds a word for
+// a warning or problem, so the meaning is not lost without the color.
+QVariantMap row(const QString &label, const QString &value, const QString &state)
+{
+    return QVariantMap{{QStringLiteral("label"), label}, {QStringLiteral("value"), value}, {QStringLiteral("state"), state}};
+}
+
 QVariantMap section(const QString &title, const QVariantList &rows)
 {
     return QVariantMap{{QStringLiteral("title"), title}, {QStringLiteral("rows"), rows}};
@@ -89,12 +97,6 @@ QString onOff(const QString &v)
 {
     return v.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0 ? QStringLiteral("on")
          : (v.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0 ? QStringLiteral("off") : v);
-}
-
-QString uptimeText(qint64 secs)
-{
-    const qint64 d = secs / 86400, h = (secs % 86400) / 3600, m = (secs % 3600) / 60;
-    return d > 0 ? QStringLiteral("%1 d %2 h %3 min").arg(d).arg(h).arg(m) : QStringLiteral("%1 h %2 min").arg(h).arg(m);
 }
 
 // "05:45" -> minutes since midnight; "24:00" -> 1440
@@ -316,13 +318,29 @@ void deviceSections(const Cam &cam, QVariantList &out, QString *why)
          << row(QStringLiteral("Serial number"), tag(dev, QStringLiteral("serialNumber")))
          << row(QStringLiteral("Firmware"), tag(dev, QStringLiteral("firmwareVersion")) + QLatin1Char(' ') + tag(dev, QStringLiteral("firmwareReleasedDate")))
          << row(QStringLiteral("MAC address"), tag(dev, QStringLiteral("macAddress")));
-    if (fetchDoc(cam, QStringLiteral("/ISAPI/System/status"), &b, nullptr)) {
-        const QString st = QString::fromUtf8(b);
-        rows << row(QStringLiteral("Uptime"), uptimeText(tag(st, QStringLiteral("deviceUpTime")).toLongLong()))
-             << row(QStringLiteral("CPU load"), tag(st, QStringLiteral("cpuUtilization")) + QStringLiteral(" %"))
-             << row(QStringLiteral("Memory used"), tag(st, QStringLiteral("memoryUsage")) + QStringLiteral(" %"));
-    }
+    // The camera's status page is read here, right after deviceInfo, before the other reads: the figures (processor and memory above all) then
+    // show the camera at rest and not after the burst of reads that follows. They are kept for the Status section below.
+    QString statusXml;
+    if (fetchDoc(cam, QStringLiteral("/ISAPI/System/status"), &b, nullptr))
+        statusXml = QString::fromUtf8(b);
     out << section(QStringLiteral("Device"), rows);
+
+    if (!statusXml.isEmpty()) {
+        const CameraStatusText::Result st = CameraStatusText::build(statusXml);
+        QVariantList srows;
+        for (const CameraStatusText::Item &it : st.items)
+            srows << row(it.label, it.detail, it.state);
+        QVariantMap sec = section(QStringLiteral("Status"), srows);
+        // For the all-cameras table: the three figures and their colors
+        sec[QStringLiteral("up")] = st.upCell;
+        sec[QStringLiteral("cpu")] = st.cpuCell;
+        sec[QStringLiteral("mem")] = st.memCell;
+        sec[QStringLiteral("upState")] = st.upState;
+        sec[QStringLiteral("cpuState")] = st.cpuState;
+        sec[QStringLiteral("memState")] = st.memState;
+        if (!srows.isEmpty())
+            out << sec;
+    }
 
     rows.clear();
     if (fetchDoc(cam, QStringLiteral("/ISAPI/System/time"), &b, nullptr)) {
@@ -796,7 +814,9 @@ QVariantMap overviewRow(const Cam &cam, const QVariantList &sections, const QStr
                   {QStringLiteral("model"), QString()}, {QStringLiteral("firmware"), QString()}, {QStringLiteral("audio"), QStringLiteral("-")},
                   {QStringLiteral("light"), QStringLiteral("-")}, {QStringLiteral("motion"), QStringLiteral("-")},
                   {QStringLiteral("intrusion"), QStringLiteral("-")}, {QStringLiteral("line"), QStringLiteral("-")},
-                  {QStringLiteral("lightFrom"), QStringLiteral("-")}, {QStringLiteral("audioFrom"), QStringLiteral("-")}};
+                  {QStringLiteral("lightFrom"), QStringLiteral("-")}, {QStringLiteral("audioFrom"), QStringLiteral("-")},
+                  {QStringLiteral("up"), QStringLiteral("-")}, {QStringLiteral("cpu"), QStringLiteral("-")}, {QStringLiteral("mem"), QStringLiteral("-")},
+                  {QStringLiteral("upState"), QString()}, {QStringLiteral("cpuState"), QString()}, {QStringLiteral("memState"), QString()}};
     auto value = [](const QVariantMap &s, const QString &label) {
         for (const QVariant &rv : s.value(QStringLiteral("rows")).toList()) {
             if (rv.toMap().value(QStringLiteral("label")).toString() == label)
@@ -810,6 +830,13 @@ QVariantMap overviewRow(const Cam &cam, const QVariantList &sections, const QStr
         if (t == QLatin1String("Device")) {
             r[QStringLiteral("model")] = value(s, QStringLiteral("Model"));
             r[QStringLiteral("firmware")] = value(s, QStringLiteral("Firmware")).section(QLatin1Char(' '), 0, 0);
+        } else if (t == QLatin1String("Status")) {
+            for (const char *k : {"up", "cpu", "mem"}) {
+                const QString key = QString::fromLatin1(k);
+                if (!s.value(key).toString().isEmpty())
+                    r[key] = s.value(key).toString();
+                r[key + QStringLiteral("State")] = s.value(key + QStringLiteral("State")).toString();
+            }
         } else if (t.startsWith(QLatin1String("Audio alarm"))) {
             r[QStringLiteral("audio")] = value(s, QStringLiteral("Hours"));
         } else if (t.startsWith(QLatin1String("Light alarm"))) {
@@ -921,7 +948,9 @@ QString HikvisionCameraInfo::sectionsToText(const QVariantList &sections) const
         lines << QStringLiteral("== %1 ==").arg(s.value(QStringLiteral("title")).toString());
         for (const QVariant &rv : s.value(QStringLiteral("rows")).toList()) {
             const QVariantMap r = rv.toMap();
-            lines << QStringLiteral("%1: %2").arg(r.value(QStringLiteral("label")).toString(), r.value(QStringLiteral("value")).toString());
+            const QString state = r.value(QStringLiteral("state")).toString();
+            const QString flag = state == QLatin1String("warning") ? QStringLiteral("  [WARNING]") : (state == QLatin1String("problem") ? QStringLiteral("  [PROBLEM]") : QString());
+            lines << QStringLiteral("%1: %2%3").arg(r.value(QStringLiteral("label")).toString(), r.value(QStringLiteral("value")).toString(), flag);
         }
         lines << QString();
     }
@@ -933,6 +962,7 @@ QString HikvisionCameraInfo::overviewToText(const QVariantList &rows) const
     static const QList<QPair<QString, QString>> cols = {
         {QStringLiteral("Camera"), QStringLiteral("name")}, {QStringLiteral("Address"), QStringLiteral("ip")},
         {QStringLiteral("Model"), QStringLiteral("model")}, {QStringLiteral("Firmware"), QStringLiteral("firmware")},
+        {QStringLiteral("Up"), QStringLiteral("up")}, {QStringLiteral("CPU"), QStringLiteral("cpu")}, {QStringLiteral("Memory"), QStringLiteral("mem")},
         {QStringLiteral("Audio hours"), QStringLiteral("audio")}, {QStringLiteral("Light hours"), QStringLiteral("light")},
         {QStringLiteral("Audio triggered by"), QStringLiteral("audioFrom")}, {QStringLiteral("Light triggered by"), QStringLiteral("lightFrom")},
         {QStringLiteral("Motion"), QStringLiteral("motion")}, {QStringLiteral("Intrusion"), QStringLiteral("intrusion")},

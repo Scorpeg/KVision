@@ -59,6 +59,8 @@ public:
     bool open(const AVStream *avStream, const QmlAVOptions &avOptions);
     bool isOpen() const;
     QString name() const;
+    // The codec of the stream as people write it ("H.265", "H.264", "MJPEG"...), or "" when the decoder is not open.
+    QString codecLabel() const;
     const AVStream *stream() const { return m_avStream; }
     int streamIndex() const { return m_avStream ? m_avStream->index : -1; }
 

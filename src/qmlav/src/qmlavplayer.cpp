@@ -81,6 +81,8 @@ void QmlAVPlayer::stop()
         delete m_demuxer;
         m_demuxer = nullptr;
     }
+    // The stream is gone, so is its codec (this also covers the early return just below).
+    setVideoCodec(QString());
     
     if (wasStopped) {
         m_stopping.store(false);
@@ -116,6 +118,7 @@ void QmlAVPlayer::stop()
 
     setPlaybackState(QMediaPlayer::StoppedState);
     setHasVideo(false);
+    setVideoCodec(QString());
     setHasAudio(false);
     setFramePresented(false);
     m_stopping.store(false);
@@ -457,8 +460,20 @@ void QmlAVPlayer::setStatus(const QMediaPlayer::MediaStatus status)
     emit statusChanged(status);
 }
 
+void QmlAVPlayer::setVideoCodec(const QString &codec)
+{
+    if (m_videoCodec == codec) {
+        return;
+    }
+    m_videoCodec = codec;
+    emit videoCodecChanged(codec);
+}
+
 void QmlAVPlayer::setHasVideo(bool hasVideo)
 {
+    if (hasVideo && m_demuxer) {
+        setVideoCodec(m_demuxer->videoCodec());
+    }
     if (m_hasVideo == hasVideo) {
         return;
     }

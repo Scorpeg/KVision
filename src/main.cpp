@@ -31,6 +31,7 @@ extern "C" {
 #include "viewportslayoutscollectionmodel.h"
 #include "hikvisionmanager.h"
 #include "hikvisionprobe.h"
+#include "hikvisionptzaim.h"
 #include "nvrstatusmanager.h"
 #include "hikvisionplayer.h"
 
@@ -458,6 +459,7 @@ int main(int argc, char *argv[])
     auto *hikvisionManager = new HikvisionManager();
     qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "HikvisionManager", hikvisionManager);
     qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "HikvisionProbe", new HikvisionProbe(&app));
+    qmlRegisterSingletonInstance("CCTV_Viewer.Hikvision", 1, 0, "HikvisionPtzAim", new HikvisionPtzAim(&app));
 
     auto *hikvisionTalk = new HikvisionTalk(
         [hikvisionManager](const QString &ip, int port, const QString &user, const QString &pass) -> LONG {

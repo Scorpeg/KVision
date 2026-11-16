@@ -27,10 +27,15 @@ Window {
     property bool showOverview: false
     // Column widths of the all-cameras table, shared by the header and the rows so they always line up. The light
     // "triggered by" column (index 6) takes whatever width is left over.
-    readonly property var overviewHeads: [qsTr("Camera"), qsTr("Model"), qsTr("Firmware"), qsTr("Audio hours"), qsTr("Audio triggered by"),
+    readonly property var overviewHeads: [qsTr("Camera"), qsTr("Model"), qsTr("Firmware"), qsTr("Up"), qsTr("CPU"), qsTr("Memory"), qsTr("Audio hours"), qsTr("Audio triggered by"),
                                           qsTr("Light hours"), qsTr("Light triggered by"), qsTr("Motion"), qsTr("Intrusion"), qsTr("Line")]
-    readonly property var overviewCols: [220, 170, 70, 250, 200, 120, 300, 55, 65, 45]
-    readonly property int overviewMinWidth: 1560
+    readonly property var overviewCols: [220, 170, 70, 80, 55, 100, 250, 200, 120, 300, 55, 65, 45]
+    readonly property int overviewMinWidth: 1890
+
+    // The color of a value that carries a state (ok, note, warning, problem); a value with none keeps the color it was given.
+    function stateColor(state, plain) {
+        return state === "problem" ? "#f2574f" : (state === "warning" ? "#ff9f43" : (state === "ok" ? "#3dbb78" : (state === "note" ? "#c8d2dc" : plain)));
+    }
 
     Component.onCompleted: HikvisionCameraInfo.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName)
 
@@ -275,7 +280,7 @@ Window {
                                     Layout.fillWidth: true
                                     spacing: 8
                                     Text { text: modelData.label; color: "#8898a6"; font.pixelSize: 11; Layout.preferredWidth: 170; Layout.alignment: Qt.AlignTop }
-                                    Text { text: modelData.value; color: "white"; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.Wrap; Layout.alignment: Qt.AlignTop }
+                                    Text { text: modelData.value; color: win.stateColor(modelData.state, "white"); font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.Wrap; Layout.alignment: Qt.AlignTop }
                                 }
                             }
                             Loader {
@@ -309,7 +314,7 @@ Window {
                         delegate: Text {
                             text: modelData
                             Layout.preferredWidth: win.overviewCols[index]
-                            Layout.fillWidth: index === 6
+                            Layout.fillWidth: index === 9
                             color: "#00f5d4"
                             font.bold: true
                             font.pixelSize: 11
@@ -328,13 +333,16 @@ Window {
                             Text { text: modelData.name; Layout.preferredWidth: win.overviewCols[0]; elide: Text.ElideRight; color: modelData.error !== "" ? "#ff9f43" : "white"; font.pixelSize: 11 }
                             Text { text: modelData.error !== "" ? modelData.error : modelData.model; Layout.preferredWidth: win.overviewCols[1]; elide: Text.ElideRight; color: modelData.error !== "" ? "#ff9f43" : "#c8d2dc"; font.pixelSize: 11 }
                             Text { text: modelData.firmware; Layout.preferredWidth: win.overviewCols[2]; elide: Text.ElideRight; color: "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.audio; Layout.preferredWidth: win.overviewCols[3]; elide: Text.ElideRight; color: (modelData.audio !== "-" && modelData.audio.indexOf("all day") !== 0) ? "#ff9f43" : "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.audioFrom; Layout.preferredWidth: win.overviewCols[4]; elide: Text.ElideRight; color: "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.light; Layout.preferredWidth: win.overviewCols[5]; elide: Text.ElideRight; color: (modelData.light !== "-" && modelData.light.indexOf("all day") !== 0) ? "#ff9f43" : "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.lightFrom; Layout.preferredWidth: win.overviewCols[6]; Layout.fillWidth: true; elide: Text.ElideRight; color: "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.motion; Layout.preferredWidth: win.overviewCols[7]; color: "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.intrusion; Layout.preferredWidth: win.overviewCols[8]; color: "#c8d2dc"; font.pixelSize: 11 }
-                            Text { text: modelData.line; Layout.preferredWidth: win.overviewCols[9]; color: "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.up; Layout.preferredWidth: win.overviewCols[3]; elide: Text.ElideRight; color: win.stateColor(modelData.upState === "warning" ? "warning" : "", "#c8d2dc"); font.pixelSize: 11 }
+                            Text { text: modelData.cpu; Layout.preferredWidth: win.overviewCols[4]; elide: Text.ElideRight; color: win.stateColor(modelData.cpuState === "ok" ? "" : modelData.cpuState, "#c8d2dc"); font.pixelSize: 11 }
+                            Text { text: modelData.mem; Layout.preferredWidth: win.overviewCols[5]; elide: Text.ElideRight; color: win.stateColor(modelData.memState === "ok" ? "" : modelData.memState, "#c8d2dc"); font.pixelSize: 11 }
+                            Text { text: modelData.audio; Layout.preferredWidth: win.overviewCols[6]; elide: Text.ElideRight; color: (modelData.audio !== "-" && modelData.audio.indexOf("all day") !== 0) ? "#ff9f43" : "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.audioFrom; Layout.preferredWidth: win.overviewCols[7]; elide: Text.ElideRight; color: "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.light; Layout.preferredWidth: win.overviewCols[8]; elide: Text.ElideRight; color: (modelData.light !== "-" && modelData.light.indexOf("all day") !== 0) ? "#ff9f43" : "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.lightFrom; Layout.preferredWidth: win.overviewCols[9]; Layout.fillWidth: true; elide: Text.ElideRight; color: "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.motion; Layout.preferredWidth: win.overviewCols[10]; color: "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.intrusion; Layout.preferredWidth: win.overviewCols[11]; color: "#c8d2dc"; font.pixelSize: 11 }
+                            Text { text: modelData.line; Layout.preferredWidth: win.overviewCols[12]; color: "#c8d2dc"; font.pixelSize: 11 }
                         }
                     }
                 }

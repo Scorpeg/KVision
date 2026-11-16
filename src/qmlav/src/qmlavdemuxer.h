@@ -88,6 +88,7 @@ public:
     qint64 bytesRead() const { return m_bytesRead.load(std::memory_order_relaxed); }
     bool hasVideo() const { return m_context && m_context->videoDecoder && m_context->videoDecoder->isOpen(); }
     bool hasAudio() const { return m_context && m_context->audioDecoder && m_context->audioDecoder->isOpen(); }
+    QString videoCodec() const { return (m_context && m_context->videoDecoder) ? m_context->videoDecoder->codecLabel() : QString(); }
 
 signals:
     void playbackStateChanged(QMediaPlayer::State state);

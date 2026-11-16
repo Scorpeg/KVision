@@ -246,6 +246,28 @@ To configure the connection to a Hikvision recorder:
 
 ---
 
+### 3D badge (PTZ cameras)
+
+A PTZ camera with a close-up lens and a fixed wide lens can be pointed by drawing on the wide view:
+1. On a PTZ tile, find the small **3D** badge with the other badges at the bottom right. It appears on the wide lens and on the close-up lens of a two-lens PTZ, and on a single-lens PTZ, after the pointer has been over the tile for a moment. Fixed cameras do not have it.
+2. Press **3D**, either the badge at the bottom right or the **3D** button on the PTZ pad (the empty slot between Zoom out and Zoom in). It stays lit, like the zoom button, and a note at the top of the tile says it is on. Both buttons work the same and light together.
+3. Drag a box on the picture. On the wide lens the close-up lens turns to that spot; on the close-up lens (or a single-lens PTZ) the lens re-centers on the box. Either way the camera zooms in: the smaller the box, the closer the zoom. Draw as many boxes as you like.
+4. Press **3D** again to turn it off.
+
+It also turns off if the tile is zoomed in or put at 1:1. The tile shows what happened at the top. The badge is dimmed while the tile is zoomed in or at 1:1; reset the zoom first. It does not need the PTZ pad. Nothing is saved on the camera.
+
+---
+
+**Pictures for events from older cameras.** A camera without human or vehicle detection reports a line crossing or intrusion but sends no picture with it. For such a camera KVision takes a still from the camera when the report arrives (at most one every 10 seconds for each camera, lens and kind of rule, since the camera repeats the report while something is in view). The Detection events window shows it for that event and for the repeats in the same burst. It is a snapshot a moment after the report, with no box around the target, so it shows the scene and not which object set it off.
+
+### Camera status
+
+**Settings > Camera Tools > Camera settings (read only)...** has a **Status** section for each camera: how long it has been up, how busy its processor and memory are, how often it has restarted, how long it has run in total, how much its moving parts have worked (a PTZ's zoom, focus, iris, pan and tilt, and the day/night filter), and whether its fan or heater is on. Values are green when fine, grey for a note, orange for a warning and red for a problem. The **All cameras** table has **Up**, **CPU** and **Memory** columns with the same colors, so you can compare cameras at a glance. **Right-click a camera > Quick tools > Camera status** opens a small window with the same figures for that one camera.
+
+A restart in the last hour is a warning and a restart in the last day a note. A processor at 95% or more is a warning, and so is memory at 97% or more or under 12 MB free (most cameras sit at 80 to 95%, so a lower limit would flag nearly all of them). Most fixed cameras do not keep a restart count or running time and the row says so. The running time is in minutes. The processor figure changes from second to second, so one reading is not a trend. The camera's status is read first, before the other settings, so it shows the camera at rest. It only reads; nothing on a camera is changed.
+
+---
+
 ## 4. Live View and Viewport Overlays
 
 The main window of the program displays the live feed:
@@ -480,7 +502,7 @@ The application allows you to quickly capture high-quality snapshots from any ca
 ### User Interface Settings (UI):
 1. Go to the **Settings** tab (gear icon in the options window) or open the **Options** window.
 2. In the **User Interface Settings** section, you can customize the visibility of elements overlaid on the camera tiles:
-   * **Show channel status in the top left corner of the viewport** (default enabled) — Displays stream loading, playing, and connection status information.
+   * **Show channel status in the top left corner of the viewport** (default enabled) — Displays stream loading, playing, and connection status information. The small badge reads like `MAIN | RTSP | H.265 | 30 FPS | 4.2 Mbps`: which stream the tile plays, how it is fetched, **the video encoding (H.265, H.264 and so on)**, the frame rate and the bit rate. The encoding is read from the stream KVision plays, so it shows once the video is up, and is left out for a tile that plays through the Hikvision SDK player or for a quick playback, which do not report it.
    * **Show camera info in the bottom left corner of the viewport** (default enabled) — Displays the camera name retrieved from the Hikvision recorder.
    * **Show control icons in the bottom right corner of the viewport only when hovering** (default enabled) — Automatically hides the control button panel (snapshot, archive, 1:1 pixel-to-pixel, region zoom) when the mouse cursor is outside of that specific camera viewport. The icons appear instantly as soon as you move your mouse over the viewport (no click required) and disappear when leaving, maximizing the visibility of your camera streams.
    * **Show info fields only when hovering** (default disabled) — Analogous option that hides the status on top-left and name on bottom-left of viewports, displaying a completely clean camera stream unless the cursor is moved over that specific camera tile.
@@ -501,7 +523,7 @@ Right-click a camera tile to open its menu. Some entries show only when they app
   * **Reload**: restarts this tile's stream.
   * **Check detection setup...**: a read-only check of what the camera reports about detection (metadata, zones, rules, where each rule lives, whether it notifies the Surveillance Center). It changes nothing and lists what is missing.
   * **Change settings**: the Viewport Settings dialog (Section 9, item 1).
-  * **Rule lines on/off (VCA lines)**: switches the camera's own drawing of its rule lines and boxes on the video stream. The camera is read first and then set the other way, and a notice says what it now reports. Only this camera is changed.
+  * **Rule lines on/off (VCA lines)**: switches the camera's own drawing of its rule lines and boxes on the video stream. The camera draws them on its **sub-stream only** (checked on a G3: the sub-stream had them and the main stream did not), so a tile that plays the main stream, and a recording of the main stream, will not show them. The camera is read first and then set the other way, and a notice says what it now reports. Only this camera is changed.
   * **Noise filter (camera sound)**: the camera's own "Environmental Noise Filtering" switch. A tick shows when it is on. It is an on/off switch only.
   * **Activate Flashing Light**: makes the camera's built-in light flash. The camera stops it after its own programmed time. Some newer cameras (a G3 was tried) accept the command but have no on-demand strobe, so nothing flashes; the tooltip says so.
   * **Play Warning Message**: makes the camera play the sound, volume and number of times already set on it (its web page: Event > Audio Alarm). **It is loud.**

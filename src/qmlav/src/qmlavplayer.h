@@ -33,6 +33,7 @@ class QmlAVPlayer : public QObject, public QQmlParserStatus
     QMLAV_PROPERTY_DECL(bool, muted, setMuted, mutedChanged) = false;
     QMLAV_PROPERTY_DECL(double, volume, setVolume, volumeChanged) = 0.0;
     QMLAV_PROPERTY_READONLY(bool, hasVideo, hasVideoChanged) = false;
+    QMLAV_PROPERTY_READONLY(QString, videoCodec, videoCodecChanged) = QString(); // "H.265", "H.264"... once the video is open
     QMLAV_PROPERTY_READONLY(bool, hasAudio, hasAudioChanged) = false;
     QMLAV_PROPERTY_READONLY(bool, framePresented, framePresentedChanged) = false;
 
@@ -64,6 +65,7 @@ protected:
     void setPlaybackState(const QMediaPlayer::State state);
     void setStatus(const QMediaPlayer::MediaStatus status);
     void setHasVideo(bool hasVideo);
+    void setVideoCodec(const QString &codec);
     void setHasAudio(bool hasAudio);
     void setFramePresented(bool framePresented);
 

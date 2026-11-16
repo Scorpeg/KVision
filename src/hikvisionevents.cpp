@@ -15,7 +15,9 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSet>
 #include <QUrl>
+#include <algorithm>
 
 namespace {
 const int kMaxFailures = 3;       // after this many failed attempts in a row, tell the user once (it keeps trying)
@@ -423,11 +425,23 @@ void HikvisionEvents::notePictureRect(Conn *c, const QString &body, int eventCha
     static const QRegularExpression picRx(QStringLiteral("<detectionPicturesNumber>(\\d+)</detectionPicturesNumber>"));
     c->pendingValid = false;
     c->pendingHasRect = false;
-    if (picRx.match(body).captured(1).toInt() < 1)
-        return; // this event brings no picture
     QDateTime when = QDateTime::fromString(cameraTime, Qt::ISODate);
     if (!when.isValid())
         when = QDateTime::currentDateTime();
+    if (picRx.match(body).captured(1).toInt() < 1) {
+        // This event brings no picture and no box. An older camera never does, so a still is taken instead (see kSmartPictureGapMs). A camera
+        // that does send pictures sometimes sends a report without one; that report gets a still too, only if none was taken for this kind of
+        // rule in the last few seconds. Not for a camera behind a recorder: its picture is the recorder's to send.
+        if (!c->recorderMode) {
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            const QString key = c->ip + QLatin1Char('|') + QString::number(eventChannel) + QLatin1Char('|') + kind;
+            if (nowMs - m_smartPictureAt.value(key, 0) >= kSmartPictureGapMs) {
+                m_smartPictureAt.insert(key, nowMs);
+                takeSnapshot(c->ip, eventChannel > 0 ? eventChannel : 1, when.toSecsSinceEpoch(), kind);
+            }
+        }
+        return;
+    }
     c->pendingSecs = when.toSecsSinceEpoch();
     c->pendingAddress = cameraAddress(c, eventChannel);
     c->pendingLens = pictureLens(c, eventChannel);
@@ -661,25 +675,79 @@ void HikvisionEvents::savePicture(const QString &address, int lens, const QStrin
 }
 
 // Keeps the newest m_maxPictures pictures of each camera (or lens) - all of them when key is empty - and deletes the
-// older ones, so a busy camera cannot push out the pictures of a quiet one and the folder cannot grow without end.
+// older ones. Motion pictures are counted apart from the smart-event ones, and kept fewer.
+//
+// This used to list the whole folder with each file's modification time (QDir::entryInfoList sorted by time) on every save. With 5,655
+// pictures that took about a second on the thread that draws the screen, and a burst of pictures froze the program for several
+// seconds. Now:
+//  * only the names are listed, and for one camera only (a name filter), about 10 ms;
+//  * a picture's name holds the event time in seconds (<camera>_<seconds>[-<kind>].jpg), so name order is time order and no file
+//    time is read (a name without the seconds, an old picture, is ordered by its file time as before, but only when one is met);
+//  * the listing is skipped altogether until a camera has gone over its limit: a count of what was saved since the last trim,
+//    started from the first listing, says whether it can have.
 void HikvisionEvents::prunePictures(const QString &dirPath, const QString &key)
 {
-    const QFileInfoList files = QDir(dirPath).entryInfoList(QStringList() << QStringLiteral("*.jpg"), QDir::Files, QDir::Time);
-    QHash<QString, int> seen;
-    for (const QFileInfo &fi : files) {
-        const QString name = fi.completeBaseName();
-        const int us = name.lastIndexOf(QLatin1Char('_'));
-        if (us <= 0)
-            continue;
-        const QString cam = name.left(us);
-        if (!key.isEmpty() && cam != key)
-            continue;
-        // Motion pictures are counted apart from the smart-event ones, and kept fewer.
-        const bool motion = name.endsWith(QLatin1String("-motion"));
-        const int limit = motion ? qMax(10, m_maxPictures / 4) : m_maxPictures;
-        if (++seen[motion ? cam + QLatin1String("|motion") : cam] > limit)
-            QFile::remove(fi.absoluteFilePath());
+    // A whole-folder trim (the setting changed) lists everything, once, and trims every camera.
+    if (key.isEmpty()) {
+        const QStringList all = QDir(dirPath).entryList(QStringList() << QStringLiteral("*.jpg"), QDir::Files, QDir::NoSort);
+        QSet<QString> cams;
+        for (const QString &n : all) {
+            const int us = n.lastIndexOf(QLatin1Char('_'));
+            if (us > 0)
+                cams.insert(n.left(us));
+        }
+        for (const QString &cam : qAsConst(cams))
+            pruneCamera(dirPath, cam, true);
+        return;
     }
+    pruneCamera(dirPath, key, false);
+}
+
+// One camera (or lens). force lists the files whatever the count says.
+void HikvisionEvents::pruneCamera(const QString &dirPath, const QString &key, bool force)
+{
+    // The count of pictures this camera has on disk, as far as is known: absent until the first listing, then kept up to date
+    // by each save. It only decides whether to look, so a count that is a little off makes a trim a little early or late, and never
+    // keeps or removes the wrong pictures: the listing below is what decides.
+    auto it = m_pictureCount.find(key);
+    if (!force && it != m_pictureCount.end()) {
+        if (++it.value() <= m_maxPictures)
+            return; // cannot be over the limit yet
+    }
+    const QStringList names = QDir(dirPath).entryList(QStringList() << key + QStringLiteral("_*.jpg"), QDir::Files, QDir::NoSort);
+    struct Pic { QString name; qint64 secs; bool motion; };
+    QList<Pic> pics;
+    pics.reserve(names.size());
+    int motionCount = 0, otherCount = 0;
+    for (const QString &n : names) {
+        // "<key>_<seconds>-<kind>.jpg" or "<key>_<seconds>.jpg": the key itself may hold an underscore (192.0.0.115_ch14), but a
+        // seconds value follows the key and a "_" and holds digits only, so a name of a longer key (192.0.0.115_ch14 against
+        // 192.0.0.115) does not count.
+        const QString rest = n.mid(key.size() + 1, n.size() - key.size() - 5); // without the key, "_" and ".jpg"
+        const int dash = rest.indexOf(QLatin1Char('-'));
+        const QString secsText = dash < 0 ? rest : rest.left(dash);
+        bool ok = false;
+        const qint64 secs = secsText.toLongLong(&ok);
+        if (!ok)
+            continue; // another camera whose name starts the same
+        const bool motion = rest.endsWith(QLatin1String("-motion"));
+        pics.append({n, secs, motion});
+        (motion ? motionCount : otherCount)++;
+    }
+    const int limitOther = m_maxPictures;
+    const int limitMotion = qMax(10, m_maxPictures / 4);
+    if (otherCount > limitOther || motionCount > limitMotion) {
+        std::sort(pics.begin(), pics.end(), [](const Pic &a, const Pic &b) { return a.secs != b.secs ? a.secs > b.secs : a.name > b.name; }); // newest first
+        int keptOther = 0, keptMotion = 0;
+        for (const Pic &p : qAsConst(pics)) {
+            int &kept = p.motion ? keptMotion : keptOther;
+            if (++kept > (p.motion ? limitMotion : limitOther))
+                QFile::remove(dirPath + QLatin1Char('/') + p.name);
+        }
+        otherCount = qMin(otherCount, limitOther);
+        motionCount = qMin(motionCount, limitMotion);
+    }
+    m_pictureCount.insert(key, otherCount + motionCount);
 }
 
 void HikvisionEvents::setMaxPictures(int count)
@@ -1131,6 +1199,23 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
                         if (QFile::exists(t)) {
                             pic = t;
                             break;
+                        }
+                    }
+                }
+                // A camera that sends no picture with its reports gets one still per burst (kSmartPictureGapMs), named for the burst's first
+                // second. A later line of the same burst has no picture of its own: use the newest one of the same kind just before it. Only a
+                // line with no box (a camera that sends a box sends its own picture), and never a Motion or Tracking line.
+                if (pic.isEmpty() && ms > 0 && e.value(QStringLiteral("box")).toList().isEmpty()
+                    && kindText != QLatin1String("Motion") && kindText != QLatin1String("Tracking") && kindText != QLatin1String("Face detection")) {
+                    for (qint64 back = 1; back <= kSmartPictureGapMs / 1000 && pic.isEmpty(); ++back) {
+                        // Named with the lens when the camera has more than one, without it when it has one: try both, as above.
+                        const QString tries2[2] = { picturePath(configDir, picIp, ms / 1000 - back, channel > 0 ? channel : 0, kindText),
+                                                    picturePath(configDir, picIp, ms / 1000 - back, 0, kindText) };
+                        for (const QString &t : tries2) {
+                            if (QFile::exists(t)) {
+                                pic = t;
+                                break;
+                            }
                         }
                     }
                 }

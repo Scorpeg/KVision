@@ -231,6 +231,32 @@ FocusScope {
         }
         HikvisionBackup.startWarning(ip);
     }
+    // Quick tools > Camera status: a window with one card for the camera (read only: uptime, load, restarts, wear on moving parts).
+    property var cameraStatusWins: ({})
+    function openCameraStatus(ip, name) {
+        if (!ip)
+            return;
+        var open = root.cameraStatusWins[ip];
+        if (open) {
+            open.show();
+            open.raise();
+            open.run();
+            return;
+        }
+        var w = cameraStatusComponent.createObject(rootWindow, { "camIp": ip, "camName": name || ip });
+        if (!w)
+            return;
+        var m = root.cameraStatusWins;
+        m[ip] = w;
+        root.cameraStatusWins = m;
+        w.closing.connect(function() {
+            var k = root.cameraStatusWins;
+            delete k[ip];
+            root.cameraStatusWins = k;
+        });
+        w.show();
+        w.run();
+    }
     // Quick tools > Reboot Camera: asks first (the camera goes offline for a minute or two), then restarts only that camera.
     property string rebootMenuIp: ""
     property string rebootMenuName: ""
@@ -2067,7 +2093,7 @@ FocusScope {
 
                             ToolTip.visible: hovered
                             ToolTip.delay: 600
-                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). The camera is read first and then set the other way. Only this camera is changed.")
+                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). It is drawn on the sub-stream only, so a tile playing the main stream does not show it. The camera is read first and then set the other way. Only this camera is changed.")
 
                             onTriggered: {
                                 contextMenu.close();
@@ -2185,6 +2211,42 @@ FocusScope {
                                 var player = playerPool.activePlayersMap[model.index];
                                 if (player)
                                     root.runWarning(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+
+                        MenuItem {
+                            id: cameraStatusMenuItem
+                            text: qsTr("Camera status")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: cameraStatusMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: cameraStatusMenuItem.enabled ? (cameraStatusMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: cameraStatusMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: cameraStatusMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("How this camera is doing: how long it has been up, how busy it is, how often it has restarted, and the wear on its moving parts. Read only.")
+
+                            onTriggered: {
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.openCameraStatus(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
 
@@ -2631,6 +2693,11 @@ FocusScope {
     }
 
     // The setup check window lists what the check found for each camera.
+    Component {
+        id: cameraStatusComponent
+        CameraStatusOneWindow {}
+    }
+
     Component {
         id: setupCheckComponent
         SetupCheckWindow {}

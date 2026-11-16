@@ -1,5 +1,6 @@
 #include "hikvisionbackup.h"
 
+#include "camerastatustext.h"
 #include "hikvisionmanager.h"
 #include "offlinerecorders.h"
 
@@ -19,6 +20,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
+#include <QTextStream>
 #include <QThread>
 
 namespace {
@@ -703,6 +705,223 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
     a.result = healthCard(cam, items, shorts, model, fw);
     return a;
 }
+
+// ---- Camera status: how the camera itself is doing (read only) ----
+//   GET /ISAPI/System/status       uptime, CPU %, memory, restart count, run time, lens and pan/tilt wear counters, fan and heater
+//   GET /ISAPI/System/deviceInfo   model and firmware, for the card's heading
+// The run-time counters (cameraRunTotalTime and the three temperature ranges) count MINUTES. The camera does not say so; measured on
+// 15 Nov 2026: over 125 seconds they rose by 3 (a G3) and 2 (a PTZ), and a PTZ made in Jan 2023 reads 1,939,340 = 3.7 years.
+// Most fixed cameras read 0 for the restart count and run time: they do not keep them. Nothing is ever written. A refused login
+// is never retried.
+HealthAnswer statusOne(const HikvisionBackup::Cam &cam)
+{
+    HealthAnswer a;
+    const QString heading = QStringLiteral("Camera status");
+    auto bail = [&](const QString &itemState, const QString &detail, const QString &shortText) {
+        a.message = detail;
+        a.result = healthCard(cam, {healthItem(itemState, heading, detail)}, {shortText}, QString(), QString());
+        return a;
+    };
+    if (cam.user.isEmpty() || cam.pass.isEmpty())
+        return bail(QStringLiteral("problem"), QStringLiteral("no login saved for this camera (a blank password is never sent)"), QStringLiteral("No login saved"));
+    const QString base = QStringLiteral("http://%1:%2/ISAPI/System/").arg(cam.ip).arg(cam.httpPort);
+    QByteArray body;
+    const int code = curlGet(base + QStringLiteral("status"), cam.user, cam.pass, 8, QString(), &body);
+    if (code == 0)
+        return bail(QStringLiteral("problem"), QStringLiteral("could not connect"), QStringLiteral("Could not connect"));
+    if (code == 401) {
+        a.refused = true;
+        return bail(QStringLiteral("problem"), QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"),
+                    QStringLiteral("Login refused"));
+    }
+    if (code == 403 || code == 404 || code == 501)
+        return bail(QStringLiteral("warning"), QStringLiteral("this camera has no status page (HTTP %1)").arg(code), QStringLiteral("No status page"));
+    if (code != 200)
+        return bail(QStringLiteral("problem"), QStringLiteral("the camera answered HTTP %1").arg(code), QStringLiteral("Could not be read"));
+
+    const QString xml = QString::fromUtf8(body);
+    QString model, fw;
+    QByteArray info;
+    if (curlGet(base + QStringLiteral("deviceInfo"), cam.user, cam.pass, 8, QString(), &info) == 200) {
+        model = tag(QString::fromUtf8(info), QStringLiteral("model"));
+        fw = tag(QString::fromUtf8(info), QStringLiteral("firmwareVersion"));
+    }
+
+    // The wording and the limits live in camerastatustext.h, shared with the Camera settings window.
+    const CameraStatusText::Result st = CameraStatusText::build(xml);
+    QVariantList items;
+    QStringList shorts, plain;
+    for (const CameraStatusText::Item &it : st.items) {
+        items << healthItem(it.state, it.label, it.detail);
+        plain << QStringLiteral("%1: %2").arg(it.label, it.detail);
+        if (!it.shortText.isEmpty())
+            shorts << it.shortText;
+    }
+    if (shorts.isEmpty())
+        shorts << (st.upShort.isEmpty() ? st.loadShort : (st.loadShort.isEmpty() ? st.upShort : st.upShort + QStringLiteral(", ") + st.loadShort));
+    a.message = plain.join(QLatin1Char('\n'));
+    a.result = healthCard(cam, items, shorts, model, fw);
+    return a;
+}
+
+// ---- Max bitrate of a camera's video streams (reads, or sets one value on every stream of one kind) ----
+//   GET /ISAPI/Streaming/channels                    which streams the camera really has (a camera answers a request for a stream it
+//                                                    does not have with a copy of the main stream, so the list is used, never a guess)
+//   GET /ISAPI/Streaming/channels/<id>               <videoQualityControlType> CBR or VBR, <constantBitRate>, <vbrUpperCap>
+//   GET /ISAPI/Streaming/channels/<id>/capabilities  min and max of those two (they differ by stream: 8192 or 16384)
+//   PUT /ISAPI/Streaming/channels/<id>               the whole document back with the two numbers changed
+// Stream ids are <lens><kind>: 101 main, 102 sub, 103 third of the first lens, 201, 202, 203 of a second lens. The max bitrate is the
+// cap of a VBR stream and the rate of a CBR one; every camera checked keeps the two numbers equal, so both are written. Nothing else
+// is touched: the document is read back afterwards and compared with the one before. kind is 1, 2 or 3; kbps 0 only reads.
+// A request outside what the stream accepts is skipped, not clamped. A refused login is never retried.
+QString kindName(int kind)
+{
+    return kind == 1 ? QStringLiteral("Main stream") : (kind == 3 ? QStringLiteral("Third stream") : QStringLiteral("Sub-stream"));
+}
+
+QString streamKey(const QString &xml)
+{
+    return QString(xml).replace(QRegularExpression(QStringLiteral(">\\s+<")), QStringLiteral("><")).simplified();
+}
+
+bool capRange(const QString &caps, const QString &name, int *lo, int *hi)
+{
+    const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("<%1[^>]*min=\"(\\d+)\"[^>]*max=\"(\\d+)\"").arg(name)).match(caps);
+    if (!m.hasMatch())
+        return false;
+    *lo = m.captured(1).toInt();
+    *hi = m.captured(2).toInt();
+    return true;
+}
+
+HealthAnswer bitrateOne(const HikvisionBackup::Cam &cam, int kind, int kbps, const QString &logDir)
+{
+    HealthAnswer a;
+    const QString heading = kindName(kind);
+    auto bail = [&](const QString &itemState, const QString &detail, const QString &shortText) {
+        a.message = detail;
+        a.result = healthCard(cam, {healthItem(itemState, heading, detail)}, {shortText}, QString(), QString());
+        return a;
+    };
+    if (cam.user.isEmpty() || cam.pass.isEmpty())
+        return bail(QStringLiteral("problem"), QStringLiteral("no login saved for this camera (a blank password is never sent)"), QStringLiteral("No login saved"));
+    const QString base = QStringLiteral("http://%1:%2/ISAPI/Streaming/channels").arg(cam.ip).arg(cam.httpPort);
+    QByteArray listBody;
+    const int lc = curlGet(base, cam.user, cam.pass, 8, QString(), &listBody);
+    if (lc == 0)
+        return bail(QStringLiteral("problem"), QStringLiteral("could not connect"), QStringLiteral("Could not connect"));
+    if (lc == 401) {
+        a.refused = true;
+        return bail(QStringLiteral("problem"), QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"), QStringLiteral("Login refused"));
+    }
+    if (lc != 200)
+        return bail(QStringLiteral("warning"), QStringLiteral("this camera has no stream settings page (HTTP %1)").arg(lc), QStringLiteral("No stream settings"));
+    QStringList ids;
+    QRegularExpressionMatchIterator it = QRegularExpression(QStringLiteral("<StreamingChannel[^>]*>\\s*<id>(\\d+)</id>")).globalMatch(QString::fromUtf8(listBody));
+    while (it.hasNext()) {
+        const QString id = it.next().captured(1);
+        if (id.toInt() >= 100 && id.toInt() % 100 == kind)
+            ids << id;
+    }
+    if (ids.isEmpty())
+        return bail(QStringLiteral("note"), QStringLiteral("this camera has no %1").arg(heading.toLower()), QStringLiteral("No %1").arg(heading.toLower()));
+
+    QVariantList items;
+    QStringList shorts, plain;
+    auto add = [&](const QString &state, const QString &label, const QString &detail, const QString &shortText = QString()) {
+        items << healthItem(state, label, detail);
+        plain << QStringLiteral("%1: %2").arg(label, detail);
+        if (!shortText.isEmpty())
+            shorts << shortText;
+    };
+    for (const QString &id : ids) {
+        const QString label = QStringLiteral("%1 (%2)").arg(heading, id);
+        QByteArray docBody, capBody;
+        const int dc = curlGet(base + QLatin1Char('/') + id, cam.user, cam.pass, 8, QString(), &docBody);
+        if (dc == 401) {
+            a.refused = true;
+            add(QStringLiteral("problem"), label, QStringLiteral("the camera refused the login (not tried again)"), QStringLiteral("Login refused"));
+            break;
+        }
+        if (dc != 200) {
+            add(QStringLiteral("problem"), label, QStringLiteral("the camera answered HTTP %1").arg(dc), QStringLiteral("Could not be read"));
+            continue;
+        }
+        const QString doc = QString::fromUtf8(docBody);
+        const QString quality = tag(doc, QStringLiteral("videoQualityControlType"));
+        const bool cbr = quality == QLatin1String("CBR");
+        const int cur = (cbr ? tag(doc, QStringLiteral("constantBitRate")) : tag(doc, QStringLiteral("vbrUpperCap"))).toInt();
+        int lo = 32, hi = 16384, l2 = 0, h2 = 0;
+        if (curlGet(base + QLatin1Char('/') + id + QStringLiteral("/capabilities"), cam.user, cam.pass, 8, QString(), &capBody) == 200) {
+            const QString caps = QString::fromUtf8(capBody);
+            int a1 = 0, b1 = 0;
+            if (capRange(caps, QStringLiteral("constantBitRate"), &a1, &b1)) { lo = a1; hi = b1; }
+            if (capRange(caps, QStringLiteral("vbrUpperCap"), &l2, &h2)) { lo = qMax(lo, l2); hi = qMin(hi, h2); }
+        }
+        const QString what = QStringLiteral("%1x%2 %3, %4")
+                                 .arg(tag(doc, QStringLiteral("videoResolutionWidth")), tag(doc, QStringLiteral("videoResolutionHeight")),
+                                      tag(doc, QStringLiteral("videoCodecType")), quality.isEmpty() ? QStringLiteral("rate control not given") : quality);
+        if (kbps <= 0) {
+            add(QStringLiteral("ok"), label, QStringLiteral("%1, max bitrate %2 kbps (this stream accepts %3 to %4)").arg(what).arg(cur).arg(lo).arg(hi),
+                QStringLiteral("%1 kbps").arg(cur));
+            continue;
+        }
+        if (cur == kbps && tag(doc, QStringLiteral("constantBitRate")).toInt() == kbps && tag(doc, QStringLiteral("vbrUpperCap")).toInt() == kbps) {
+            add(QStringLiteral("ok"), label, QStringLiteral("%1, max bitrate is already %2 kbps").arg(what).arg(kbps), QStringLiteral("%1 kbps already").arg(kbps));
+            continue;
+        }
+        if (kbps < lo || kbps > hi) {
+            add(QStringLiteral("warning"), label,
+                QStringLiteral("not changed: %1 kbps is outside what this stream accepts (%2 to %3 kbps). It is %4 kbps now.").arg(kbps).arg(lo).arg(hi).arg(cur),
+                QStringLiteral("%1 kbps not allowed").arg(kbps));
+            continue;
+        }
+        // The whole document back with the two numbers changed (the camera has no call for one field). Compacted: a newline inside the
+        // body made one camera answer "Invalid XML Format" when sent through a curl settings line.
+        QString body = doc;
+        body.replace(QRegularExpression(QStringLiteral("<constantBitRate>\\d+</constantBitRate>")), QStringLiteral("<constantBitRate>%1</constantBitRate>").arg(kbps));
+        body.replace(QRegularExpression(QStringLiteral("<vbrUpperCap>\\d+</vbrUpperCap>")), QStringLiteral("<vbrUpperCap>%1</vbrUpperCap>").arg(kbps));
+        body = streamKey(body);
+        QByteArray reply;
+        const int pc = curlPutJson(base + QLatin1Char('/') + id, cam.user, cam.pass, 15, body.toUtf8(), &reply, QStringLiteral("application/xml"));
+        if (pc == 401) {
+            a.refused = true;
+            add(QStringLiteral("problem"), label, QStringLiteral("the camera refused the login (not tried again)"), QStringLiteral("Login refused"));
+            break;
+        }
+        const QString r = QString::fromUtf8(reply);
+        if (pc != 200 || !r.contains(QStringLiteral("<statusCode>1</statusCode>"))) {
+            const QString why = tag(r, QStringLiteral("subStatusCode"));
+            add(QStringLiteral("problem"), label,
+                QStringLiteral("the camera did not accept it (HTTP %1%2). Nothing was changed.").arg(pc).arg(why.isEmpty() ? QString() : QStringLiteral(", ") + why),
+                QStringLiteral("Not accepted"));
+            continue;
+        }
+        QByteArray backBody;
+        curlGet(base + QLatin1Char('/') + id, cam.user, cam.pass, 8, QString(), &backBody);
+        const QString back = QString::fromUtf8(backBody);
+        const QRegularExpression nums(QStringLiteral("<(constantBitRate|vbrUpperCap)>\\d+</\\1>"));
+        const bool applied = tag(back, QStringLiteral("constantBitRate")).toInt() == kbps && tag(back, QStringLiteral("vbrUpperCap")).toInt() == kbps;
+        const bool otherSame = QString(streamKey(back)).remove(nums) == QString(streamKey(doc)).remove(nums);
+        QFile lf(logDir + QStringLiteral("/BitrateChanges.log"));
+        QDir().mkpath(logDir);
+        if (lf.open(QIODevice::Append | QIODevice::Text))
+            QTextStream(&lf) << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")) << ", " << cam.name << ", " << cam.ip
+                             << ", stream " << id << ", " << cur << " -> " << kbps << " kbps, " << (applied ? "confirmed" : "NOT confirmed") << "\n";
+        if (!applied)
+            add(QStringLiteral("problem"), label, QStringLiteral("the camera said OK but reads %1 kbps afterwards, not %2").arg(tag(back, QStringLiteral("vbrUpperCap"))).arg(kbps), QStringLiteral("Not confirmed"));
+        else if (!otherSame)
+            add(QStringLiteral("warning"), label, QStringLiteral("%1 kbps -> %2 kbps, but other settings of this stream read differently afterwards. Check the camera's page.").arg(cur).arg(kbps), QStringLiteral("Changed, check it"));
+        else
+            add(QStringLiteral("ok"), label, QStringLiteral("%1, max bitrate %2 -> %3 kbps (read back from the camera and confirmed; nothing else in the stream changed)").arg(what).arg(cur).arg(kbps),
+                QStringLiteral("%1 -> %2 kbps").arg(cur).arg(kbps));
+    }
+    if (shorts.isEmpty())
+        shorts << QStringLiteral("Nothing changed");
+    a.message = plain.join(QLatin1Char('\n'));
+    a.result = healthCard(cam, items, shorts, QString(), QString());
+    return a;
+}
 }
 
 HikvisionBackup::HikvisionBackup(QObject *parent) : QObject(parent) {}
@@ -1258,6 +1477,137 @@ void HikvisionBackup::checkHealthAll()
             m_ruleBusy = false;
             emit ruleBusyChanged();
             emit healthAllFinished(summary, needLook == 0);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+void HikvisionBackup::checkStatus(const QString &ip)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        Cam none;
+        none.ip = ip;
+        emit statusResult(healthCard(none, {healthItem(QStringLiteral("problem"), QStringLiteral("Camera status"),
+                                                       QStringLiteral("That camera is not in the list. Refresh the list and try again."))},
+                                     {QStringLiteral("Not in the list")}, QString(), QString()));
+        return;
+    }
+    m_ruleBusy = true; // shares the one-at-a-time flag with the other camera switches
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    m_ruleWorker = QThread::create([this, found]() {
+        const HealthAnswer a = statusOne(found);
+        QMetaObject::invokeMethod(this, [this, found, a]() {
+            qInfo() << "[Status]" << found.ip << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit statusResult(a.result);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+// kind 1 main, 2 sub, 3 third; kbps 0 only reads. One camera, answered with streamBitrateResult().
+void HikvisionBackup::streamBitrate(const QString &ip, int kind, int kbps)
+{
+    if (m_ruleBusy)
+        return;
+    Cam found;
+    bool have = false;
+    for (const Cam &c : m_cams) {
+        if (c.ip == ip) {
+            found = c;
+            have = true;
+            break;
+        }
+    }
+    if (!have) {
+        Cam none;
+        none.ip = ip;
+        emit streamBitrateResult(healthCard(none, {healthItem(QStringLiteral("problem"), kindName(kind), QStringLiteral("That camera is not in the list. Refresh the list and try again."))},
+                                            {QStringLiteral("Not in the list")}, QString(), QString()));
+        return;
+    }
+    m_ruleBusy = true;
+    emit ruleBusyChanged();
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    const QString logDir = QFileInfo(m_configPath).absolutePath() + QStringLiteral("/logs");
+    m_ruleWorker = QThread::create([this, found, kind, kbps, logDir]() {
+        const HealthAnswer a = bitrateOne(found, kind, kbps, logDir);
+        QMetaObject::invokeMethod(this, [this, found, kind, kbps, a]() {
+            qInfo() << "[Bitrate]" << found.ip << found.name << (kbps > 0 ? "set" : "read") << kind << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit streamBitrateResult(a.result);
+        }, Qt::QueuedConnection);
+    });
+    m_ruleWorker->start();
+}
+
+// The same for every camera of the list, one after the other. A login that one camera refused is never sent to another.
+void HikvisionBackup::streamBitrateAll(int kind, int kbps)
+{
+    if (m_ruleBusy)
+        return;
+    if (m_cams.isEmpty()) {
+        emit streamBitrateAllFinished(QStringLiteral("No cameras found. Refresh the list first."), false);
+        return;
+    }
+    m_ruleBusy = true;
+    emit ruleBusyChanged();
+    const QList<Cam> cams = m_cams;
+    if (m_ruleWorker) {
+        m_ruleWorker->wait();
+        m_ruleWorker->deleteLater();
+    }
+    const QString logDir = QFileInfo(m_configPath).absolutePath() + QStringLiteral("/logs");
+    m_ruleWorker = QThread::create([this, cams, kind, kbps, logDir]() {
+        int fine = 0, needLook = 0;
+        QSet<QString> refusedLogins;
+        int n = 0;
+        for (const Cam &cam : cams) {
+            ++n;
+            const QString login = cam.user + QLatin1Char('\n') + cam.pass;
+            HealthAnswer a;
+            if (refusedLogins.contains(login)) {
+                a.message = QStringLiteral("skipped: this login was already refused by another camera");
+                a.result = healthCard(cam, {healthItem(QStringLiteral("problem"), kindName(kind), a.message)}, {QStringLiteral("Skipped (login refused)")}, QString(), QString());
+            } else {
+                QMetaObject::invokeMethod(this, [this, cam, n, total = int(cams.size())]() { emit streamBitrateAllProgress(cam.name, n, total); }, Qt::QueuedConnection);
+                a = bitrateOne(cam, kind, kbps, logDir);
+                if (a.refused && !login.isEmpty())
+                    refusedLogins.insert(login);
+            }
+            qInfo() << "[Bitrate]" << cam.ip << cam.name << (kbps > 0 ? "set" : "read") << kind << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
+            const QVariantMap card = a.result;
+            QMetaObject::invokeMethod(this, [this, card]() { emit streamBitrateAllItem(card); }, Qt::QueuedConnection);
+            if (card.value(QStringLiteral("problems")).toInt() == 0 && card.value(QStringLiteral("warnings")).toInt() == 0)
+                ++fine;
+            else
+                ++needLook;
+        }
+        const QString summary = QStringLiteral("%1 of %2 camera(s): %3 fine, %4 to look at.").arg(kindName(kind), QString::number(cams.size())).arg(fine).arg(needLook);
+        QMetaObject::invokeMethod(this, [this, summary, needLook]() {
+            m_ruleBusy = false;
+            emit ruleBusyChanged();
+            emit streamBitrateAllFinished(summary, needLook == 0);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();

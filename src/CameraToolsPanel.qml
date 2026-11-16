@@ -317,35 +317,6 @@ ColumnLayout {
                 Layout.fillWidth: true
             }
 
-            Button {
-                id: camSettingsBtn
-                text: qsTr("Camera settings (read only)...")
-                Layout.alignment: Qt.AlignLeft
-                contentItem: Text {
-                    text: camSettingsBtn.text
-                    color: "white"
-                    font.bold: true
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: 10
-                    rightPadding: 10
-                }
-                background: Rectangle {
-                    color: camSettingsBtn.pressed ? "#303a46" : (camSettingsBtn.hovered ? "#3a4550" : "#2a3540")
-                    border.color: "#00f5d4"
-                    radius: 4
-                }
-                onClicked: {
-                    var w = cameraSettingsComponent.createObject(rootWindow);
-                    if (w)
-                        w.show();
-                }
-                ToolTip.delay: Compact.toolTipDelay
-                ToolTip.timeout: Compact.toolTipTimeout
-                ToolTip.visible: camSettingsBtn.hovered
-                ToolTip.text: qsTr("Look at every camera's own settings, including the hours its speaker and light work. Nothing can be changed here.")
-            }
-
             // Restore: only the backups of the camera picked above, one camera at a time.
             RowLayout {
                 Layout.fillWidth: true
@@ -446,6 +417,59 @@ ColumnLayout {
                 font.pixelSize: 9
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+            }
+        }
+    }
+
+    // ── Camera settings: a read only look at every camera's own settings (its own box, apart from Camera backup) ──
+    Frame {
+        Layout.fillWidth: true
+        background: Rectangle {
+            color: "#1c242c"
+            radius: 6
+            border.color: "#2a3540"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            Text {
+                text: qsTr("Camera settings")
+                color: "white"
+                font.pixelSize: 13
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            Button {
+                id: camSettingsBtn
+                text: qsTr("Camera settings (read only)...")
+                Layout.alignment: Qt.AlignLeft
+                contentItem: Text {
+                    text: camSettingsBtn.text
+                    color: "white"
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 10
+                }
+                background: Rectangle {
+                    color: camSettingsBtn.pressed ? "#303a46" : (camSettingsBtn.hovered ? "#3a4550" : "#2a3540")
+                    border.color: "#00f5d4"
+                    radius: 4
+                }
+                onClicked: {
+                    var w = cameraSettingsComponent.createObject(rootWindow);
+                    if (w)
+                        w.show();
+                }
+                ToolTip.delay: Compact.toolTipDelay
+                ToolTip.timeout: Compact.toolTipTimeout
+                ToolTip.visible: camSettingsBtn.hovered
+                ToolTip.text: qsTr("Look at every camera's own settings, including the hours its speaker and light work. Nothing can be changed here.")
             }
         }
     }
@@ -729,7 +753,10 @@ ColumnLayout {
             }
 
             Text {
-                text: "Some cameras can draw the lines and boxes of their smart-event rules (line crossing, intrusion, region) on the video "
+                text: "Note: the lines are drawn on the camera's SUB-stream only (checked on a G3: the sub-stream had them, the main stream did not). "
+                      + "A tile shows them only while it plays the sub-stream, which KVision uses for small tiles; a large tile on the main stream, "
+                      + "and any recording of the main stream, will not have them. "
+                      + "Some cameras can draw the lines and boxes of their smart-event rules (line crossing, intrusion, region) on the video "
                       + "they send, including the sub-stream that KVision's smaller tiles use. This is the camera's own switch (in its web "
                       + "page: VCA > Smart Event > General Settings > Metadata > Enable Stream Rule and Sub-Stream). It is read first, only "
                       + "that switch is changed, and the camera is asked again to confirm. A camera without the switch says so. It uses each "
@@ -1057,6 +1084,372 @@ ColumnLayout {
                 text: "Check shows one camera here. Check all opens a window with one card per camera. It shows the camera's own clock next to this computer's, and its firmware version. After a Check, type the newest firmware version you see on Hikvision's page for that model and press Save: a camera with an older version is then marked as \"update may be available\". (The cameras cannot say, and Hikvision's site cannot be read by a program, so this is a note you keep.) A clock that is more than two minutes off is "
                       + "flagged: event times will be wrong, and some cameras refuse the login when their time is far out. This only reads: nothing on a camera "
                       + "is changed, and a refused login is not tried again. Set the time in the camera's web page (System > Time Settings)."
+                color: "#8898a6"
+                font.pixelSize: 9
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
+    // ── Max bitrate: the video streams' own limit (web page: Video > Max. Bitrate). Sets one number on every stream of a kind. ──
+    property var bitrateCard: ({})   // the last answer for the chosen camera, in the shape the setup check's list draws
+    Connections {
+        target: HikvisionBackup
+        function onStreamBitrateResult(card) {
+            var sel = bitrateCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[bitrateCameraCombo.currentIndex] : null;
+            if (!sel || sel.ip !== card.key)
+                return;
+            rootPanel.bitrateCard = card;
+        }
+    }
+
+    Component {
+        id: bitrateWindowComponent
+        CameraBitrateWindow {}
+    }
+    // Opens the all-cameras window. It starts at once: the confirm dialog below has already been answered when a value is to be written.
+    function openBitrateWindow(kind, kbps) {
+        var w = bitrateWindowComponent.createObject(rootWindow, { "kind": kind, "kbps": kbps });
+        if (w) {
+            w.show();
+            w.run();
+        }
+    }
+    readonly property int bitrateKind: bitrateKindCombo.currentIndex === 0 ? 2 : 1   // the first choice is the sub-stream
+    readonly property string bitrateKindText: bitrateKindCombo.currentIndex === 0 ? "sub-stream" : "main stream"
+    readonly property int bitrateValue: parseInt(bitrateField.text)
+
+    ConfirmDialog {
+        id: bitrateOneConfirm
+        title: "Set max bitrate"
+        iconSource: "qrc:/images/icon-warning.svg"
+        property string camIp: ""
+        property string camName: ""
+        property int kind: 2
+        property int kbps: 0
+        message: "Set the " + (kind === 1 ? "main stream" : "sub-stream") + " max bitrate of " + camName + " (" + camIp + ") to " + kbps + " kbps?"
+                 + "\n\nThis changes the camera's own video setting, on every stream of that kind it has (a two-lens camera has one per lens). "
+                 + "The camera is read back to confirm, and nothing else in the stream is changed. A value the stream does not accept is skipped."
+        onAccepted: HikvisionBackup.streamBitrate(camIp, kind, kbps)
+    }
+
+    ConfirmDialog {
+        id: bitrateAllConfirm
+        title: "Set max bitrate on all cameras"
+        iconSource: "qrc:/images/icon-warning.svg"
+        property int kind: 2
+        property int kbps: 0
+        message: "Set the " + (kind === 1 ? "main stream" : "sub-stream") + " max bitrate of EVERY camera in the list to " + kbps + " kbps?"
+                 + "\n\n" + rootPanel.backupCameraModel.length + " camera(s) will be asked, one after the other, each on its own address. "
+                 + "This changes each camera's own video setting. Each is read back to confirm and nothing else in the stream is changed. "
+                 + "A camera that does not accept the value, or has no such stream, is left as it is and reported. What was changed is written to logs/BitrateChanges.log."
+        onAccepted: rootPanel.openBitrateWindow(kind, kbps)
+    }
+
+    Frame {
+        Layout.fillWidth: true
+        background: Rectangle {
+            color: "#1c242c"
+            radius: 6
+            border.color: "#2a3540"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            Text {
+                text: "Max bitrate of the video streams"
+                color: "white"
+                font.pixelSize: 13
+                font.bold: true
+                Layout.fillWidth: true
+            }
+
+            ComboBox {
+                id: bitrateCameraCombo
+                Layout.fillWidth: true
+                enabled: !HikvisionBackup.ruleBusy
+                model: rootPanel.backupCameraModel
+                textRole: "name"
+                onCurrentIndexChanged: rootPanel.bitrateCard = ({})
+
+                background: Rectangle {
+                    implicitHeight: 34
+                    color: "#1b2733"
+                    border.color: bitrateCameraCombo.popup.visible || bitrateCameraCombo.activeFocus ? "#ff7a00" : (bitrateCameraCombo.hovered ? "#ff7a00" : "#5a6b7b")
+                    border.width: 1
+                    radius: 4
+                }
+                indicator: Text {
+                    x: bitrateCameraCombo.width - width - 10
+                    y: (bitrateCameraCombo.height - height) / 2
+                    text: "\u25BE"
+                    color: "#ff7a00"
+                    font.pixelSize: 18
+                }
+                contentItem: Text {
+                    text: bitrateCameraCombo.displayText
+                    color: bitrateCameraCombo.enabled ? "white" : "#8898a6"
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 28
+                    elide: Text.ElideRight
+                }
+                delegate: ItemDelegate {
+                    width: bitrateCameraCombo.width
+                    height: 32
+                    contentItem: Text {
+                        text: modelData.name + "  (" + modelData.ip + ")"
+                        color: hovered ? "#ff7a00" : "white"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                    }
+                    background: Rectangle {
+                        color: hovered ? "#2a3540" : "transparent"
+                        radius: 4
+                    }
+                }
+                popup: Popup {
+                    y: bitrateCameraCombo.height + 2
+                    width: bitrateCameraCombo.width
+                    implicitHeight: Math.min(320, bitrateCameraCombo.popup.visible ? contentItem.implicitHeight : 0)
+                    padding: 4
+                    contentItem: ListView {
+                        clip: true
+                        implicitHeight: contentHeight
+                        model: bitrateCameraCombo.popup.visible ? bitrateCameraCombo.delegateModel : null
+                        currentIndex: bitrateCameraCombo.highlightedIndex
+                    }
+                    background: Rectangle {
+                        color: "#0f151b"
+                        border.color: "#ff7a00"
+                        border.width: 1
+                        radius: 4
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ComboBox {
+                    id: bitrateKindCombo
+                    Layout.preferredWidth: 150
+                    enabled: !HikvisionBackup.ruleBusy
+                    model: ["Sub-stream", "Main stream"]
+                    onCurrentIndexChanged: rootPanel.bitrateCard = ({})
+                    background: Rectangle {
+                        implicitHeight: 34
+                        color: "#1b2733"
+                        border.color: bitrateKindCombo.popup.visible || bitrateKindCombo.activeFocus ? "#ff7a00" : (bitrateKindCombo.hovered ? "#ff7a00" : "#5a6b7b")
+                        border.width: 1
+                        radius: 4
+                    }
+                    indicator: Text {
+                        x: bitrateKindCombo.width - width - 10
+                        y: (bitrateKindCombo.height - height) / 2
+                        text: "\u25BE"
+                        color: "#ff7a00"
+                        font.pixelSize: 18
+                    }
+                    contentItem: Text {
+                        text: bitrateKindCombo.displayText
+                        color: bitrateKindCombo.enabled ? "white" : "#8898a6"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 28
+                        elide: Text.ElideRight
+                    }
+                    delegate: ItemDelegate {
+                        width: bitrateKindCombo.width
+                        height: 32
+                        contentItem: Text {
+                            text: modelData
+                            color: hovered ? "#ff7a00" : "white"
+                            font.pixelSize: 11
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 10
+                        }
+                        background: Rectangle {
+                            color: hovered ? "#2a3540" : "transparent"
+                            radius: 4
+                        }
+                    }
+                    popup: Popup {
+                        y: bitrateKindCombo.height + 2
+                        width: bitrateKindCombo.width
+                        implicitHeight: contentItem.implicitHeight
+                        padding: 4
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: bitrateKindCombo.popup.visible ? bitrateKindCombo.delegateModel : null
+                            currentIndex: bitrateKindCombo.highlightedIndex
+                        }
+                        background: Rectangle {
+                            color: "#0f151b"
+                            border.color: "#ff7a00"
+                            border.width: 1
+                            radius: 4
+                        }
+                    }
+                }
+
+                TextField {
+                    id: bitrateField
+                    placeholderText: qsTr("max bitrate")
+                    selectByMouse: true
+                    Layout.preferredWidth: 110
+                    color: "white"
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator { bottom: 32; top: 16384 }
+                    background: Rectangle {
+                        color: "#0f151b"
+                        radius: 4
+                        border.color: bitrateField.activeFocus ? "#ff7a00" : "#2a3540"
+                    }
+                }
+
+                Text {
+                    text: "kbps"
+                    color: "#c8d2dc"
+                    font.pixelSize: 11
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            // The same card the detection setup check shows (one camera, opened).
+            SetupCheckList {
+                id: bitrateCardView
+                visible: bitrateCameraCombo.currentIndex >= 0 && rootPanel.bitrateCard.key !== undefined
+                         && rootPanel.bitrateCard.key === rootPanel.backupCameraModel[bitrateCameraCombo.currentIndex].ip
+                Layout.fillWidth: true
+                Layout.preferredHeight: contentHeight
+                interactive: false
+                results: rootPanel.bitrateCard.key !== undefined ? [rootPanel.bitrateCard] : []
+                openKey: rootPanel.bitrateCard.key !== undefined ? rootPanel.bitrateCard.key : ""
+                busy: HikvisionBackup.ruleBusy
+                onRecheck: HikvisionBackup.streamBitrate(key, rootPanel.bitrateKind, 0)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Button {
+                    id: bitrateReadBtn
+                    text: "Read"
+                    enabled: !HikvisionBackup.ruleBusy && bitrateCameraCombo.currentIndex >= 0
+                    contentItem: Text {
+                        text: bitrateReadBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: bitrateReadBtn.pressed ? "#303a46" : (bitrateReadBtn.hovered ? "#3a4550" : "#2a3540")
+                        border.color: "#00f5d4"
+                        radius: 4
+                        opacity: bitrateReadBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: HikvisionBackup.streamBitrate(rootPanel.backupCameraModel[bitrateCameraCombo.currentIndex].ip, rootPanel.bitrateKind, 0)
+                }
+
+                Button {
+                    id: bitrateReadAllBtn
+                    text: "Read all"
+                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0
+                    contentItem: Text {
+                        text: bitrateReadAllBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: bitrateReadAllBtn.pressed ? "#303a46" : (bitrateReadAllBtn.hovered ? "#3a4550" : "#2a3540")
+                        border.color: "#00f5d4"
+                        radius: 4
+                        opacity: bitrateReadAllBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: rootPanel.openBitrateWindow(rootPanel.bitrateKind, 0)
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                    id: bitrateSetBtn
+                    text: "Set on this camera"
+                    enabled: !HikvisionBackup.ruleBusy && bitrateCameraCombo.currentIndex >= 0 && rootPanel.bitrateValue >= 32
+                    contentItem: Text {
+                        text: bitrateSetBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: bitrateSetBtn.pressed ? "#0a8f4a" : (bitrateSetBtn.hovered ? "#14a24c" : "#118a41")
+                        radius: 4
+                        opacity: bitrateSetBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: {
+                        var cam = rootPanel.backupCameraModel[bitrateCameraCombo.currentIndex];
+                        bitrateOneConfirm.camIp = cam.ip;
+                        bitrateOneConfirm.camName = cam.name;
+                        bitrateOneConfirm.kind = rootPanel.bitrateKind;
+                        bitrateOneConfirm.kbps = rootPanel.bitrateValue;
+                        bitrateOneConfirm.open();
+                    }
+                }
+
+                Button {
+                    id: bitrateSetAllBtn
+                    text: "Set on all cameras"
+                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0 && rootPanel.bitrateValue >= 32
+                    contentItem: Text {
+                        text: bitrateSetAllBtn.text
+                        color: "white"
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+                    background: Rectangle {
+                        color: bitrateSetAllBtn.pressed ? "#b01c18" : (bitrateSetAllBtn.hovered ? "#e0241f" : "#c9201b")
+                        radius: 4
+                        opacity: bitrateSetAllBtn.enabled ? 1.0 : 0.4
+                    }
+                    onClicked: {
+                        bitrateAllConfirm.kind = rootPanel.bitrateKind;
+                        bitrateAllConfirm.kbps = rootPanel.bitrateValue;
+                        bitrateAllConfirm.open();
+                    }
+                }
+            }
+
+            Text {
+                text: "Sets the max bitrate (the web page's Video > Max. Bitrate) of every stream of the chosen kind: sub-stream or main stream. A two-lens camera has "
+                      + "one of each per lens and both are set. Each stream has its own limit (8192 or 16384 kbps on the cameras checked): a value outside it is skipped and "
+                      + "reported, never changed. The number is the cap of a variable-rate stream and the rate of a constant-rate one; both are written. The whole stream "
+                      + "setting is read first and written back with only those numbers changed, then read again to confirm. Read and Read all only look. Setting asks first, "
+                      + "one camera uses its own address and saved login, never the recorder's, a refused login is not tried again, and every change is noted in logs/BitrateChanges.log. "
+                      + "A lower value can make the picture blockier on a busy scene; the stream's own settings stay as they are otherwise."
                 color: "#8898a6"
                 font.pixelSize: 9
                 wrapMode: Text.Wrap

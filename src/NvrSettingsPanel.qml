@@ -372,9 +372,29 @@ ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 8
 
+                // Same look as the Connect and Cancel buttons below: orange to start, grey to stop.
                 Button {
+                    id: scanBtn
                     text: HikvisionProbe.scanning ? qsTr("LNG_00592") : qsTr("LNG_00591")
+                    implicitWidth: 120
+                    implicitHeight: 30
+                    focusPolicy: Qt.NoFocus
                     onClicked: HikvisionProbe.scanning ? HikvisionProbe.stop() : rootPanel.startScan()
+
+                    contentItem: Text {
+                        text: scanBtn.text
+                        font.bold: true
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    background: Rectangle {
+                        radius: 4
+                        color: HikvisionProbe.scanning
+                               ? (scanBtn.pressed ? "#404040" : (scanBtn.hovered ? "#505050" : "#303030"))
+                               : (scanBtn.pressed ? "#d66600" : (scanBtn.hovered ? "#ff8c00" : "#ff7a00"))
+                    }
                 }
 
                 Text {

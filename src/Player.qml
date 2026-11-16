@@ -31,6 +31,20 @@ FocusScope {
     property string color: "black"
     property bool ptzPadVisible: false
 
+    // --- Point the camera at a box drawn on the wide lens (3D positioning of a two-lens PTZ camera) ---
+    property bool isAimMode: false   // the next drag on the picture is sent to the camera
+    property bool aimWide: false     // this tile's lens takes a drawn box (the "3D" badge shows)
+    property bool aimIsWide: false   // ... and it is the wide lens of a two-lens PTZ (a box picks a spot in the whole scene)
+    property var aimTarget: null     // { ip, http, channel, user, pass } of the camera and its own wide-lens channel
+    property bool aimSent: false     // this tile sent the last box
+    property string aimMessage: ""
+    property bool aimFailed: false
+    property string aimWideFor: ""   // which camera and channel aimWide was worked out for
+    property string aimCheckedFor: "" // which camera and channel has been asked about already
+    onIsZoomSelectionModeChanged: if (isZoomSelectionMode) isAimMode = false
+    // A box drawn on a zoomed-in or 1:1 view would not match the camera's own picture, so the mode ends there.
+    onIsZoomedChanged: if (isZoomed) isAimMode = false
+
     property bool isSubStream: false
     property int streamIndex: 1
     property string directCameraIp: ""
@@ -112,6 +126,8 @@ FocusScope {
     }
 
     onIsOneToOneChanged: {
+        if (isOneToOne)
+            isAimMode = false; // a box drawn at 1:1 would not match the camera's picture
         if (isOneToOne) {
             var videoW = 1280;
             var videoH = 720;
@@ -1367,6 +1383,79 @@ FocusScope {
         }
     }
 
+    // The camera behind this tile, its own address and the channel this tile is on that camera. A standalone camera is its
+    // own recorder; for a camera behind an NVR the recorder's list says (from what it has remembered: never waits for it).
+    function resolveAimTarget() {
+        if (!root.isHikvision || root.recorderIp === "" || root.isQuickPlayback)
+            return null;
+        var login = root.savedLoginFor(root.recorderIp);
+        if (!login)
+            return null;
+        if (root.isStandaloneCamera)
+            return { ip: root.recorderIp, http: login.http, channel: root.channelId, user: login.user, pass: login.pass };
+        var p = HikvisionManager.proxyCameraIfCached(root.recorderIp, root.channelId);
+        if (!p || !p.ip) {
+            HikvisionManager.prefetchProxyChannels(root.recorderIp, login.http, login.user, login.pass);
+            return null;
+        }
+        if (p.ip === root.recorderIp)
+            return null;
+        return { ip: p.ip, http: 80, channel: p.channel || 1, user: login.user, pass: login.pass };
+    }
+
+    readonly property string aimKey: root.recorderIp + "#" + root.channelId
+
+    // Asks the camera once (the first time the pointer reaches the tile) whether this is the wide lens of a two-lens PTZ.
+    // An NVR's camera list that is not known yet is read in the background and this runs again when it arrives.
+    function checkAimLens() {
+        var key = root.aimKey;
+        if (root.aimCheckedFor === key)
+            return;
+        var t = root.resolveAimTarget();
+        if (!t)
+            return;
+        root.aimCheckedFor = key;
+        root.aimTarget = t;
+        HikvisionPtzAim.checkWideLens(t.ip, t.http, t.user, t.pass, t.channel);
+    }
+
+    function showAimMessage(text, failed) {
+        root.aimMessage = text;
+        root.aimFailed = failed;
+        aimMessageTimer.restart();
+    }
+
+    Connections {
+        target: HikvisionPtzAim
+        function onLensChecked(ip, channel, ok, wide, message) {
+            if (root.aimTarget && ip === root.aimTarget.ip && channel === root.aimTarget.channel) {
+                root.aimWide = ok;
+                root.aimIsWide = wide;
+                root.aimWideFor = root.aimKey;
+            }
+        }
+        function onAimResult(ip, ok, message) {
+            if (!root.aimSent || !root.aimTarget || ip !== root.aimTarget.ip)
+                return;
+            root.aimSent = false;
+            root.showAimMessage(ok ? qsTr("Camera is turning to the box...") : qsTr("Could not point the camera: %1").arg(message), !ok);
+        }
+    }
+
+    Connections {
+        target: HikvisionManager
+        function onProxyChannelsReady(nvrIp, ok) {
+            if (ok && nvrIp === root.recorderIp && playerHoverArea.isHovered)
+                root.checkAimLens();
+        }
+    }
+
+    Timer {
+        id: aimMessageTimer
+        interval: 6000
+        onTriggered: root.aimMessage = ""
+    }
+
     Timer {
         id: talkMessageTimer
         interval: 6000
@@ -2025,7 +2114,12 @@ FocusScope {
                         } else if (!root.isHikvision && root.source.toString().indexOf("http") === 0) {
                             protocol = "HTTP";
                         }
-                        return quality + " | " + protocol;
+                        // The encoding (H.265, H.264...) once the stream is open. Only a stream played by KVision's own player
+                        // reports it; a tile on the Hikvision SDK player, or a quick playback, shows nothing here.
+                        var codec = "";
+                        if (!root.isQuickPlayback && (!root.isHikvision || hikPlayerSettings.useRealStreams))
+                            codec = root.activePlayerIndex === 1 ? qmlAvPlayer1.videoCodec : qmlAvPlayer2.videoCodec;
+                        return quality + " | " + protocol + (codec !== "" ? " | " + codec : "");
                     }
                     color: root.activeIsSubStream && !root.isQuickPlayback ? "#ff7a00" : "#00f5d4"
                     font {
@@ -2287,6 +2381,93 @@ FocusScope {
             }
         }
 
+        // MouseArea for drawing the box that the camera turns to (the "3D" badge at the bottom right). It stays on until the badge is pressed again.
+        MouseArea {
+            id: aimMouseArea
+            anchors.fill: parent
+            enabled: root.isAimMode
+            hoverEnabled: true
+            cursorShape: Qt.CrossCursor
+
+            property real startX: 0
+            property real startY: 0
+            property real currentX: 0
+            property real currentY: 0
+            property bool isDragging: false
+
+            onPressed: {
+                startX = mouse.x;
+                startY = mouse.y;
+                currentX = mouse.x;
+                currentY = mouse.y;
+                isDragging = true;
+            }
+            onPositionChanged: {
+                if (isDragging) {
+                    currentX = Math.max(0, Math.min(mouse.x, parent.width));
+                    currentY = Math.max(0, Math.min(mouse.y, parent.height));
+                }
+            }
+            onCanceled: isDragging = false
+            onReleased: {
+                if (!isDragging)
+                    return;
+                isDragging = false;
+                var x1 = Math.min(startX, currentX);
+                var y1 = Math.min(startY, currentY);
+                var w = Math.abs(startX - currentX);
+                var h = Math.abs(startY - currentY);
+                // The mode stays on for the next box; the 3D badge turns it off.
+                if (w <= 10 || h <= 10) {
+                    root.showAimMessage(qsTr("Draw a bigger box on the picture."), true);
+                    return;
+                }
+                // Tile pixels to fractions of the picture itself, leaving out any bars beside it.
+                var fr = root.fittedVideoRect();
+                function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+                var t = root.aimTarget;
+                if (!t || fr.width <= 0 || fr.height <= 0)
+                    return;
+                root.aimSent = true;
+                root.showAimMessage(qsTr("Sending the box to the camera..."), false);
+                HikvisionPtzAim.aimAt(t.ip, t.http, t.user, t.pass, t.channel,
+                                      clamp01((x1 - fr.x) / fr.width), clamp01((y1 - fr.y) / fr.height),
+                                      clamp01((x1 + w - fr.x) / fr.width), clamp01((y1 + h - fr.y) / fr.height));
+            }
+        }
+
+        Rectangle {
+            visible: aimMouseArea.isDragging
+            x: Math.min(aimMouseArea.startX, aimMouseArea.currentX)
+            y: Math.min(aimMouseArea.startY, aimMouseArea.currentY)
+            width: Math.abs(aimMouseArea.startX - aimMouseArea.currentX)
+            height: Math.abs(aimMouseArea.startY - aimMouseArea.currentY)
+            color: "#33ff7a00"
+            border.color: "#ff7a00"
+            border.width: 2
+        }
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 10
+            width: aimBannerText.implicitWidth + 24
+            height: aimBannerText.implicitHeight + 12
+            radius: 6
+            color: "#dd000000"
+            border.width: 1
+            border.color: root.aimFailed ? "#e74c3c" : "#ff7a00"
+            visible: root.aimMessage !== "" || root.isAimMode
+            Text {
+                id: aimBannerText
+                anchors.centerIn: parent
+                font.pixelSize: 12
+                font.bold: true
+                color: root.aimFailed ? "#ff6b5b" : "#ffffff"
+                text: root.aimMessage !== "" ? root.aimMessage : qsTr("3D on: drag a box on the picture to point the camera at it. Press 3D again to stop.")
+            }
+        }
+
         // MouseArea to handle middle-click drag (wheel click and drag) for panning in 1:1 mode and zoom mode
         MouseArea {
             id: middleDragMouseArea
@@ -2363,6 +2544,7 @@ FocusScope {
             }
 
             onContainsMouseChanged: updateHoverState()
+            onIsHoveredChanged: if (isHovered && root.isHikvision) root.checkAimLens()
             Connections {
                 target: typeof rootWindow !== "undefined" ? rootWindow : null
                 function onCursorHiddenChanged() { playerHoverArea.updateHoverState() }
@@ -2993,217 +3175,304 @@ FocusScope {
                     ToolTip.text: qsTr("PTZ controls")
                 }
 
-                }
-            }
-        }
-        // --- PTZ CONTROL PAD (pan/tilt/zoom for PTZ-capable Hikvision cameras) ---
-        Rectangle {
-            id: ptzPad
+                Control {
+                    id: aimBadge
 
-            anchors {
-                left: parent.left
-                leftMargin: 8
-                bottom: parent.bottom
-                bottomMargin: 52
-            }
+                    implicitWidth: 24
+                    implicitHeight: 24
+                    padding: 0
+                    // On any PTZ lens that offers 3D positioning (the wide lens and the close-up lens of a two-lens PTZ); not while zoomed in or at 1:1,
+                    // where a box would not match the picture.
+                    visible: root.source !== "" && root.isHikvision && root.aimWide && root.aimWideFor === root.aimKey && !root.isQuickPlayback
+                    opacity: (root.isZoomed || root.isOneToOne) ? 0.4 : 1.0
+                    onVisibleChanged: playerHoverArea.updateHoverState()
 
-            property int pressedCount: 0
-            property string presetEntry: ""
-            readonly property real uiScale: Math.max(0.62, Math.min(1.0, Math.min(root.width, root.height) / 430))
+                    background: Rectangle {
+                        radius: 12
+                        color: root.isAimMode ?
+                            (aimMouseAreaBtn.pressed ? "#44ff7a00" : (aimMouseAreaBtn.containsMouse ? "#33ff7a00" : "#22ff7a00")) :
+                            (aimMouseAreaBtn.pressed ? "#4a5560" : (aimMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214"))
+                        border.color: root.isAimMode ? "#ccff7a00" :
+                            ((aimMouseAreaBtn.containsMouse || aimMouseAreaBtn.pressed) ? "#cc8898a6" : "#802a3540")
+                        border.width: 1
+                    }
 
-            visible: root.ptzPadVisible && root.isHikvision && (pressedCount > 0 || !(typeof rootWindow !== "undefined" && rootWindow.cursorHidden))
-            onVisibleChanged: playerHoverArea.updateHoverState()
-            color: "#66121214"
-            border.color: "#ccff7a00"
-            border.width: 1
-            radius: 8
-            implicitWidth: ptzPadRow.implicitWidth * uiScale + 16
-            implicitHeight: ptzPadRow.implicitHeight * uiScale + 16
+                    contentItem: Text {
+                        text: "3D"
+                        font.pixelSize: 10
+                        font.bold: true
+                        color: (root.isAimMode || aimMouseAreaBtn.containsMouse) ? "#00f5d4" : "#ffffff"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
 
-            transform: Scale {
-                origin.x: 0
-                origin.y: ptzPad.height
-                xScale: ptzPad.uiScale
-                yScale: ptzPad.uiScale
-            }
-
-            function ptzCommand(command, stop) {
-                if (root.isHikvision && root.recorderIp !== "") {
-                    HikvisionManager.ptzZoom(root.recorderIp, root.recorderPort, root.username, root.password, root.channelId, command, stop);
-                }
-            }
-
-            function ptzPresetCommand(command, presetIndex) {
-                if (root.isHikvision && root.recorderIp !== "" && presetIndex > 0) {
-                    HikvisionManager.ptzPreset(root.recorderIp, root.recorderPort, root.username, root.password, root.channelId, command, presetIndex);
-                }
-            }
-
-            function appendPresetDigit(digit) {
-                var next = presetEntry + digit;
-                var value = parseInt(next);
-                presetEntry = (isNaN(value) || value <= 0) ? "" : String(Math.min(value, 255));
-            }
-
-            function ptzIconSource(icon) {
-                var stroke = (icon === "stop") ? "%23ff5555" : "%2300f5d4";
-                var body = "";
-                switch (icon) {
-                case "up": body = "<polyline points='18 15 12 9 6 15'></polyline>"; break;
-                case "down": body = "<polyline points='6 9 12 15 18 9'></polyline>"; break;
-                case "left": body = "<polyline points='15 18 9 12 15 6'></polyline>"; break;
-                case "right": body = "<polyline points='9 18 15 12 9 6'></polyline>"; break;
-                case "zoomin": body = "<line x1='12' y1='5' x2='12' y2='19'></line><line x1='5' y1='12' x2='19' y2='12'></line>"; break;
-                case "zoomout": body = "<line x1='5' y1='12' x2='19' y2='12'></line>"; break;
-                case "focusnear": body = "<circle cx='12' cy='12' r='3' fill='%2300f5d4'></circle><circle cx='12' cy='12' r='8'></circle>"; break;
-                case "focusfar": body = "<polyline points='2 19 8 9 13 16 16 12 22 19'></polyline><circle cx='18' cy='6' r='1.5'></circle>"; break;
-                case "stop": body = "<rect x='7' y='7' width='10' height='10' rx='1'></rect>"; break;
-                }
-                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + stroke + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + body + "</svg>";
-            }
-
-            Row {
-                id: ptzPadRow
-                anchors.centerIn: parent
-                spacing: 8
-                Grid {
-                    columns: 3
-                    rowSpacing: 4
-                    columnSpacing: 4
-                    Repeater {
-                        model: [
-                            { type: "empty" },
-                            { type: "move", icon: "up", cmd: 21 },
-                            { type: "empty" },
-                            { type: "move", icon: "left", cmd: 23 },
-                            { type: "stop", icon: "stop" },
-                            { type: "move", icon: "right", cmd: 24 },
-                            { type: "empty" },
-                            { type: "move", icon: "down", cmd: 22 },
-                            { type: "empty" },
-                            { type: "move", icon: "zoomout", cmd: 12, tip: qsTr("Zoom out") },
-                            { type: "empty" },
-                            { type: "move", icon: "zoomin", cmd: 11, tip: qsTr("Zoom in") },
-                            { type: "move", icon: "focusnear", cmd: 13, tip: qsTr("Focus near") },
-                            { type: "empty" },
-                            { type: "move", icon: "focusfar", cmd: 14, tip: qsTr("Focus far") }
-                        ]
-                        delegate: Item {
-                            implicitWidth: 30
-                            implicitHeight: 30
-                            Control {
-                                anchors.fill: parent
-                                visible: modelData.type !== "empty"
-                                focusPolicy: Qt.NoFocus
-                                ToolTip.visible: modelData.tip !== undefined && moveArea.containsMouse
-                                ToolTip.text: modelData.tip !== undefined ? modelData.tip : ""
-                                background: Rectangle {
-                                    radius: 15
-                                    color: modelData.type === "stop" ? "#44ff3333" : (moveArea.pressed ? "#44ff7a00" : (moveArea.containsMouse ? "#33ff7a00" : "#cc121214"))
-                                    border.color: modelData.type === "stop" ? "#ccff3333" : ((moveArea.containsMouse || moveArea.pressed) ? "#ccff7a00" : "#802a3540")
-                                }
-                                contentItem: Image {
-                                    anchors.centerIn: parent
-                                    sourceSize: Qt.size(32, 32)
-                                    fillMode: Image.PreserveAspectFit
-                                    source: ptzPad.ptzIconSource(modelData.icon)
-                                }
-                                MouseArea {
-                                    id: moveArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onPressed: {
-                                        ptzPad.pressedCount++;
-                                        if (modelData.type === "stop")
-                                            [11, 12, 13, 14, 21, 22, 23, 24].forEach(function(c) { ptzPad.ptzCommand(c, true); });
-                                        else
-                                            ptzPad.ptzCommand(modelData.cmd, false);
-                                    }
-                                    onReleased: {
-                                        ptzPad.pressedCount = Math.max(0, ptzPad.pressedCount - 1);
-                                        if (modelData.type === "move")
-                                            ptzPad.ptzCommand(modelData.cmd, true);
-                                    }
-                                    onCanceled: {
-                                        ptzPad.pressedCount = Math.max(0, ptzPad.pressedCount - 1);
-                                        if (modelData.type === "move")
-                                            ptzPad.ptzCommand(modelData.cmd, true);
-                                    }
-                                }
+                    MouseArea {
+                        id: aimMouseAreaBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onContainsMouseChanged: playerHoverArea.updateHoverState()
+                        onClicked: {
+                            if (root.isZoomed || root.isOneToOne) {
+                                root.showAimMessage(qsTr("Reset the zoom first, then draw the box."), true);
+                                return;
                             }
+                            root.isAimMode = !root.isAimMode;
+                            if (root.isAimMode)
+                                root.isZoomSelectionMode = false;
                         }
+                    }
+
+                    ToolTip.delay: Compact.toolTipDelay
+                    ToolTip.timeout: Compact.toolTipTimeout
+                    ToolTip.visible: aimMouseAreaBtn.containsMouse
+                    ToolTip.text: root.isAimMode ? qsTr("3D is on. Press to turn it off") : (root.aimIsWide ? qsTr("Point the camera: draw a box on this wide view and the PTZ lens turns and zooms to it")
+                                                                                  : qsTr("Re-aim this lens: draw a box and the camera centers on it and zooms in"))
+                }
+
+                }
+            }
+
+            // --- PTZ CONTROL PAD (pan/tilt/zoom for PTZ-capable Hikvision cameras) ---
+            Rectangle {
+                id: ptzPad
+
+                anchors {
+                    left: parent.left
+                    leftMargin: 8
+                    bottom: parent.bottom
+                    bottomMargin: 52
+                }
+
+                property int pressedCount: 0
+                property string presetEntry: ""
+                readonly property real uiScale: Math.max(0.62, Math.min(1.0, Math.min(root.width, root.height) / 430))
+
+                // Only while the pointer is over this tile: the cursor-hidden flag belongs to the whole window, so without this every
+                // tile's pad came back when the mouse moved in another tile. A pressed button keeps it, even if the pointer slips off.
+                visible: root.ptzPadVisible && root.isHikvision
+                         && (pressedCount > 0 || (playerHoverArea.containsMouse && !(typeof rootWindow !== "undefined" && rootWindow.cursorHidden)))
+                onVisibleChanged: playerHoverArea.updateHoverState()
+                color: "#66121214"
+                border.color: "#ccff7a00"
+                border.width: 1
+                radius: 8
+                implicitWidth: ptzPadRow.implicitWidth * uiScale + 16
+                implicitHeight: ptzPadRow.implicitHeight * uiScale + 16
+
+                transform: Scale {
+                    origin.x: 0
+                    origin.y: ptzPad.height
+                    xScale: ptzPad.uiScale
+                    yScale: ptzPad.uiScale
+                }
+
+                function ptzCommand(command, stop) {
+                    if (root.isHikvision && root.recorderIp !== "") {
+                        HikvisionManager.ptzZoom(root.recorderIp, root.recorderPort, root.username, root.password, root.channelId, command, stop);
                     }
                 }
-                Column {
-                    spacing: 4
-                    Rectangle {
-                        width: 102
-                        height: 22
-                        radius: 4
-                        color: "#cc121214"
-                        border.color: "#802a3540"
-                        Text {
-                            anchors.centerIn: parent
-                            text: ptzPad.presetEntry === "" ? qsTr("Preset") : ptzPad.presetEntry
-                            color: ptzPad.presetEntry === "" ? "#8898a6" : "#eeeeee"
-                            font.pixelSize: 11
-                            font.bold: true
-                        }
+
+                function ptzPresetCommand(command, presetIndex) {
+                    if (root.isHikvision && root.recorderIp !== "" && presetIndex > 0) {
+                        HikvisionManager.ptzPreset(root.recorderIp, root.recorderPort, root.username, root.password, root.channelId, command, presetIndex);
                     }
+                }
+
+                function appendPresetDigit(digit) {
+                    var next = presetEntry + digit;
+                    var value = parseInt(next);
+                    presetEntry = (isNaN(value) || value <= 0) ? "" : String(Math.min(value, 255));
+                }
+
+                function ptzIconSource(icon) {
+                    var stroke = (icon === "stop") ? "%23ff5555" : "%2300f5d4";
+                    var body = "";
+                    switch (icon) {
+                    case "up": body = "<polyline points='18 15 12 9 6 15'></polyline>"; break;
+                    case "down": body = "<polyline points='6 9 12 15 18 9'></polyline>"; break;
+                    case "left": body = "<polyline points='15 18 9 12 15 6'></polyline>"; break;
+                    case "right": body = "<polyline points='9 18 15 12 9 6'></polyline>"; break;
+                    case "zoomin": body = "<line x1='12' y1='5' x2='12' y2='19'></line><line x1='5' y1='12' x2='19' y2='12'></line>"; break;
+                    case "zoomout": body = "<line x1='5' y1='12' x2='19' y2='12'></line>"; break;
+                    case "focusnear": body = "<circle cx='12' cy='12' r='3' fill='%2300f5d4'></circle><circle cx='12' cy='12' r='8'></circle>"; break;
+                    case "focusfar": body = "<polyline points='2 19 8 9 13 16 16 12 22 19'></polyline><circle cx='18' cy='6' r='1.5'></circle>"; break;
+                    case "stop": body = "<rect x='7' y='7' width='10' height='10' rx='1'></rect>"; break;
+                    }
+                    return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + stroke + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'>" + body + "</svg>";
+                }
+
+                Row {
+                    id: ptzPadRow
+                    anchors.centerIn: parent
+                    spacing: 8
                     Grid {
                         columns: 3
-                        rowSpacing: 3
-                        columnSpacing: 3
+                        rowSpacing: 4
+                        columnSpacing: 4
                         Repeater {
-                            model: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"]
-                            delegate: Button {
-                                width: 32
-                                height: 24
-                                text: modelData
-                                focusPolicy: Qt.NoFocus
-                                onClicked: {
-                                    if (modelData === "C")
-                                        ptzPad.presetEntry = "";
-                                    else if (modelData === "⌫")
-                                        ptzPad.presetEntry = ptzPad.presetEntry.slice(0, -1);
-                                    else
-                                        ptzPad.appendPresetDigit(modelData);
+                            model: [
+                                { type: "empty" },
+                                { type: "move", icon: "up", cmd: 21 },
+                                { type: "empty" },
+                                { type: "move", icon: "left", cmd: 23 },
+                                { type: "stop", icon: "stop" },
+                                { type: "move", icon: "right", cmd: 24 },
+                                { type: "empty" },
+                                { type: "move", icon: "down", cmd: 22 },
+                                { type: "empty" },
+                                { type: "move", icon: "zoomout", cmd: 12, tip: qsTr("Zoom out") },
+                                { type: "aim" }, // the 3D box button: no PTZ command, it turns the 3D mode on and off (shown only on a lens that offers it)
+                                { type: "move", icon: "zoomin", cmd: 11, tip: qsTr("Zoom in") },
+                                { type: "move", icon: "focusnear", cmd: 13, tip: qsTr("Focus near") },
+                                { type: "empty" },
+                                { type: "move", icon: "focusfar", cmd: 14, tip: qsTr("Focus far") }
+                            ]
+                            delegate: Item {
+                                implicitWidth: 30
+                                implicitHeight: 30
+                                Control {
+                                    anchors.fill: parent
+                                    visible: modelData.type !== "empty" && (modelData.type !== "aim" || (root.aimWide && root.aimWideFor === root.aimKey))
+                                    focusPolicy: Qt.NoFocus
+                                    opacity: (modelData.type === "aim" && (root.isZoomed || root.isOneToOne)) ? 0.4 : 1.0
+                                    ToolTip.visible: (modelData.tip !== undefined || modelData.type === "aim") && moveArea.containsMouse
+                                    ToolTip.text: modelData.type === "aim"
+                                                  ? (root.isAimMode ? qsTr("3D is on. Press to turn it off")
+                                                                    : (root.aimIsWide ? qsTr("Point the camera: draw a box on this wide view and the PTZ lens turns and zooms to it")
+                                                                                      : qsTr("Re-aim this lens: draw a box and the camera centers on it and zooms in")))
+                                                  : (modelData.tip !== undefined ? modelData.tip : "")
+                                    background: Rectangle {
+                                        radius: 15
+                                        color: modelData.type === "stop" ? "#44ff3333" : ((moveArea.pressed || (modelData.type === "aim" && root.isAimMode)) ? "#44ff7a00" : (moveArea.containsMouse ? "#33ff7a00" : "#cc121214"))
+                                        border.color: modelData.type === "stop" ? "#ccff3333" : ((moveArea.containsMouse || moveArea.pressed || (modelData.type === "aim" && root.isAimMode)) ? "#ccff7a00" : "#802a3540")
+                                    }
+                                    contentItem: Image {
+                                        anchors.centerIn: parent
+                                        sourceSize: Qt.size(32, 32)
+                                        fillMode: Image.PreserveAspectFit
+                                        visible: modelData.type !== "aim"
+                                        source: modelData.type === "aim" ? "" : ptzPad.ptzIconSource(modelData.icon)
+                                    }
+                                    Text {
+                                        anchors.centerIn: parent
+                                        visible: modelData.type === "aim"
+                                        text: "3D"
+                                        font.pixelSize: 10
+                                        font.bold: true
+                                        color: (root.isAimMode || moveArea.containsMouse) ? "#00f5d4" : "#ffffff"
+                                    }
+                                    MouseArea {
+                                        id: moveArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (modelData.type !== "aim")
+                                                return;
+                                            if (root.isZoomed || root.isOneToOne) {
+                                                root.showAimMessage(qsTr("Reset the zoom first, then draw the box."), true);
+                                                return;
+                                            }
+                                            root.isAimMode = !root.isAimMode;
+                                            if (root.isAimMode)
+                                                root.isZoomSelectionMode = false;
+                                        }
+                                        onPressed: {
+                                            if (modelData.type === "aim")
+                                                return;
+                                            ptzPad.pressedCount++;
+                                            if (modelData.type === "stop")
+                                                [11, 12, 13, 14, 21, 22, 23, 24].forEach(function(c) { ptzPad.ptzCommand(c, true); });
+                                            else
+                                                ptzPad.ptzCommand(modelData.cmd, false);
+                                        }
+                                        onReleased: {
+                                            if (modelData.type === "aim")
+                                                return;
+                                            ptzPad.pressedCount = Math.max(0, ptzPad.pressedCount - 1);
+                                            if (modelData.type === "move")
+                                                ptzPad.ptzCommand(modelData.cmd, true);
+                                        }
+                                        onCanceled: {
+                                            if (modelData.type === "aim")
+                                                return;
+                                            ptzPad.pressedCount = Math.max(0, ptzPad.pressedCount - 1);
+                                            if (modelData.type === "move")
+                                                ptzPad.ptzCommand(modelData.cmd, true);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    Row {
+                    Column {
                         spacing: 4
-                        Button {
-                            width: 49
-                            height: 24
-                            text: qsTr("Go")
-                            enabled: ptzPad.presetEntry !== ""
-                            focusPolicy: Qt.NoFocus
-                            onClicked: {
-                                ptzPad.ptzPresetCommand(39, parseInt(ptzPad.presetEntry));
-                                ptzPad.presetEntry = "";
+                        Rectangle {
+                            width: 102
+                            height: 22
+                            radius: 4
+                            color: "#cc121214"
+                            border.color: "#802a3540"
+                            Text {
+                                anchors.centerIn: parent
+                                text: ptzPad.presetEntry === "" ? qsTr("Preset") : ptzPad.presetEntry
+                                color: ptzPad.presetEntry === "" ? "#8898a6" : "#eeeeee"
+                                font.pixelSize: 11
+                                font.bold: true
                             }
                         }
-                        Button {
-                            width: 49
-                            height: 24
-                            text: qsTr("Save")
-                            enabled: ptzPad.presetEntry !== ""
-                            focusPolicy: Qt.NoFocus
-                            onClicked: {
-                                ptzPad.ptzPresetCommand(8, parseInt(ptzPad.presetEntry));
-                                ptzPad.presetEntry = "";
+                        Grid {
+                            columns: 3
+                            rowSpacing: 3
+                            columnSpacing: 3
+                            Repeater {
+                                model: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"]
+                                delegate: Button {
+                                    width: 32
+                                    height: 24
+                                    text: modelData
+                                    focusPolicy: Qt.NoFocus
+                                    onClicked: {
+                                        if (modelData === "C")
+                                            ptzPad.presetEntry = "";
+                                        else if (modelData === "⌫")
+                                            ptzPad.presetEntry = ptzPad.presetEntry.slice(0, -1);
+                                        else
+                                            ptzPad.appendPresetDigit(modelData);
+                                    }
+                                }
+                            }
+                        }
+                        Row {
+                            spacing: 4
+                            Button {
+                                width: 49
+                                height: 24
+                                text: qsTr("Go")
+                                enabled: ptzPad.presetEntry !== ""
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    ptzPad.ptzPresetCommand(39, parseInt(ptzPad.presetEntry));
+                                    ptzPad.presetEntry = "";
+                                }
+                            }
+                            Button {
+                                width: 49
+                                height: 24
+                                text: qsTr("Save")
+                                enabled: ptzPad.presetEntry !== ""
+                                focusPolicy: Qt.NoFocus
+                                onClicked: {
+                                    ptzPad.ptzPresetCommand(8, parseInt(ptzPad.presetEntry));
+                                    ptzPad.presetEntry = "";
+                                }
                             }
                         }
                     }
                 }
             }
         }
-
-
-
 
         // --- QUICK PLAYBACK CONTROLS PANEL ---
         Rectangle {
