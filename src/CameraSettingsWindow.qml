@@ -18,6 +18,8 @@ Window {
     color: "#0f151b"
     title: qsTr("Camera settings (read only)")
 
+    // The address of the camera to show when the window opens (from the right-click menu); empty opens on the first camera of the list.
+    property string startIp: ""
     property var cameras: []
     property var sections: []
     property var overview: []
@@ -45,6 +47,8 @@ Window {
             win.cameras = list;
             if (list.length > 0 && cameraCombo.currentIndex < 0)
                 cameraCombo.currentIndex = 0;
+            if (win.startIp !== "")
+                win.showCamera(win.startIp);
         }
         function onCameraRead(ip, secs) {
             win.sections = secs;
@@ -62,6 +66,22 @@ Window {
             win.overview = rows;
             win.overviewTotal = 0;
         }
+    }
+
+    // Picks the camera with this address in the list and reads it. A camera that is not in the list says so and leaves the list as it is.
+    function showCamera(ip) {
+        win.startIp = ip;
+        win.showOverview = false;
+        for (var i = 0; i < win.cameras.length; ++i) {
+            if (win.cameras[i].ip === ip) {
+                cameraCombo.currentIndex = i;
+                if (!HikvisionCameraInfo.busy)
+                    win.readSelected();
+                return;
+            }
+        }
+        if (win.cameras.length > 0)
+            win.message = qsTr("That camera (%1) is not in the list.").arg(ip);
     }
 
     function readSelected() {

@@ -231,31 +231,32 @@ FocusScope {
         }
         HikvisionBackup.startWarning(ip);
     }
-    // Quick tools > Camera status: a window with one card for the camera (read only: uptime, load, restarts, wear on moving parts).
-    property var cameraStatusWins: ({})
-    function openCameraStatus(ip, name) {
+    // Quick tools > Camera settings: the Camera settings window (read only) opened on the camera that was clicked and read at once, with
+    // its Status section (uptime, load, restarts, wear on moving parts) among the others. A window already open for that camera is
+    // brought forward and read again.
+    property var cameraSettingsWins: ({})
+    function openCameraSettings(ip, name) {
         if (!ip)
             return;
-        var open = root.cameraStatusWins[ip];
+        var open = root.cameraSettingsWins[ip];
         if (open) {
             open.show();
             open.raise();
-            open.run();
+            open.showCamera(ip);
             return;
         }
-        var w = cameraStatusComponent.createObject(rootWindow, { "camIp": ip, "camName": name || ip });
+        var w = cameraSettingsComponent.createObject(rootWindow, { "startIp": ip });
         if (!w)
             return;
-        var m = root.cameraStatusWins;
+        var m = root.cameraSettingsWins;
         m[ip] = w;
-        root.cameraStatusWins = m;
+        root.cameraSettingsWins = m;
         w.closing.connect(function() {
-            var k = root.cameraStatusWins;
+            var k = root.cameraSettingsWins;
             delete k[ip];
-            root.cameraStatusWins = k;
+            root.cameraSettingsWins = k;
         });
         w.show();
-        w.run();
     }
     // Quick tools > Reboot Camera: asks first (the camera goes offline for a minute or two), then restarts only that camera.
     property string rebootMenuIp: ""
@@ -2215,38 +2216,38 @@ FocusScope {
                         }
 
                         MenuItem {
-                            id: cameraStatusMenuItem
-                            text: qsTr("Camera status")
+                            id: cameraSettingsMenuItem
+                            text: qsTr("Camera settings")
                             visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             enabled: visible
                             height: visible ? implicitHeight : 0
                             leftPadding: 12
 
                             contentItem: Text {
-                                text: cameraStatusMenuItem.text
+                                text: cameraSettingsMenuItem.text
                                 font { pixelSize: 11; bold: true }
-                                color: cameraStatusMenuItem.enabled ? (cameraStatusMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                color: cameraSettingsMenuItem.enabled ? (cameraSettingsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                 horizontalAlignment: Text.AlignLeft
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 implicitWidth: 150
                                 implicitHeight: 32
-                                color: cameraStatusMenuItem.hovered ? "#2a3540" : "transparent"
-                                border.color: cameraStatusMenuItem.hovered ? "#00f5d4" : "transparent"
+                                color: cameraSettingsMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: cameraSettingsMenuItem.hovered ? "#00f5d4" : "transparent"
                                 border.width: 1
                                 radius: 4
                             }
 
                             ToolTip.visible: hovered
                             ToolTip.delay: 600
-                            ToolTip.text: qsTr("How this camera is doing: how long it has been up, how busy it is, how often it has restarted, and the wear on its moving parts. Read only.")
+                            ToolTip.text: qsTr("Open this camera's own settings (read only): device and status, time and network, video, picture, detection, alarms, storage. Nothing can be changed there.")
 
                             onTriggered: {
                                 contextMenu.close();
                                 var player = playerPool.activePlayersMap[model.index];
                                 if (player)
-                                    root.openCameraStatus(player.detectionLogIp(), player.cameraNameInfo);
+                                    root.openCameraSettings(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
 
@@ -2694,8 +2695,8 @@ FocusScope {
 
     // The setup check window lists what the check found for each camera.
     Component {
-        id: cameraStatusComponent
-        CameraStatusOneWindow {}
+        id: cameraSettingsComponent
+        CameraSettingsWindow {}
     }
 
     Component {

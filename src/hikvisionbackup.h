@@ -70,10 +70,6 @@ public:
     // healthResult(); checkHealthAll() goes through every camera and reports in healthAllFinished().
     Q_INVOKABLE void checkHealth(const QString &ip);
     Q_INVOKABLE void checkHealthAll();
-    // Read only. How the camera itself is doing (GET /ISAPI/System/status): uptime, processor, memory, restart count and running time,
-    // wear counters of a lens that moves, fan and heater. One card in the setup check's shape, like checkHealth(); answers with
-    // statusResult(). Used by the right-click Quick tools > Camera status.
-    Q_INVOKABLE void checkStatus(const QString &ip);
     // The max bitrate of a camera's video streams (the web page's Video > Max. Bitrate). kind is 1 main, 2 sub-stream, 3 third stream; every stream
     // of that kind is used (a two-lens camera has one per lens). kbps 0 only reads; above 0 writes it to every stream of that kind that accepts it
     // (the stream's own limit is checked first), reads it back, and notes the old and new value in logs/BitrateChanges.log. One card per camera, as checkStatus().
@@ -118,7 +114,6 @@ signals:
     // One camera of checkHealthAll() has answered (same card as healthResult()).
     void healthAllItem(const QVariantMap &card);
     void healthAllFinished(const QString &summary, bool ok);
-    void statusResult(const QVariantMap &card);
     void streamBitrateResult(const QVariantMap &card);
     void streamBitrateAllProgress(const QString &name, int done, int total);
     void streamBitrateAllItem(const QVariantMap &card);

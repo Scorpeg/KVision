@@ -1,6 +1,5 @@
 #include "hikvisionbackup.h"
 
-#include "camerastatustext.h"
 #include "hikvisionmanager.h"
 #include "offlinerecorders.h"
 
@@ -701,64 +700,6 @@ HealthAnswer healthOne(const HikvisionBackup::Cam &cam, const QMap<QString, QStr
     }
     if (shorts.isEmpty() && !okShort.isEmpty())
         shorts << okShort;
-    a.message = plain.join(QLatin1Char('\n'));
-    a.result = healthCard(cam, items, shorts, model, fw);
-    return a;
-}
-
-// ---- Camera status: how the camera itself is doing (read only) ----
-//   GET /ISAPI/System/status       uptime, CPU %, memory, restart count, run time, lens and pan/tilt wear counters, fan and heater
-//   GET /ISAPI/System/deviceInfo   model and firmware, for the card's heading
-// The run-time counters (cameraRunTotalTime and the three temperature ranges) count MINUTES. The camera does not say so; measured on
-// 15 Nov 2026: over 125 seconds they rose by 3 (a G3) and 2 (a PTZ), and a PTZ made in Jan 2023 reads 1,939,340 = 3.7 years.
-// Most fixed cameras read 0 for the restart count and run time: they do not keep them. Nothing is ever written. A refused login
-// is never retried.
-HealthAnswer statusOne(const HikvisionBackup::Cam &cam)
-{
-    HealthAnswer a;
-    const QString heading = QStringLiteral("Camera status");
-    auto bail = [&](const QString &itemState, const QString &detail, const QString &shortText) {
-        a.message = detail;
-        a.result = healthCard(cam, {healthItem(itemState, heading, detail)}, {shortText}, QString(), QString());
-        return a;
-    };
-    if (cam.user.isEmpty() || cam.pass.isEmpty())
-        return bail(QStringLiteral("problem"), QStringLiteral("no login saved for this camera (a blank password is never sent)"), QStringLiteral("No login saved"));
-    const QString base = QStringLiteral("http://%1:%2/ISAPI/System/").arg(cam.ip).arg(cam.httpPort);
-    QByteArray body;
-    const int code = curlGet(base + QStringLiteral("status"), cam.user, cam.pass, 8, QString(), &body);
-    if (code == 0)
-        return bail(QStringLiteral("problem"), QStringLiteral("could not connect"), QStringLiteral("Could not connect"));
-    if (code == 401) {
-        a.refused = true;
-        return bail(QStringLiteral("problem"), QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"),
-                    QStringLiteral("Login refused"));
-    }
-    if (code == 403 || code == 404 || code == 501)
-        return bail(QStringLiteral("warning"), QStringLiteral("this camera has no status page (HTTP %1)").arg(code), QStringLiteral("No status page"));
-    if (code != 200)
-        return bail(QStringLiteral("problem"), QStringLiteral("the camera answered HTTP %1").arg(code), QStringLiteral("Could not be read"));
-
-    const QString xml = QString::fromUtf8(body);
-    QString model, fw;
-    QByteArray info;
-    if (curlGet(base + QStringLiteral("deviceInfo"), cam.user, cam.pass, 8, QString(), &info) == 200) {
-        model = tag(QString::fromUtf8(info), QStringLiteral("model"));
-        fw = tag(QString::fromUtf8(info), QStringLiteral("firmwareVersion"));
-    }
-
-    // The wording and the limits live in camerastatustext.h, shared with the Camera settings window.
-    const CameraStatusText::Result st = CameraStatusText::build(xml);
-    QVariantList items;
-    QStringList shorts, plain;
-    for (const CameraStatusText::Item &it : st.items) {
-        items << healthItem(it.state, it.label, it.detail);
-        plain << QStringLiteral("%1: %2").arg(it.label, it.detail);
-        if (!it.shortText.isEmpty())
-            shorts << it.shortText;
-    }
-    if (shorts.isEmpty())
-        shorts << (st.upShort.isEmpty() ? st.loadShort : (st.loadShort.isEmpty() ? st.upShort : st.upShort + QStringLiteral(", ") + st.loadShort));
     a.message = plain.join(QLatin1Char('\n'));
     a.result = healthCard(cam, items, shorts, model, fw);
     return a;
@@ -1477,45 +1418,6 @@ void HikvisionBackup::checkHealthAll()
             m_ruleBusy = false;
             emit ruleBusyChanged();
             emit healthAllFinished(summary, needLook == 0);
-        }, Qt::QueuedConnection);
-    });
-    m_ruleWorker->start();
-}
-
-void HikvisionBackup::checkStatus(const QString &ip)
-{
-    if (m_ruleBusy)
-        return;
-    Cam found;
-    bool have = false;
-    for (const Cam &c : m_cams) {
-        if (c.ip == ip) {
-            found = c;
-            have = true;
-            break;
-        }
-    }
-    if (!have) {
-        Cam none;
-        none.ip = ip;
-        emit statusResult(healthCard(none, {healthItem(QStringLiteral("problem"), QStringLiteral("Camera status"),
-                                                       QStringLiteral("That camera is not in the list. Refresh the list and try again."))},
-                                     {QStringLiteral("Not in the list")}, QString(), QString()));
-        return;
-    }
-    m_ruleBusy = true; // shares the one-at-a-time flag with the other camera switches
-    emit ruleBusyChanged();
-    if (m_ruleWorker) {
-        m_ruleWorker->wait();
-        m_ruleWorker->deleteLater();
-    }
-    m_ruleWorker = QThread::create([this, found]() {
-        const HealthAnswer a = statusOne(found);
-        QMetaObject::invokeMethod(this, [this, found, a]() {
-            qInfo() << "[Status]" << found.ip << "-" << QString(a.message).replace(QLatin1Char('\n'), QLatin1String(" | "));
-            m_ruleBusy = false;
-            emit ruleBusyChanged();
-            emit statusResult(a.result);
         }, Qt::QueuedConnection);
     });
     m_ruleWorker->start();

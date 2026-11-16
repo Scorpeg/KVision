@@ -265,7 +265,7 @@ that report the feature.
   system's echo cancellation. Nothing built.
 - [ ] **Try on screen** (built and started, not looked at): the 3D button on the PTZ pad and the 3D badge on a close-up lens (also the
   High PTZ, which lists 3D positioning); the Status section and colors in Camera settings and the three new table columns; the
-  right-click Camera status window; the Camera settings box; the Max bitrate box and its all-cameras window; the codec in the channel
+  right-click Quick tools > Camera settings (opens the settings window on the clicked camera); the Camera settings box; the Max bitrate box and its all-cameras window; the codec in the channel
   status badge. The 3D text is not in the translation files.
 - [ ] **Max bitrate tool:** try Set on all cameras once (the log shows five single changes by the owner), a constant-rate stream (none
   seen), and the Doorbell.
