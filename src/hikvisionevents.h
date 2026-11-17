@@ -94,8 +94,8 @@ public:
     Q_INVOKABLE int pictureHasFrame(const QString &path, double x, double y, double w, double h) const;
     Q_INVOKABLE bool copyPicture(const QString &fromPath, const QString &toPath) const;
     Q_INVOKABLE QVariantList logEventsBetween(const QString &recorderIp, int channel, qint64 startMs, qint64 endMs, const QString &configDir) const;
-    // fromMs and toMs (milliseconds since 1970, 0 = no limit) limit the entries to a time range, target to one of human,
-    // vehicle, animal or other (empty = all), and kinds is a list of the log's words for the type of event (such as
+    // fromMs and toMs (milliseconds since 1970, 0 = no limit) limit the entries to a time range, target to some of human,
+    // vehicle, animal or other (a comma-separated list; empty = all), and kinds is a list of the log's words for the type of event (such as
     // "Line crossing,Intrusion"; empty = every kind except plain labelled Motion). When any
     // filter is used the whole range is read and the result also carries "total", the number of matching entries.
     Q_INVOKABLE QVariantMap readDetections(int skip, int count, const QString &configDir, const QString &filterIp = QString(),
@@ -163,7 +163,7 @@ private:
         QTimer *watchdog = nullptr; // fires when nothing has arrived for too long: a stalled stream is reopened
         qint64 openedMs = 0;        // when the stream was last opened
         qint64 lastDataMs = 0;      // when anything (an event or a heartbeat) last arrived
-        bool unsupported = false;   // the device has no event stream (HTTP 404/405/501): do not ask again
+        bool unsupported = false;   // the device has no event stream (HTTP 404/405/501): quiet until m_noStreamUntil
         // The target rectangle (0..1) of the last smart event, waiting for the picture that follows it.
         bool pendingValid = false;  // a picture is expected after the last smart event
         bool pendingHasRect = false; // and the event named where the target is
@@ -231,6 +231,11 @@ private:
     QNetworkAccessManager *m_net = nullptr;
     int m_maxPictures = 100;
     QHash<QString, Conn *> m_conns;
+    // A device that answered 404, 405 or 501. Kept here, not only on the connection, because the connection is
+    // thrown away when its last watcher leaves (a tile stops, or the logger rebuilds its plan) and a new one would
+    // otherwise ask again at once and repeat the warning. until is milliseconds since 1970; one more try after that.
+    QHash<QString, qint64> m_noStreamUntil;
+    QSet<QString> m_noStreamNoted; // already told the user this session, until the device starts offering events
     QSet<QString> m_allowedKinds{QStringLiteral("motion"), QStringLiteral("line"), QStringLiteral("intrusion"),
                                  QStringLiteral("enter"), QStringLiteral("exit"), QStringLiteral("face"), QStringLiteral("other")};
     QSet<QString> m_allowedTargets{QStringLiteral("human"), QStringLiteral("vehicle"), QStringLiteral("animal"),

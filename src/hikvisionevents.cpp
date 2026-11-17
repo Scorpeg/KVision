@@ -140,8 +140,12 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
         c->retry = new QTimer(this);
         c->retry->setSingleShot(true);
         connect(c->retry, &QTimer::timeout, this, [this, ip]() {
-            if (m_conns.contains(ip))
-                open(ip);
+            Conn *conn = m_conns.value(ip, nullptr);
+            if (!conn)
+                return;
+            if (conn->unsupported)
+                m_noStreamUntil.remove(ip); // the quiet wait is over: one more try
+            open(ip);
         });
         c->watchdog = new QTimer(this);
         c->watchdog->setSingleShot(true);
@@ -162,8 +166,16 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
         c->recIp = recorderIp;
         c->recChannel = recorderChannel;
     }
-    if (!c->reply && !c->retry->isActive() && !c->authFailed && !c->unsupported)
-        open(ip);
+    if (!c->reply && !c->retry->isActive() && !c->authFailed) {
+        const qint64 until = m_noStreamUntil.value(ip, 0);
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (until > now) {
+            c->unsupported = true; // still inside the quiet wait from an earlier answer
+            c->retry->start(static_cast<int>(qMin<qint64>(until - now, kUnsupportedRetryMs)));
+        } else if (!c->unsupported) {
+            open(ip);
+        }
+    }
 }
 
 void HikvisionEvents::unwatch(const QString &ip)
@@ -220,6 +232,8 @@ void HikvisionEvents::open(const QString &ip)
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->reply)
         return;
+    if (m_noStreamUntil.value(ip, 0) > QDateTime::currentMSecsSinceEpoch())
+        return;
     QUrl url;
     url.setScheme(QStringLiteral("http"));
     url.setHost(ip.section(QLatin1Char(':'), 0, 0).trimmed());
@@ -250,6 +264,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
         c->failures = 0;
     if (c->unsupported && c->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
         c->unsupported = false; // it does offer them after all
+        m_noStreamUntil.remove(ip);
+        m_noStreamNoted.remove(ip);
         qInfo() << "[Events]" << ip << "now offers detection events";
     }
     c->watchdog->start(); // and the stream is alive: start the stall timer again
@@ -835,12 +851,20 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
         emit listenFailed(ip, tr("The camera refused the login. Check its password."));
         return;
     }
-    // This device has no event stream at all (a doorbell, for example): asking again will never help.
+    // This device has no event stream (a doorbell, for example). One warning, then a single question every
+    // 30 minutes: a device that is still starting up can answer like this, and asking more often never helps.
+    // The quiet wait is remembered on the listener, so a connection that is closed and opened again does not
+    // ask at once or print the warning again.
     if (httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
         c->unsupported = true;
-        qWarning() << "[Events]" << ip << "has no detection stream (HTTP" << httpStatus << "). Not trying again.";
-        emit listenFailed(ip, tr("This device does not offer detection events."));
-        c->retry->start(kUnsupportedRetryMs); // a device that is still starting up can answer like this; one question every 30 minutes costs nothing
+        m_noStreamUntil.insert(ip, QDateTime::currentMSecsSinceEpoch() + kUnsupportedRetryMs);
+        if (!m_noStreamNoted.contains(ip)) {
+            m_noStreamNoted.insert(ip);
+            qWarning() << "[Events]" << ip
+                       << QStringLiteral("has no detection stream (HTTP %1). Asking again in 30 minutes.").arg(httpStatus);
+            emit listenFailed(ip, tr("This device does not offer detection events."));
+        }
+        c->retry->start(kUnsupportedRetryMs);
         return;
     }
     // The camera closed the stream, the network dropped or it went quiet: reopen it, waiting a little longer each
@@ -1018,7 +1042,9 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
     QVariantMap result;
     QVariantList entries;
     bool more = false;
-    const QString wantTarget = target.trimmed().toLower();
+    QStringList wantTargets;
+    for (const QString &w : splitList(target))
+        wantTargets << w.trimmed().toLower();
     // No type chosen means every kind of event, including plain labelled motion (motion has no picture).
     // Choosing "Motion" lists only those.
     const QStringList wantKinds = splitList(kinds);
@@ -1148,11 +1174,11 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
                     if (skipTargets.contains(raw == QLatin1String("object") ? QStringLiteral("unnamed") : raw))
                         continue;
                 }
-                if (!wantTarget.isEmpty()) {
+                if (!wantTargets.isEmpty()) {
                     QString tg = e.value(QStringLiteral("target")).toString().toLower();
                     if (tg == QLatin1String("object"))
                         tg = QStringLiteral("other");
-                    if (tg != wantTarget)
+                    if (!wantTargets.contains(tg))
                         continue;
                 }
             }

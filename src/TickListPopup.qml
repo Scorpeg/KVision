@@ -2,7 +2,7 @@ import QtQuick 2.11
 import QtQuick.Controls 2.4
 import QtQuick.Layouts 1.11
 
-// A list of tick boxes that stays open while several are ticked (a Menu closes after every click). It closes on a click outside it
+// A list of tick boxes (used for both the "show" and the "leave out" filters of the Detection window) that stays open while several are ticked (a Menu closes after every click). It closes on a click outside it
 // or Escape. "choices" is a list of {label, key}; "ticked" maps key -> bool and is only read: a tick or the Clear button asks the
 // owner to change it through tickChanged(key, checked) and cleared(), so the owner keeps the one copy of what is ticked.
 Popup {
@@ -20,6 +20,17 @@ Popup {
 
     signal tickChanged(string key, bool checked)
     signal cleared()
+    // Sent once when the list closes after something was ticked, so the owner can act on the finished choice
+    // instead of after every tick (reloading a long list for each tick is slow).
+    signal applied()
+
+    property bool dirty: false
+    onClosed: {
+        if (dirty) {
+            dirty = false;
+            applied();
+        }
+    }
 
     padding: 6
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -52,7 +63,10 @@ Popup {
                     target: pop
                     function onAboutToShow() { box.checked = box.wanted }
                 }
-                onToggled: pop.tickChanged(modelData.key, box.checked)
+                onToggled: {
+                    pop.dirty = true;
+                    pop.tickChanged(modelData.key, box.checked);
+                }
                 contentItem: Text {
                     text: box.text
                     color: box.hovered ? "#ff7a00" : "white"
@@ -74,7 +88,10 @@ Popup {
             Layout.fillWidth: true
             text: qsTr("Clear")
             enabled: pop.tickedCount > 0
-            onClicked: pop.cleared()
+            onClicked: {
+                pop.dirty = true;
+                pop.cleared();
+            }
             contentItem: Text {
                 text: clearBtn.text
                 color: clearBtn.enabled ? "white" : "#8898a6"

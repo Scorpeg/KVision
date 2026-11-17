@@ -67,53 +67,24 @@ FocusScope {
         return Qt.size(16, 9);
     }
 
-    // Force Fit (right-click menu): this camera's picture is stretched to fill the whole tile, whatever its shape, so a
-    // 4:3 camera in a 16:9 tile has no black bars (the picture is slightly stretched). Kept per camera in the settings, not in
-    // the layout, so the layout itself is not touched and every tile of that camera follows.
-    function fitKey() {
-        if (root.isHikvision)
-            return root.recorderIp + "#" + root.channelId;
-        return String(root.source).replace(/\/\/[^@\/]*@/, "//"); // the address without a login
+    // A 4:3 picture (including the usual CCTV sizes such as 704x576 and 720x480) in a 16:9 tile is stretched to
+    // fill the tile. A 16:9 picture, and a 4:3 picture in a 4:3 layout, keep their own shape.
+    function pictureIsFourByThree(frame) {
+        if (!frame || frame.width < 16 || frame.height < 16)
+            return false;
+        var r = frame.width / frame.height;
+        return r >= 1.18 && r <= 1.52;
     }
-    function forceFitList() {
-        if (typeof generalSettings === "undefined")
-            return [];
-        try {
-            var l = JSON.parse(generalSettings.forceFitCameras || "[]");
-            return Array.isArray(l) ? l : [];
-        } catch (e) {
-            return [];
-        }
-    }
-    readonly property bool forceFit: {
-        var dep = (typeof generalSettings !== "undefined") ? generalSettings.forceFitCameras : "";
-        var k = root.fitKey();
-        return k !== "" && root.forceFitList().indexOf(k) >= 0;
-    }
-    function forceFitHere() {
-        return root.forceFit;
-    }
-    function toggleForceFitHere() {
-        if (typeof generalSettings === "undefined")
-            return;
-        var k = root.fitKey();
-        if (k === "")
-            return;
-        var l = root.forceFitList().slice();
-        var i = l.indexOf(k);
-        if (i >= 0)
-            l.splice(i, 1);
-        else
-            l.push(k);
-        generalSettings.forceFitCameras = JSON.stringify(l);
+    function tileIsSixteenByNine() {
+        var r = videoContainer.width / Math.max(1, videoContainer.height);
+        return r >= 1.6 && r <= 2.05;
     }
 
     function fittedVideoRect() {
-        if (root.forceFit)
-            return Qt.rect(0, 0, videoContainer.width, videoContainer.height);
         var frame = videoFrameSize();
+        if (pictureIsFourByThree(frame) && tileIsSixteenByNine())
+            return Qt.rect(0, 0, videoContainer.width, videoContainer.height);
         var frameRatio = frame.width / Math.max(1, frame.height);
-        // TEMP: keep every stream at its native ratio so layout aspect can be compared.
         var containerRatio = videoContainer.width / Math.max(1, videoContainer.height);
         if (frameRatio > containerRatio) {
             var fittedHeight = videoContainer.width / frameRatio;

@@ -509,7 +509,7 @@ The application allows you to quickly capture high-quality snapshots from any ca
 
 ## 12. The Right-Click Menu and Quick Tools
 
-Right-click a camera tile to open its menu. Some entries show only when they apply (for example, the web page entry shows only for a Hikvision camera) or when the matching permission is on in Settings.
+Right-click a camera tile to open its menu. Some entries show only when they apply (for example, the web page entry shows only for a Hikvision camera) or when the matching permission is on in Settings. A 4:3 picture in a 16:9 tile fills the tile on its own, so there are no black bars beside it. A 16:9 picture is left at its own shape, and a 4:3 layout is left alone.
 
 * **Replace camera / Add camera**: put a different camera on this tile (see Section 3).
 * **Remove camera**, **Swap viewports**, **Stream selection** (Auto, MAIN only, SUB only), **Playback** and **Snapshot**.
@@ -517,7 +517,6 @@ Right-click a camera tile to open its menu. Some entries show only when they app
 * **Detection frame**: turns the frame and label on or off for this camera only. It works only when the detection frame is switched on in Settings > Detection.
 * **Detection events...**: opens the detection log for this camera (Section 13).
 * **Quick tools**: a sub-menu with:
-  * **Force Fit**: stretches this camera to fill its tile instead of keeping its proportions.
   * **Reload**: restarts this tile's stream.
   * **Check detection setup...**: a read-only check of what the camera reports about detection (metadata, zones, rules, where each rule lives, whether it notifies the Surveillance Center). It changes nothing and lists what is missing.
   * **Change settings**: the Viewport Settings dialog (Section 9, item 1).
@@ -552,8 +551,8 @@ When a camera reports a target, the tile shows a frame with a label, for example
 
 ### The detection log window
 Open it from a tile's right-click menu (**Detection events...**). Each line shows the time, the target, the type, the camera, its address, the source (Camera or NVR), a picture button and a play button. Ten entries load at a time, with **Load more** for older ones.
-* **Top row (what to show):** *Only this camera*, a time range, a **Targets** menu and a **Types** menu. Each of those picks one thing.
-* **Bottom row (what to leave out):** **Targets** and **Types** buttons that open lists of tick boxes. Tick what you do not want in the list. For example, tick *Unnamed motion* to hide motion that did not say what moved. The list stays open while you tick several; press Escape or the button again to close it. Each button shows how many items are ticked, and **Clear** unticks them all. The ticks reset when the window is opened again.
+* **Top row (what to show):** *Only this camera*, a time range, and **Targets** and **Types** buttons that open lists of tick boxes. Tick one or several to show only those; nothing ticked shows everything. Each button shows how many are ticked, and **Clear** unticks them all. The lists stay open while you tick, and the log is changed once, when you close a list.
+* **Bottom row (what to leave out):** **Targets** and **Types** buttons that open lists of tick boxes. Tick what you do not want in the list. For example, tick *Unnamed motion* to hide motion that did not say what moved. The list stays open while you tick several; press Escape or the button again to close it, and the log is changed once, when the list closes. Each button shows how many items are ticked, and **Clear** unticks them all. The ticks reset when the window is opened again.
 * **Picture button:** shows the picture saved for that event. A report of plain motion with no target has no picture, and a labelled motion report gets a still asked for from the camera (at most one every 30 seconds per camera).
 * **Play button:** opens the recording about 10 seconds before the event. It is dimmed when the recorder no longer has video that old.
 * **Log words:** "Other" in the log means the same as OTHER on the tile: the camera named a target KVision could not class as human, vehicle or animal.

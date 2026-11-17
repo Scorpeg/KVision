@@ -41,36 +41,15 @@ Window {
         { "label": qsTr("Yesterday"), "hours": -2 },
         { "label": qsTr("Last 7 days"), "hours": 168 }
     ]
+    // The targets and types that can be picked. Each list is ticked in a pop-up; ticking none means all of them.
     readonly property var targetChoices: [
-        { "label": qsTr("All targets"), "key": "" },
         { "label": qsTr("Human"), "key": "human" },
         { "label": qsTr("Vehicle"), "key": "vehicle" },
         { "label": qsTr("Animal"), "key": "animal" },
         { "label": qsTr("Other"), "key": "other" }
     ]
-
-    // The types to pick from. "kinds" holds the words the log uses for them, joined with commas.
+    // The types hold the words the log uses for them (the last one is several words, joined with commas).
     readonly property var kindChoices: [
-        { "label": qsTr("All types"), "kinds": "" },
-        { "label": qsTr("Line crossing"), "kinds": "Line crossing" },
-        { "label": qsTr("Intrusion"), "kinds": "Intrusion" },
-        { "label": qsTr("Region entrance"), "kinds": "Region entrance" },
-        { "label": qsTr("Region exit"), "kinds": "Region exit" },
-        { "label": qsTr("Tracking"), "kinds": "Tracking" },
-        { "label": qsTr("Motion"), "kinds": "Motion" },
-        { "label": qsTr("Face detection"), "kinds": "Face detection" },
-        { "label": qsTr("Other smart events"), "kinds": "Loitering,People gathering,Rapid movement,Parking,Unattended object,Object removed" }
-    ]
-
-    // What can be left out (the opposite of the two lists above). Ticked keys are kept in hiddenTargets / hiddenKinds.
-    readonly property var hideTargetChoices: [
-        { "label": qsTr("Human"), "key": "human" },
-        { "label": qsTr("Vehicle"), "key": "vehicle" },
-        { "label": qsTr("Animal"), "key": "animal" },
-        { "label": qsTr("Other"), "key": "other" },
-        { "label": qsTr("Unnamed motion"), "key": "unnamed" }
-    ]
-    readonly property var hideKindChoices: [
         { "label": qsTr("Line crossing"), "key": "Line crossing" },
         { "label": qsTr("Intrusion"), "key": "Intrusion" },
         { "label": qsTr("Region entrance"), "key": "Region entrance" },
@@ -80,6 +59,19 @@ Window {
         { "label": qsTr("Face detection"), "key": "Face detection" },
         { "label": qsTr("Other smart events"), "key": "Loitering,People gathering,Rapid movement,Parking,Unattended object,Object removed" }
     ]
+
+    // What can be left out (the opposite of the two lists above). Ticked keys are kept in hiddenTargets / hiddenKinds;
+    // the ones to show are kept in shownTargets / shownKinds.
+    readonly property var hideTargetChoices: [
+        { "label": qsTr("Human"), "key": "human" },
+        { "label": qsTr("Vehicle"), "key": "vehicle" },
+        { "label": qsTr("Animal"), "key": "animal" },
+        { "label": qsTr("Other"), "key": "other" },
+        { "label": qsTr("Unnamed motion"), "key": "unnamed" }
+    ]
+    readonly property var hideKindChoices: kindChoices
+    property var shownTargets: ({})
+    property var shownKinds: ({})
     property var hiddenTargets: ({})
     property var hiddenKinds: ({})
 
@@ -125,8 +117,8 @@ Window {
         var r = HikvisionEvents.readDetections(skip, logWin.pageSize, Context.configDirPath(),
                                                onlyThisCamera.checked ? logWin.cameraIp : "",
                                                logWin.rangeFromMs(), logWin.rangeToMs(),
-                                               logWin.targetChoices[targetBox.currentIndex].key,
-                                               logWin.kindChoices[kindBox.currentIndex].kinds,
+                                               logWin.hiddenList(logWin.targetChoices, logWin.shownTargets),
+                                               logWin.hiddenList(logWin.kindChoices, logWin.shownKinds),
                                                logWin.hiddenList(logWin.hideTargetChoices, logWin.hiddenTargets),
                                                logWin.hiddenList(logWin.hideKindChoices, logWin.hiddenKinds));
         logWin.total = r.total;
@@ -626,26 +618,56 @@ Window {
                 ToolTip.text: qsTr("Only events in this time range")
             }
 
-            ComboBox {
-                id: targetBox
-                model: logWin.targetChoices.map(function(c) { return c.label; })
-                currentIndex: 0
-                implicitWidth: 120
-                onActivated: logWin.load(true)
-                ToolTip.visible: hovered
+            Button {
+                id: showTargetsButton
+                readonly property int n: logWin.tickedCount(logWin.shownTargets)
+                text: n > 0 ? qsTr("Targets (%1)").arg(n) : qsTr("All targets")
+                implicitWidth: 130
+                onClicked: showTargetsPopup.opened ? showTargetsPopup.close() : showTargetsPopup.open()
+                ToolTip.visible: hovered && !showTargetsPopup.opened
                 ToolTip.delay: 600
-                ToolTip.text: qsTr("Only events whose target is this")
+                ToolTip.text: qsTr("Tick the targets to show. Several can be ticked; none ticked shows them all.")
+                TickListPopup {
+                    id: showTargetsPopup
+                    y: parent.height + 4
+                    choices: logWin.targetChoices
+                    ticked: logWin.shownTargets
+                    onTickChanged: {
+                        var t = Object.assign({}, logWin.shownTargets);
+                        t[key] = checked;
+                        logWin.shownTargets = t;
+                    }
+                    onCleared: {
+                        logWin.shownTargets = ({});
+                    }
+                    onApplied: logWin.load(true)
+                }
             }
 
-            ComboBox {
-                id: kindBox
-                model: logWin.kindChoices.map(function(c) { return c.label; })
-                currentIndex: 0
-                implicitWidth: 160
-                onActivated: logWin.load(true)
-                ToolTip.visible: hovered
+            Button {
+                id: showKindsButton
+                readonly property int n: logWin.tickedCount(logWin.shownKinds)
+                text: n > 0 ? qsTr("Types (%1)").arg(n) : qsTr("All types")
+                implicitWidth: 130
+                onClicked: showKindsPopup.opened ? showKindsPopup.close() : showKindsPopup.open()
+                ToolTip.visible: hovered && !showKindsPopup.opened
                 ToolTip.delay: 600
-                ToolTip.text: qsTr("Only events of this type.")
+                ToolTip.text: qsTr("Tick the types of event to show. Several can be ticked; none ticked shows them all.")
+                TickListPopup {
+                    id: showKindsPopup
+                    y: parent.height + 4
+                    choices: logWin.kindChoices
+                    ticked: logWin.shownKinds
+                    onTickChanged: {
+                        var t = Object.assign({}, logWin.shownKinds);
+                        t[key] = checked;
+                        logWin.shownKinds = t;
+                    }
+                    onCleared: {
+                        logWin.shownKinds = ({});
+                    }
+                    onApplied: logWin.load(true)
+                }
             }
 
             Item { Layout.fillWidth: true }
@@ -864,7 +886,7 @@ Window {
                 ToolTip.visible: hovered && !hideTargetsPopup.opened
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Tick the targets to leave out of the list. \"Unnamed motion\" is motion that did not say what moved.")
-                LeaveOutPopup {
+                TickListPopup {
                     id: hideTargetsPopup
                     y: -height - 4
                     choices: logWin.hideTargetChoices
@@ -873,12 +895,11 @@ Window {
                         var t = Object.assign({}, logWin.hiddenTargets);
                         t[key] = checked;
                         logWin.hiddenTargets = t;
-                        logWin.load(true);
                     }
                     onCleared: {
                         logWin.hiddenTargets = ({});
-                        logWin.load(true);
                     }
+                    onApplied: logWin.load(true)
                 }
             }
 
@@ -891,7 +912,7 @@ Window {
                 ToolTip.visible: hovered && !hideKindsPopup.opened
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Tick the types of event to leave out of the list")
-                LeaveOutPopup {
+                TickListPopup {
                     id: hideKindsPopup
                     y: -height - 4
                     choices: logWin.hideKindChoices
@@ -900,12 +921,11 @@ Window {
                         var t = Object.assign({}, logWin.hiddenKinds);
                         t[key] = checked;
                         logWin.hiddenKinds = t;
-                        logWin.load(true);
                     }
                     onCleared: {
                         logWin.hiddenKinds = ({});
-                        logWin.load(true);
                     }
+                    onApplied: logWin.load(true)
                 }
             }
 
