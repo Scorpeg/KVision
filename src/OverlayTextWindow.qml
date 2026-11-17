@@ -167,7 +167,7 @@ Window {
             win.newEntry(false);
     }
 
-    Component.onCompleted: {
+    function reloadCameras() {
         var list = [];
         try { list = JSON.parse(rootWindow.hikvisionRecordersJson || "[]"); } catch (e) {}
         var out = [];
@@ -185,6 +185,7 @@ Window {
             }
             // A recorder: each channel is a camera of its own. The recorder says which address that camera has, and the
             // text is written there with the recorder's login (the same one the app already uses for it).
+            // The list is read in the background, so the first pass can be short and proxyChannelsReady fills it in.
             for (var j = 0; j < cams.length; ++j) {
                 var ch = parseInt(cams[j].channelId);
                 var p = HikvisionManager.proxyCameraCached(recIp, http, rec.username, rec.password, ch);
@@ -194,8 +195,28 @@ Window {
                            "ip": p.ip, "channel": p.channel > 0 ? p.channel : 1, "httpPort": 80, "user": rec.username, "pass": rec.password });
             }
         }
+        var chosen = cameraBox.currentIndex >= 0 ? win.cameras[cameraBox.currentIndex] : null;
         win.cameras = out;
+        if (chosen) {
+            var found = -1;
+            for (var k = 0; k < out.length; ++k)
+                if (out[k].ip === chosen.ip && out[k].channel === chosen.channel)
+                    found = k;
+            cameraBox.currentIndex = found;
+        }
+    }
+
+    Component.onCompleted: {
+        win.reloadCameras();
         win.load();
+    }
+
+    Connections {
+        target: HikvisionManager
+        function onProxyChannelsReady(nvrIp, ok) {
+            if (ok)
+                win.reloadCameras();
+        }
     }
 
     Connections {

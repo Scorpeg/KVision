@@ -3,6 +3,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QMutex>
 #include <QPair>
 #include <QRectF>
 #include <QSet>
@@ -12,9 +13,29 @@
 #include <QVariantMap>
 #include <QTimer>
 
+#include <atomic>
+
 class QNetworkAccessManager;
 class QNetworkReply;
+class QThread;
 class QUrl;
+
+class HikvisionEvents;
+
+// Runs the detection-report scan, picture check and log writes off the window thread.
+// HikvisionEvents itself stays on the window thread, because the tiles call it and expect an answer at once.
+class EventParseWorker : public QObject
+{
+    Q_OBJECT
+public:
+    explicit EventParseWorker(HikvisionEvents *owner) : m_owner(owner) {}
+
+public slots:
+    void ingest(const QString &ip, const QByteArray &chunk, qulonglong generation);
+
+private:
+    HikvisionEvents *m_owner;
+};
 
 // Listens to the motion/target events a Hikvision camera streams over HTTP
 // (/ISAPI/Event/notification/alertStream) and reports which kind of target
@@ -23,6 +44,7 @@ class QUrl;
 class HikvisionEvents : public QObject
 {
     Q_OBJECT
+    friend class EventParseWorker;
 
 public:
     explicit HikvisionEvents(QObject *parent = nullptr);
@@ -157,8 +179,9 @@ private:
         int failures = 0;
         bool authFailed = false; // the camera refused our login: never try again in this session
         QNetworkReply *reply = nullptr;
-        QByteArray buffer;
+        QByteArray buffer;   // only the worker's copy is used; the window thread does not parse it
         int jsonScanned = 0; // how much of the buffer has been searched for PTZ JSON messages already
+        qulonglong generation = 1; // bumped each time the stream is opened, so a late chunk is not parsed into the new one
         QTimer *retry = nullptr;
         QTimer *watchdog = nullptr; // fires when nothing has arrived for too long: a stalled stream is reopened
         qint64 openedMs = 0;        // when the stream was last opened
@@ -182,6 +205,11 @@ private:
 
     void open(const QString &ip);
     void onReadyRead(const QString &ip);
+    // The scan, picture check and log writes. Runs on the worker thread only.
+    void parseIncoming(const QString &ip, const QByteArray &chunk, qulonglong generation);
+    // Copies the connection and the filter settings under the lock, for one chunk. False if this generation is finished.
+    bool loadSnap(const QString &ip, qulonglong generation, Conn *meta);
+    QString logDirectory() const;
     void onFinished(const QString &ip, QNetworkReply *reply);
     void close(const QString &ip);
     void logDetection(const Conn *c, const QString &target, const QString &kind, const QString &cameraTime, int eventChannel,
@@ -231,6 +259,22 @@ private:
     QNetworkAccessManager *m_net = nullptr;
     int m_maxPictures = 100;
     QHash<QString, Conn *> m_conns;
+    QThread *m_thread = nullptr;
+    EventParseWorker *m_worker = nullptr;
+    std::atomic<bool> m_stopping{false};
+    mutable QMutex m_mu{QMutex::Recursive}; // connection fields the worker copies, and the filter settings
+    mutable QMutex m_logMu;       // Detection.log, Frames.log and OtherEvents.log
+    mutable QMutex m_pictureMu;   // m_pictures
+    QHash<QString, Conn> m_parse; // worker thread only: the half-read report and its picture
+    // Filled on the worker at the start of each chunk, from a locked copy. The window thread never reads these.
+    QSet<QString> m_wKinds;
+    QSet<QString> m_wTargets;
+    QHash<QString, QString> m_wOverrides;
+    QString m_wDefaultSource = QStringLiteral("camera");
+    bool m_wLogMotion = false;
+    bool m_wFrameMotion = false;
+    QString m_wLogDir;
+    int m_wMaxPictures = 100;
     // A device that answered 404, 405 or 501. Kept here, not only on the connection, because the connection is
     // thrown away when its last watcher leaves (a tile stops, or the logger rebuilds its plan) and a new one would
     // otherwise ask again at once and repeat the warning. until is milliseconds since 1970; one more try after that.

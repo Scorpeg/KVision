@@ -81,7 +81,7 @@ Window {
             }
         }
         generalSettings.targetOffCameras = JSON.stringify(off);
-        generalSettings.targetNvrOnCameras = JSON.stringify(nvr);
+        rootWindow.setTargetNvrOnCameras(JSON.stringify(nvr));
     }
 
     // Where a camera behind a recorder gets its reports from: its own choice, else the general setting.
@@ -126,7 +126,7 @@ Window {
             var b = nvr.indexOf(row.key);
             if (on && b < 0) nvr.push(row.key);
             else if (!on && b >= 0) nvr.splice(b, 1);
-            generalSettings.targetNvrOnCameras = JSON.stringify(nvr);
+            rootWindow.setTargetNvrOnCameras(JSON.stringify(nvr));
         }
     }
 

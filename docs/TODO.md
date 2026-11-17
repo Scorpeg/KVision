@@ -9,7 +9,8 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
 
 ## From the Node-RED project
 
-### 1. [ ] Drop stale reports from the screen
+### 1. [x] Drop stale reports from the screen
+Built 16 Nov evening in `hikvisionevents.cpp`. A report 10 seconds or more behind the computer's clock is still logged and its picture is still kept. It does not flash the tile. Not tried on screen.
 - **Why:** after a stall or a reconnect a camera can send a backlog. Today a late report still flashes a frame, and only
   the log line is marked `received HH:mm:ss`. On 10 Nov a burst of 68 log lines landed in one second.
 - **Idea:** do not show a frame for a report whose camera time is more than about 10 seconds old. Still write it to the
@@ -60,9 +61,11 @@ Status key: `[ ]` not started, `[~]` started, `[x]` done.
 - [~] **Release the source and event-type filters.** Committed (`99bc238`), with README and changelog entries.
       Only tested against a fake recorder and by checking numbers. Try it on the real NVR with a screen, then bump
       the version and make a release.
-- [ ] **Find out why the "NVR cameras switched on" list emptied itself** (`targetNvrOnCameras=[]` appeared in the
+- [~] **Find out why the "NVR cameras switched on" list emptied itself** (`targetNvrOnCameras=[]` appeared in the
       saved configuration). Best guess: one of the offscreen test runs of the app saved an empty list. Not proven.
-      It was restored by hand to 14 cameras. If it empties again, look at how the settings are written on exit.
+      It was restored by hand to 14 cameras. On 16 Nov the list is no longer written until the window has read the
+      saved value, so a start cannot save the empty starting value over the real one. An empty list after that is
+      still saved, because turning every camera off is a real choice. The warning when a full list becomes empty stays.
 - [ ] **Decide what to do with the temporary Notify Surveillance Center on Garage3 (NVR channel 17).** The backups hold the
       "record only" originals. See the audit trail for how to put them back.
 - [ ] **Livingroom2 (NVR channel 18)** has no smart detection set up and is a different model. Not touched.

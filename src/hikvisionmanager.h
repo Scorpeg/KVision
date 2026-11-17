@@ -47,18 +47,22 @@ public:
     Q_INVOKABLE qint64 deviceTimeMs(const QString &ip, int port, const QString &username, const QString &password);
     Q_INVOKABLE bool forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId);
     Q_INVOKABLE QString fetchStreamingChannels(const QString &ip, int httpPort, const QString &username, const QString &password);
-    // Same answer as proxyCamera() (ip, channel, sdkPort of the camera behind a recorder channel), but
-    // the recorder's whole camera list is fetched once and remembered, so many tiles do not each wait
-    // for the recorder. A failed fetch is not retried for 30 seconds.
+    // The camera behind a recorder channel (ip, channel, sdkPort) from the list already in memory.
+    // A list that is not known yet is read on a background thread and this returns empty at once, so the window never waits.
     Q_INVOKABLE QVariantMap proxyCameraCached(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
-    // The remembered answer only: never waits for the recorder, empty when the recorder's camera list has not been read yet.
+    // The remembered answer only: never starts a read, empty when the recorder's camera list has not been read yet.
     Q_INVOKABLE QVariantMap proxyCameraIfCached(const QString &nvrIp, int channelId) const;
+    // True once a recorder's camera list has been read (a channel with no camera of its own is still "known").
+    Q_INVOKABLE bool proxyListKnown(const QString &nvrIp) const;
+    // True while that list is being read on the background thread.
+    Q_INVOKABLE bool proxyFetchPending(const QString &nvrIp) const;
     // True when the address is one of the cameras behind a recorder whose camera list is remembered (so it is already reachable through that recorder).
     Q_INVOKABLE bool isBehindKnownRecorder(const QString &cameraIp) const;
     // Reads a recorder's camera list on a background thread (so the window never waits for an unreachable recorder) and
     // remembers it; proxyChannelsReady() follows. Does nothing when the list is already known or being read, and not more
     // often than every 15 seconds after a failure, so it can simply be called again until the recorder answers.
     Q_INVOKABLE void prefetchProxyChannels(const QString &nvrIp, int httpPort, const QString &username, const QString &password);
+    // Same as proxyCameraCached(). Kept because hold-to-talk and the camera web page already call this name.
     Q_INVOKABLE QVariantMap proxyCamera(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
 
     // Every channel of a recorder with the camera behind it (channel -> {ip, channel, sdkPort}). Keeps no state,

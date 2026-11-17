@@ -555,7 +555,7 @@ FocusScope {
             var targetRtspPort = rtspPort || 554;
             directCameraIp = "";
             if (streamIndex > 2) {
-                // The cached lookup remembers a failure for 30 seconds, so an unreachable recorder costs one wait, not one per tile.
+                // The camera list is read in the background. Until it arrives this stream stays on the recorder.
                 var proxy = HikvisionManager.proxyCameraCached(recorderIp, httpPort || 80, username, password, channelId);
                 if (proxy && proxy.ip && proxy.ip !== recorderIp) {
                     targetIp = proxy.ip;
@@ -979,7 +979,7 @@ FocusScope {
                 n.splice(k, 1);
             else
                 n.push(root.nvrKey());
-            generalSettings.targetNvrOnCameras = JSON.stringify(n);
+            rootWindow.setTargetNvrOnCameras(JSON.stringify(n));
         }
     }
 
@@ -1047,8 +1047,17 @@ FocusScope {
     Connections {
         target: HikvisionManager
         function onProxyChannelsReady(nvrIp, ok) {
-            if (ok && nvrIp === root.recorderIp && root.targetWanted && !root.targetWatching)
+            if (!ok || nvrIp !== root.recorderIp)
+                return;
+            if (root.targetWanted && !root.targetWatching)
                 root.updateTargetWatch();
+            else if (root.targetWatching && root.useRecorderEvents) {
+                var login = root.savedLoginFor(root.recorderIp);
+                if (login)
+                    HikvisionEvents.setChannelInfo(root.watchedIp, root.channelInfoJson(login));
+            }
+            if (root.streamIndex > 2)
+                root.updateSource();
         }
     }
     onUseRecorderEventsChanged: {
@@ -1261,8 +1270,8 @@ FocusScope {
     readonly property bool talkActiveHere: HikvisionTalk.active && HikvisionTalk.activeKey === talkKey
 
     // Talk goes straight to the camera. A standalone camera is its own recorder. For a camera
-    // behind an NVR, ask the NVR for the camera's address and port (once, cached). The lookup runs
-    // when the pointer reaches the badge, so pressing it does not wait on the NVR.
+    // behind an NVR, the camera's address comes from the list already read in the background.
+    // Hover starts that read. Until it arrives, talk uses the recorder address, and the next press uses the camera.
     property var talkTarget: null          // { ip, port, channel } once resolved
     property string talkTargetFor: ""      // which recorder/channel the cache belongs to
 
@@ -1273,12 +1282,17 @@ FocusScope {
         var target = { ip: root.recorderIp, port: root.sdkPort || root.recorderPort || 8000, channel: 1, viaRecorder: false };
         if (root.isHikvision && root.recorderIp !== "" && root.username !== "") {
             var proxy = HikvisionManager.proxyCamera(root.recorderIp, root.httpPort || 80, root.username, root.password, root.channelId);
-            if (proxy && proxy.ip && proxy.ip !== root.recorderIp) {
+            if (proxy && proxy.ip && proxy.ip !== root.recorderIp)
                 target = { ip: proxy.ip, port: proxy.sdkPort || 8000, channel: 1, viaRecorder: true };
+            // Remember a finished answer only. An empty one means the list is still on its way, so the next press asks again.
+            if ((proxy && proxy.ip) || HikvisionManager.proxyListKnown(root.recorderIp)) {
+                root.talkTarget = target;
+                root.talkTargetFor = key;
             }
+        } else {
+            root.talkTarget = target;
+            root.talkTargetFor = key;
         }
-        root.talkTarget = target;
-        root.talkTargetFor = key;
         return target;
     }
 
@@ -1573,18 +1587,42 @@ FocusScope {
     }
 
     // Opens the camera's own web interface in the default browser. For a camera
-    // behind an NVR the camera's real IP is looked up on the NVR first. A stand
-    // alone camera (or a lookup that finds nothing) uses the recorder address.
+    // behind an NVR the camera's real IP comes from the list already read in the background.
+    // If that list is still on its way, the browser opens when it arrives. A standalone camera,
+    // or a lookup that finds nothing, uses the recorder address.
+    property bool webUiWaiting: false
     function openCameraWebUi() {
         if (!isHikvision || recorderIp === "") return;
-        var host = recorderIp;
-        var port = httpPort || 80;
+        function openHost(host, port) {
+            WebBrowser.open("http://" + host + (port === 80 ? "" : ":" + port));
+        }
         var proxy = HikvisionManager.proxyCamera(recorderIp, httpPort || 80, username, password, channelId);
         if (proxy && proxy.ip && proxy.ip !== recorderIp) {
-            host = proxy.ip;
-            port = 80;
+            openHost(proxy.ip, 80);
+            return;
         }
-        WebBrowser.open("http://" + host + (port === 80 ? "" : ":" + port));
+        if (HikvisionManager.proxyListKnown(recorderIp) || !HikvisionManager.proxyFetchPending(recorderIp)) {
+            openHost(recorderIp, httpPort || 80);
+            return;
+        }
+        if (root.webUiWaiting)
+            return;
+        root.webUiWaiting = true;
+        var ip = recorderIp;
+        var ch = channelId;
+        var fallbackPort = httpPort || 80;
+        function onReady(nvrIp, ok) {
+            if ((nvrIp || "").split(":")[0] !== (ip || "").split(":")[0])
+                return;
+            HikvisionManager.proxyChannelsReady.disconnect(onReady);
+            root.webUiWaiting = false;
+            var p = ok ? HikvisionManager.proxyCameraIfCached(ip, ch) : null;
+            if (p && p.ip && p.ip !== (ip || "").split(":")[0])
+                openHost(p.ip, 80);
+            else
+                openHost(ip, fallbackPort);
+        }
+        HikvisionManager.proxyChannelsReady.connect(onReady);
     }
 
     function openPlayback() {

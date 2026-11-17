@@ -1,6 +1,7 @@
 #include "hikvisionevents.h"
 
 #include <QAuthenticator>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QJsonDocument>
@@ -10,7 +11,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QThread>
 #include <QTextStream>
+#include <QMutexLocker>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -79,6 +82,18 @@ QString vcaKey(const QString &type)
     return QStringLiteral("other");
 }
 
+// A report this far behind the computer's clock is a replay after a stall or a reconnect, not something happening now.
+// The same gap marks the log line "received HH:mm:ss" and keeps the tile from flashing.
+const int kLateReportSecs = 10;
+
+bool reportIsLate(const QString &cameraTime)
+{
+    const QDateTime eventTime = QDateTime::fromString(cameraTime, Qt::ISODate);
+    if (!eventTime.isValid())
+        return false;
+    return eventTime.toLocalTime().secsTo(QDateTime::currentDateTime()) >= kLateReportSecs;
+}
+
 // The short word shown after the target on a tile, for example "HUMAN - LINE".
 QString vcaShort(const QString &type)
 {
@@ -94,9 +109,19 @@ QString vcaShort(const QString &type)
 }
 }
 
+void EventParseWorker::ingest(const QString &ip, const QByteArray &chunk, qulonglong generation)
+{
+    if (m_owner)
+        m_owner->parseIncoming(ip, chunk, generation);
+}
+
 HikvisionEvents::HikvisionEvents(QObject *parent)
     : QObject(parent)
 {
+    m_worker = new EventParseWorker(this);
+    m_thread = new QThread(this);
+    m_worker->moveToThread(m_thread);
+    m_thread->start();
     m_net = new QNetworkAccessManager(this);
     connect(m_net, &QNetworkAccessManager::authenticationRequired, this,
             [](QNetworkReply *reply, QAuthenticator *auth) {
@@ -113,6 +138,14 @@ HikvisionEvents::HikvisionEvents(QObject *parent)
 
 HikvisionEvents::~HikvisionEvents()
 {
+    m_stopping.store(true);
+    if (m_thread) {
+        m_thread->quit();
+        m_thread->wait();
+    }
+    QCoreApplication::removePostedEvents(this);
+    delete m_worker;
+    m_worker = nullptr;
     const auto ips = m_conns.keys();
     for (const QString &ip : ips)
         close(ip);
@@ -124,6 +157,7 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
 {
     if (ip.isEmpty() || user.isEmpty() || pass.isEmpty())
         return; // never send a login we know is incomplete: a wrong login counts toward a camera lockout
+    QMutexLocker lock(&m_mu);
     if (m_logDir.isEmpty() && !configDir.isEmpty())
         m_logDir = configDir + QStringLiteral("/logs");
     Conn *c = m_conns.value(ip, nullptr);
@@ -173,6 +207,7 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
             c->unsupported = true; // still inside the quiet wait from an earlier answer
             c->retry->start(static_cast<int>(qMin<qint64>(until - now, kUnsupportedRetryMs)));
         } else if (!c->unsupported) {
+            lock.unlock();
             open(ip);
         }
     }
@@ -180,16 +215,21 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
 
 void HikvisionEvents::unwatch(const QString &ip)
 {
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c)
         return;
-    if (--c->watchers <= 0)
+    if (--c->watchers <= 0) {
+        lock.unlock();
         close(ip);
+    }
 }
 
 void HikvisionEvents::close(const QString &ip)
 {
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.take(ip);
+    lock.unlock();
     if (!c)
         return;
     if (c->retry) {
@@ -210,6 +250,7 @@ void HikvisionEvents::close(const QString &ip)
 
 QVariantList HikvisionEvents::connectionStates() const
 {
+    QMutexLocker lock(&m_mu);
     QVariantList out;
     for (auto it = m_conns.constBegin(); it != m_conns.constEnd(); ++it) {
         const Conn *c = it.value();
@@ -234,6 +275,10 @@ void HikvisionEvents::open(const QString &ip)
         return;
     if (m_noStreamUntil.value(ip, 0) > QDateTime::currentMSecsSinceEpoch())
         return;
+    {
+        QMutexLocker lock(&m_mu);
+        ++c->generation; // chunks already queued belong to the previous stream
+    }
     QUrl url;
     url.setScheme(QStringLiteral("http"));
     url.setHost(ip.section(QLatin1Char(':'), 0, 0).trimmed());
@@ -241,7 +286,6 @@ void HikvisionEvents::open(const QString &ip)
     url.setPath(QStringLiteral("/ISAPI/Event/notification/alertStream"));
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KVision"));
-    c->buffer.clear();
     qDebug() << "[Events] opening the detection stream for" << ip;
     c->openedMs = QDateTime::currentMSecsSinceEpoch();
     c->watchdog->start();
@@ -270,7 +314,77 @@ void HikvisionEvents::onReadyRead(const QString &ip)
     }
     c->watchdog->start(); // and the stream is alive: start the stall timer again
     c->lastDataMs = QDateTime::currentMSecsSinceEpoch();
-    c->buffer += c->reply->readAll();
+    const QByteArray chunk = c->reply->readAll();
+    if (chunk.isEmpty() || !m_worker)
+        return;
+    qulonglong gen;
+    {
+        QMutexLocker lock(&m_mu);
+        gen = c->generation;
+    }
+    // The scan, the picture check and the log write happen off this thread. The bytes are only copied here.
+    QMetaObject::invokeMethod(m_worker, "ingest", Qt::QueuedConnection,
+                              Q_ARG(QString, ip), Q_ARG(QByteArray, chunk), Q_ARG(qulonglong, gen));
+}
+
+bool HikvisionEvents::loadSnap(const QString &ip, qulonglong generation, Conn *meta)
+{
+    QMutexLocker lock(&m_mu);
+    Conn *c = m_conns.value(ip, nullptr);
+    if (!c || c->generation != generation)
+        return false;
+    meta->ip = c->ip;
+    meta->httpPort = c->httpPort;
+    meta->user = c->user;
+    meta->pass = c->pass;
+    meta->name = c->name;
+    meta->recIp = c->recIp;
+    meta->recChannel = c->recChannel;
+    meta->recorderMode = c->recorderMode;
+    meta->chanInfo = c->chanInfo;
+    meta->lens = c->lens;
+    meta->generation = c->generation;
+    m_wKinds = m_allowedKinds;
+    m_wTargets = m_allowedTargets;
+    m_wOverrides = m_sourceOverrides;
+    m_wDefaultSource = m_defaultSource;
+    m_wLogMotion = m_logUnlabelledMotion;
+    m_wFrameMotion = m_frameUnlabelledMotion;
+    m_wLogDir = m_logDir;
+    m_wMaxPictures = m_maxPictures;
+    return true;
+}
+
+QString HikvisionEvents::logDirectory() const
+{
+    QMutexLocker lock(&m_mu);
+    return m_logDir;
+}
+
+void HikvisionEvents::parseIncoming(const QString &ip, const QByteArray &chunk, qulonglong generation)
+{
+    if (m_stopping.load())
+        return;
+    Conn meta;
+    if (!loadSnap(ip, generation, &meta))
+        return;
+    Conn &slot = m_parse[ip];
+    if (slot.generation != generation) {
+        slot = Conn();
+        slot.generation = generation;
+    }
+    slot.ip = meta.ip;
+    slot.httpPort = meta.httpPort;
+    slot.user = meta.user;
+    slot.pass = meta.pass;
+    slot.name = meta.name;
+    slot.recIp = meta.recIp;
+    slot.recChannel = meta.recChannel;
+    slot.recorderMode = meta.recorderMode;
+    slot.chanInfo = meta.chanInfo;
+    slot.lens = meta.lens;
+    slot.buffer += chunk;
+    Conn *c = &slot;
     if (c->buffer.size() > kMaxBuffer) {
         c->buffer = c->buffer.right(kMaxBuffer / 2);
         c->jsonScanned = 0;
@@ -325,7 +439,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
                 if (t.isEmpty())
                     t = QStringLiteral("other");
                 // The settings can switch kinds and targets off for the screen: no frame for those.
-                if (!m_allowedKinds.contains(vcaKey(type)) || !m_allowedTargets.contains(t))
+                // A replayed report is still logged and its picture is still kept; it does not flash the tile.
+                if (!m_wKinds.contains(vcaKey(type)) || !m_wTargets.contains(t) || reportIsLate(camTime))
                     continue;
                 qDebug() << "[Events]" << kind << "from" << ip << "channel" << camChannel << ":" << t;
                 emit targetDetected(ip, t, vcaShort(type), camChannel);
@@ -341,10 +456,10 @@ void HikvisionEvents::onReadyRead(const QString &ip)
             const QString motionKey = ip + QLatin1Char('|') + QString::number(camChannel);
             const qint64 lastMs = m_motionSeen.value(motionKey, 0);
             m_motionSeen.insert(motionKey, nowMs);
-            if (m_logUnlabelledMotion && nowMs - lastMs >= kMotionQuietMs)
+            if (m_wLogMotion && nowMs - lastMs >= kMotionQuietMs)
                 logDetection(c, QString(), QStringLiteral("Motion"), camTime, camChannel);
-            if (m_allowedKinds.contains(QStringLiteral("motion"))) {
-                if (m_frameUnlabelledMotion && m_allowedTargets.contains(QStringLiteral("other")))
+            if (m_wKinds.contains(QStringLiteral("motion")) && !reportIsLate(camTime)) {
+                if (m_wFrameMotion && m_wTargets.contains(QStringLiteral("other")))
                     emit targetDetected(ip, QStringLiteral("other"), QStringLiteral("MOTION"), camChannel); // shows "MOTION"
                 else
                     emit motionDetected(ip, camChannel); // only keeps a frame that is already shown
@@ -366,8 +481,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
                 takeSnapshot(ip, camChannel > 0 ? camChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Motion"));
             }
         }
-        if (!m_allowedKinds.contains(QStringLiteral("motion")) || !m_allowedTargets.contains(target))
-            continue; // motion, or this target, is switched off for the screen
+        if (!m_wKinds.contains(QStringLiteral("motion")) || !m_wTargets.contains(target) || reportIsLate(camTime))
+            continue; // motion or this target is switched off, or the report is a replay: no frame
         qDebug() << "[Events] report from" << ip << "channel" << camChannel << ":" << target;
         emit targetDetected(ip, target, QStringLiteral("MOTION"), camChannel);
     }
@@ -423,8 +538,10 @@ void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body
     m_motionSeen.insert(key, nowMs);
     if (nowMs - lastMs >= kMotionQuietMs)
         logDetection(c, QStringLiteral("face"), QStringLiteral("Face detection"), cameraTime, eventChannel);
-    if (!m_allowedKinds.contains(QStringLiteral("face")))
+    if (!m_wKinds.contains(QStringLiteral("face")))
         return; // "Face detection" is switched off for the screen (the log is not affected)
+    if (reportIsLate(cameraTime))
+        return; // a replayed face report stays in the log and does not put the label back up
     qDebug() << "[Events] face from" << ip << "channel" << eventChannel;
     emit targetDetected(ip, QStringLiteral("face"), QStringLiteral("FACE"), eventChannel);
 }
@@ -546,6 +663,12 @@ int HikvisionEvents::pictureHasFrame(const QString &path, double x, double y, do
 
 void HikvisionEvents::judgeJpeg(const QString &address, bool hasRect, const QRectF &r, const QByteArray &jpeg)
 {
+    if (m_worker && QThread::currentThread() != m_worker->thread()) {
+        QMetaObject::invokeMethod(m_worker, [this, address, hasRect, r, jpeg]() {
+            judgeJpeg(address, hasRect, r, jpeg);
+        }, Qt::QueuedConnection);
+        return;
+    }
     if (address.isEmpty())
         return;
     if (!hasRect)
@@ -573,28 +696,43 @@ void HikvisionEvents::judgeJpeg(const QString &address, bool hasRect, const QRec
         PictureVerdict v;
         v.on = strong >= 3;
         v.when = QDateTime::currentDateTime();
+        QMutexLocker lock(&m_pictureMu);
         m_pictures.insert(address, v);
     }
 }
 
 void HikvisionEvents::fetchPicture(const QString &ip, const QUrl &url, const QString &address, int lens, const QString &kind, qint64 secs, bool hasRect, const QRectF &rect)
 {
+    if (m_stopping.load())
+        return;
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, ip, url, address, lens, kind, secs, hasRect, rect]() {
+            fetchPicture(ip, url, address, lens, kind, secs, hasRect, rect);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->pictureRefused || c->pictureFetches >= 2 || address.isEmpty())
         return;
     // Only ever send the login to the device this connection belongs to.
     if (url.scheme() != QLatin1String("http") || url.host() != c->ip.section(QLatin1Char(':'), 0, 0).trimmed())
         return;
-    if (QFile::exists(picturePath(QFileInfo(m_logDir).absolutePath(), address, secs, lens, kind)) && !m_logDir.isEmpty())
+    const QString dir = m_logDir;
+    if (!dir.isEmpty() && QFile::exists(picturePath(QFileInfo(dir).absolutePath(), address, secs, lens, kind)))
         return; // already have this one
     ++c->pictureFetches;
+    const QString user = c->user;
+    const QString pass = c->pass;
+    lock.unlock();
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KVision"));
     QNetworkReply *reply = m_net->get(req);
-    reply->setProperty("evUser", c->user);
-    reply->setProperty("evPass", c->pass);
+    reply->setProperty("evUser", user);
+    reply->setProperty("evPass", pass);
     connect(reply, &QNetworkReply::finished, this, [this, ip, reply, address, lens, kind, secs, hasRect, rect]() {
         reply->deleteLater();
+        QMutexLocker finishedLock(&m_mu);
         Conn *conn = m_conns.value(ip, nullptr);
         if (conn && conn->pictureFetches > 0)
             --conn->pictureFetches;
@@ -610,6 +748,7 @@ void HikvisionEvents::fetchPicture(const QString &ip, const QUrl &url, const QSt
         const QByteArray jpeg = reply->readAll();
         if (jpeg.size() < 1000 || jpeg.left(3) != QByteArray("\xff\xd8\xff", 3))
             return;
+        finishedLock.unlock();
         savePicture(address, lens, kind, secs, jpeg);
         judgeJpeg(address, hasRect, rect, jpeg);
     });
@@ -659,17 +798,32 @@ int HikvisionEvents::pictureLens(const Conn *c, int eventChannel) const
 
 void HikvisionEvents::savePicture(const QString &address, int lens, const QString &kind, qint64 secs, const QByteArray &jpeg)
 {
-    if (m_logDir.isEmpty() || address.isEmpty() || jpeg.size() < 1000)
+    if (m_worker && QThread::currentThread() != m_worker->thread()) {
+        QMetaObject::invokeMethod(m_worker, [this, address, lens, kind, secs, jpeg]() {
+            savePicture(address, lens, kind, secs, jpeg);
+        }, Qt::QueuedConnection);
         return;
-    const QString dirPath = m_logDir + QStringLiteral("/pictures");
+    }
+    const QString dir = logDirectory();
+    if (dir.isEmpty() || address.isEmpty() || jpeg.size() < 1000)
+        return;
+    const QString dirPath = dir + QStringLiteral("/pictures");
     QDir().mkpath(dirPath);
-    QFile f(picturePath(QFileInfo(m_logDir).absolutePath(), address, secs, lens, kind));
+    const QString path = picturePath(QFileInfo(dir).absolutePath(), address, secs, lens, kind);
+    const QString part = path + QStringLiteral(".part");
+    QFile f(part);
     if (!f.open(QIODevice::WriteOnly)) {
         qWarning() << "[Events] cannot write" << f.fileName() << f.errorString();
         return;
     }
     f.write(jpeg);
     f.close();
+    QFile::remove(path);
+    if (!QFile::rename(part, path)) {
+        qWarning() << "[Events] cannot keep" << path;
+        QFile::remove(part);
+        return;
+    }
     prunePictures(dirPath, pictureKey(address, lens));
 }
 
@@ -686,6 +840,14 @@ void HikvisionEvents::savePicture(const QString &address, int lens, const QStrin
 //    started from the first listing, says whether it can have.
 void HikvisionEvents::prunePictures(const QString &dirPath, const QString &key)
 {
+    if (m_worker && QThread::currentThread() != m_worker->thread()) {
+        QMetaObject::invokeMethod(m_worker, [this, dirPath, key]() { prunePictures(dirPath, key); }, Qt::QueuedConnection);
+        return;
+    }
+    {
+        QMutexLocker lock(&m_mu);
+        m_wMaxPictures = m_maxPictures;
+    }
     // A whole-folder trim (the setting changed) lists everything, once, and trims every camera.
     if (key.isEmpty()) {
         const QStringList all = QDir(dirPath).entryList(QStringList() << QStringLiteral("*.jpg"), QDir::Files, QDir::NoSort);
@@ -710,7 +872,7 @@ void HikvisionEvents::pruneCamera(const QString &dirPath, const QString &key, bo
     // keeps or removes the wrong pictures: the listing below is what decides.
     auto it = m_pictureCount.find(key);
     if (!force && it != m_pictureCount.end()) {
-        if (++it.value() <= m_maxPictures)
+        if (++it.value() <= m_wMaxPictures)
             return; // cannot be over the limit yet
     }
     const QStringList names = QDir(dirPath).entryList(QStringList() << key + QStringLiteral("_*.jpg"), QDir::Files, QDir::NoSort);
@@ -733,8 +895,8 @@ void HikvisionEvents::pruneCamera(const QString &dirPath, const QString &key, bo
         pics.append({n, secs, motion});
         (motion ? motionCount : otherCount)++;
     }
-    const int limitOther = m_maxPictures;
-    const int limitMotion = qMax(10, m_maxPictures / 4);
+    const int limitOther = m_wMaxPictures;
+    const int limitMotion = qMax(10, m_wMaxPictures / 4);
     if (otherCount > limitOther || motionCount > limitMotion) {
         std::sort(pics.begin(), pics.end(), [](const Pic &a, const Pic &b) { return a.secs != b.secs ? a.secs > b.secs : a.name > b.name; }); // newest first
         int keptOther = 0, keptMotion = 0;
@@ -751,13 +913,19 @@ void HikvisionEvents::pruneCamera(const QString &dirPath, const QString &key, bo
 
 void HikvisionEvents::setMaxPictures(int count)
 {
-    m_maxPictures = qBound(10, count, 10000);
-    if (!m_logDir.isEmpty())
-        prunePictures(m_logDir + QStringLiteral("/pictures"), QString());
+    QString dir;
+    {
+        QMutexLocker lock(&m_mu);
+        m_maxPictures = qBound(10, count, 10000);
+        dir = m_logDir;
+    }
+    if (!dir.isEmpty())
+        prunePictures(dir + QStringLiteral("/pictures"), QString());
 }
 
 QVariantMap HikvisionEvents::pictureFrames(const QString &address) const
 {
+    QMutexLocker lock(&m_pictureMu);
     QVariantMap m;
     const auto it = m_pictures.constFind(address);
     if (it == m_pictures.constEnd())
@@ -769,6 +937,7 @@ QVariantMap HikvisionEvents::pictureFrames(const QString &address) const
 
 QVariantMap HikvisionEvents::savedPictureFrames(const QString &address, const QString &configDir) const
 {
+    QMutexLocker logLock(&m_logMu);
     QVariantMap m;
     if (address.isEmpty() || configDir.isEmpty())
         return m;
@@ -842,7 +1011,7 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
     if (err == QNetworkReply::OperationCanceledError && c->watchers <= 0)
         return;
     qDebug() << "[Events]" << ip << "stream ended: HTTP" << httpStatus << "error" << int(err) << errText
-            << "loginSent" << triedLogin << "gotData" << (c->buffer.size() > 0 || c->failures == 0 ? "maybe" : "no");
+            << "loginSent" << triedLogin << "gotData" << (c->lastDataMs >= c->openedMs || c->failures == 0 ? "maybe" : "no");
     // Only a real 401 or 403 means the camera refused our password. Anything else (a dropped
     // connection, a timeout) is retried a few times, because a wrong guess could lock the camera.
     if (httpStatus == 401 || httpStatus == 403 || err == QNetworkReply::AuthenticationRequiredError) {
@@ -917,10 +1086,12 @@ QString HikvisionEvents::eventWhere(const QString &body)
 void HikvisionEvents::logDetection(const Conn *c, const QString &target, const QString &kind, const QString &cameraTime, int eventChannel,
                                    const QString &where)
 {
-    if (m_logDir.isEmpty())
+    const QString dir = logDirectory();
+    if (dir.isEmpty())
         return;
-    QDir().mkpath(m_logDir);
-    QFile f(m_logDir + QStringLiteral("/Detection.log"));
+    QMutexLocker lock(&m_logMu);
+    QDir().mkpath(dir);
+    QFile f(dir + QStringLiteral("/Detection.log"));
     if (!f.open(QIODevice::Append | QIODevice::Text)) {
         qWarning() << "[Events] cannot write" << f.fileName() << f.errorString();
         return;
@@ -931,7 +1102,7 @@ void HikvisionEvents::logDetection(const Conn *c, const QString &target, const Q
     QString late;
     if (eventTime.isValid()) {
         eventTime = eventTime.toLocalTime();
-        if (eventTime.secsTo(now) >= 10)
+        if (reportIsLate(cameraTime))
             late = QStringLiteral(", received ") + QLocale::c().toString(now, QStringLiteral("HH:mm:ss"));
     } else {
         eventTime = now;
@@ -973,7 +1144,8 @@ void HikvisionEvents::logDetection(const Conn *c, const QString &target, const Q
 void HikvisionEvents::logOtherEvent(const Conn *c, const QString &type, const QString &state, const QString &cameraTime,
                                     int eventChannel, const QString &body)
 {
-    if (m_logDir.isEmpty() || type.isEmpty())
+    const QString dir = logDirectory();
+    if (dir.isEmpty() || type.isEmpty())
         return;
     // A camera's heartbeat is a "videoloss" report that says inactive, every ten seconds or so. It is not an event.
     if (type.compare(QLatin1String("heartBeat"), Qt::CaseInsensitive) == 0
@@ -1004,11 +1176,12 @@ void HikvisionEvents::logOtherEvent(const Conn *c, const QString &type, const QS
             name = lens->name;
     }
 
-    QDir().mkpath(m_logDir);
-    const QString path = m_logDir + QStringLiteral("/OtherEvents.log");
+    QMutexLocker lock(&m_logMu);
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/OtherEvents.log");
     if (QFileInfo(path).size() > 2 * 1024 * 1024) { // keep it small: one older copy
-        QFile::remove(m_logDir + QStringLiteral("/OtherEvents.old.log"));
-        QFile::rename(path, m_logDir + QStringLiteral("/OtherEvents.old.log"));
+        QFile::remove(dir + QStringLiteral("/OtherEvents.old.log"));
+        QFile::rename(path, dir + QStringLiteral("/OtherEvents.old.log"));
     }
     QFile f(path);
     if (!f.open(QIODevice::Append | QIODevice::Text))
@@ -1024,21 +1197,29 @@ void HikvisionEvents::logOtherEvent(const Conn *c, const QString &type, const QS
 //   10 Nov 2026 08:52:24, Frame shown, HUMAN - LINE, tile 19, Camera_Name, 192.0.0.3
 void HikvisionEvents::logFrame(const QString &ip, const QString &text, int tile, const QString &name)
 {
-    if (m_logDir.isEmpty())
+    const QString dir = logDirectory();
+    if (dir.isEmpty())
         return;
-    QDir().mkpath(m_logDir);
-    QFile f(m_logDir + QStringLiteral("/Frames.log"));
+    QString shown = name;
+    if (shown.isEmpty()) {
+        QMutexLocker lock(&m_mu);
+        const Conn *c = m_conns.value(ip, nullptr);
+        shown = (c && !c->name.isEmpty()) ? c->name : ip;
+    }
+    QMutexLocker lock(&m_logMu);
+    QDir().mkpath(dir);
+    QFile f(dir + QStringLiteral("/Frames.log"));
     if (!f.open(QIODevice::Append | QIODevice::Text))
         return;
-    const Conn *c = m_conns.value(ip, nullptr);
     const QString when = QLocale::c().toString(QDateTime::currentDateTime(), QStringLiteral("dd MMM yyyy HH:mm:ss"));
-    QTextStream(&f) << when << ", Frame shown, " << text << ", tile " << tile << ", " << (!name.isEmpty() ? name : (c && !c->name.isEmpty() ? c->name : ip)) << ", " << ip << "\n";
+    QTextStream(&f) << when << ", Frame shown, " << text << ", tile " << tile << ", " << shown << ", " << ip << "\n";
 }
 
 QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &configDir, const QString &filterIp,
                                             qint64 fromMs, qint64 toMs, const QString &target, const QString &kinds,
                                             const QString &hideTargets, const QString &hideKinds) const
 {
+    QMutexLocker logLock(&m_logMu);
     QVariantMap result;
     QVariantList entries;
     bool more = false;
@@ -1238,6 +1419,7 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
 
 void HikvisionEvents::setAllowedKinds(const QString &kinds)
 {
+    QMutexLocker lock(&m_mu);
     m_allowedKinds.clear();
     const QStringList parts = splitList(kinds);
     for (const QString &p : parts)
@@ -1256,12 +1438,13 @@ bool HikvisionEvents::sourceAllowed(const Conn *c, int eventChannel) const
         channel = (lens != c->lens.constEnd() && lens->channel > 0) ? lens->channel : c->recChannel;
     }
     const QString key = c->recIp + QLatin1Char('#') + QString::number(channel);
-    const QString wanted = m_sourceOverrides.value(key, m_defaultSource);
+    const QString wanted = m_wOverrides.value(key, m_wDefaultSource);
     return c->recorderMode ? wanted == QLatin1String("recorder") : wanted != QLatin1String("recorder");
 }
 
 void HikvisionEvents::setChannelSources(const QString &overridesJson, const QString &defaultSource)
 {
+    QMutexLocker lock(&m_mu);
     m_sourceOverrides.clear();
     const QJsonObject o = QJsonDocument::fromJson(overridesJson.toUtf8()).object();
     for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
@@ -1274,12 +1457,14 @@ void HikvisionEvents::setChannelSources(const QString &overridesJson, const QStr
 
 void HikvisionEvents::setUnlabelledMotion(bool log, bool frame)
 {
+    QMutexLocker lock(&m_mu);
     m_logUnlabelledMotion = log;
     m_frameUnlabelledMotion = frame;
 }
 
 void HikvisionEvents::setAllowedTargets(const QString &targets)
 {
+    QMutexLocker lock(&m_mu);
     m_allowedTargets.clear();
     const QStringList parts = splitList(targets);
     for (const QString &p : parts)
@@ -1288,6 +1473,7 @@ void HikvisionEvents::setAllowedTargets(const QString &targets)
 
 void HikvisionEvents::setChannelInfo(const QString &ip, const QString &json)
 {
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c)
         return;
@@ -1301,6 +1487,7 @@ void HikvisionEvents::setChannelInfo(const QString &ip, const QString &json)
 
 void HikvisionEvents::setLensInfo(const QString &ip, const QString &json)
 {
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c)
         return;
@@ -1317,6 +1504,7 @@ void HikvisionEvents::setLensInfo(const QString &ip, const QString &json)
 
 void HikvisionEvents::logTracking(const QString &ip, const QString &target, int lensChannel)
 {
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->recorderMode || lensChannel <= 0 || m_logDir.isEmpty())
         return;
@@ -1344,6 +1532,15 @@ void HikvisionEvents::logTracking(const QString &ip, const QString &target, int 
 // requests for this camera, like the event pictures.
 void HikvisionEvents::takeSnapshot(const QString &ip, int cameraChannel, qint64 secs, const QString &kind)
 {
+    if (m_stopping.load())
+        return;
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, ip, cameraChannel, secs, kind]() {
+            takeSnapshot(ip, cameraChannel, secs, kind);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    QMutexLocker lock(&m_mu);
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->pictureRefused || c->pictureFetches >= 2 || m_logDir.isEmpty())
         return;
@@ -1353,13 +1550,17 @@ void HikvisionEvents::takeSnapshot(const QString &ip, int cameraChannel, qint64 
     url.setPort(c->httpPort);
     url.setPath(QStringLiteral("/ISAPI/Streaming/channels/%1/picture").arg(cameraChannel * 100 + 1));
     ++c->pictureFetches;
+    const QString user = c->user;
+    const QString pass = c->pass;
+    lock.unlock();
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("KVision"));
     QNetworkReply *reply = m_net->get(req);
-    reply->setProperty("evUser", c->user);
-    reply->setProperty("evPass", c->pass);
+    reply->setProperty("evUser", user);
+    reply->setProperty("evPass", pass);
     connect(reply, &QNetworkReply::finished, this, [this, ip, reply, cameraChannel, secs, kind]() {
         reply->deleteLater();
+        QMutexLocker finishedLock(&m_mu);
         Conn *conn = m_conns.value(ip, nullptr);
         if (conn && conn->pictureFetches > 0)
             --conn->pictureFetches;
@@ -1375,12 +1576,16 @@ void HikvisionEvents::takeSnapshot(const QString &ip, int cameraChannel, qint64 
         const QByteArray jpeg = reply->readAll();
         if (jpeg.size() < 1000 || jpeg.left(3) != QByteArray("\xff\xd8\xff", 3))
             return;
-        savePicture(cameraAddress(conn, cameraChannel), pictureLens(conn, cameraChannel), kind, secs, jpeg);
+        const QString address = cameraAddress(conn, cameraChannel);
+        const int lens = pictureLens(conn, cameraChannel);
+        finishedLock.unlock();
+        savePicture(address, lens, kind, secs, jpeg);
     });
 }
 
 QVariantList HikvisionEvents::logEventsBetween(const QString &recorderIp, int channel, qint64 startMs, qint64 endMs, const QString &configDir) const
 {
+    QMutexLocker logLock(&m_logMu);
     QVariantList out;
     QFile f(configDir + QStringLiteral("/logs/Detection.log"));
     if (recorderIp.isEmpty() || channel <= 0 || !f.open(QIODevice::ReadOnly))

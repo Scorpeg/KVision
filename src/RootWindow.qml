@@ -327,6 +327,7 @@ ApplicationWindow {
         property string targetOffCameras: "[]" // JSON list of camera addresses with the indicator switched off
         property string targetNvrOnCameras: "[]" // JSON list of "recorderIp#channel" entries switched on for cameras behind a recorder
         onTargetNvrOnCamerasChanged: rootWindow.noteNvrList()
+        Component.onCompleted: rootWindow.nvrListReady = true
         property string talkMicrophone: ""
         property real talkGain: 2.0
         property real talkBoostDb: 0.0
@@ -2292,6 +2293,14 @@ ApplicationWindow {
     // The list of recorder cameras that show a detection frame has been seen to come back empty after a start. This prints how
     // many it holds whenever it loads or changes, and a warning when a list that had cameras becomes empty, so the terminal
     // shows when and what happened.
+    // The setting starts as []. It is not written until this window has read the saved list, so a start cannot save that
+    // empty starting value over the real one. After the read, an empty list is a real choice and is saved.
+    property bool nvrListReady: false
+    function setTargetNvrOnCameras(value) {
+        if (!nvrListReady)
+            return;
+        generalSettings.targetNvrOnCameras = value;
+    }
     property int nvrListCount: -1
     function noteNvrList() {
         var n = 0;
@@ -2336,7 +2345,8 @@ ApplicationWindow {
         Context.writeSetting("", "logUnlabelledMotion", generalSettings.logUnlabelledMotion);
         Context.writeSetting("", "frameUnlabelledMotion", generalSettings.frameUnlabelledMotion);
         Context.writeSetting("", "targetOffCameras", generalSettings.targetOffCameras);
-        Context.writeSetting("", "targetNvrOnCameras", generalSettings.targetNvrOnCameras);
+        if (rootWindow.nvrListReady)
+            Context.writeSetting("", "targetNvrOnCameras", generalSettings.targetNvrOnCameras);
         Context.writeSetting("", "talkMicrophone", generalSettings.talkMicrophone);
         Context.writeSetting("", "talkGain", generalSettings.talkGain);
         Context.writeSetting("", "talkBoostDb", generalSettings.talkBoostDb);
