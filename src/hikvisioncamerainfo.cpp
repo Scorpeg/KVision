@@ -466,8 +466,15 @@ void videoSections(const Cam &cam, QVariantList &out)
         const QString rate = mode == QLatin1String("CBR") ? tag(s, QStringLiteral("constantBitRate")) : tag(s, QStringLiteral("vbrUpperCap"));
         const QString label = id == QLatin1String("101") ? QStringLiteral("Main stream")
                             : (id == QLatin1String("102") ? QStringLiteral("Sub stream") : QStringLiteral("Third stream"));
+        // Smart codec (Hikvision's "H.265+" / "H.264+") is a camera setting that the video stream itself does not show.
+        // It is written in this window only, from the camera's current setting.
+        QString codec = tag(s, QStringLiteral("videoCodecType"));
+        const int sc = s.indexOf(QLatin1String("<SmartCodec>"));
+        if (sc >= 0 && tag(s.mid(sc), QStringLiteral("enabled")) == QLatin1String("true")
+            && (codec == QLatin1String("H.265") || codec == QLatin1String("H.264")))
+            codec += QLatin1Char('+');
         rows << row(label, QStringLiteral("%1, %2x%3, %4 fps, %5 %6 kbps")
-                               .arg(tag(s, QStringLiteral("videoCodecType")), tag(s, QStringLiteral("videoResolutionWidth")),
+                               .arg(codec, tag(s, QStringLiteral("videoResolutionWidth")),
                                     tag(s, QStringLiteral("videoResolutionHeight")))
                                .arg(fps, 0, 'g', 4).arg(mode, rate));
         const int a = s.indexOf(QLatin1String("<Audio>"));

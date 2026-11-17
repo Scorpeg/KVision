@@ -860,34 +860,24 @@ Window {
                 readonly property int n: logWin.tickedCount(logWin.hiddenTargets)
                 text: n > 0 ? qsTr("Targets (%1)").arg(n) : qsTr("Targets")
                 implicitWidth: 120
-                onClicked: hideTargetsMenu.popup(0, -hideTargetsMenu.implicitHeight)
-                ToolTip.visible: hovered
+                onClicked: hideTargetsPopup.opened ? hideTargetsPopup.close() : hideTargetsPopup.open()
+                ToolTip.visible: hovered && !hideTargetsPopup.opened
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Tick the targets to leave out of the list. \"Unnamed motion\" is motion that did not say what moved.")
-                Menu {
-                    id: hideTargetsMenu
-                    Repeater {
-                        model: logWin.hideTargetChoices
-                        MenuItem {
-                            text: modelData.label
-                            checkable: true
-                            checked: !!logWin.hiddenTargets[modelData.key]
-                            onTriggered: {
-                                var t = Object.assign({}, logWin.hiddenTargets);
-                                t[modelData.key] = checked;
-                                logWin.hiddenTargets = t;
-                                logWin.load(true);
-                            }
-                        }
+                LeaveOutPopup {
+                    id: hideTargetsPopup
+                    y: -height - 4
+                    choices: logWin.hideTargetChoices
+                    ticked: logWin.hiddenTargets
+                    onTickChanged: {
+                        var t = Object.assign({}, logWin.hiddenTargets);
+                        t[key] = checked;
+                        logWin.hiddenTargets = t;
+                        logWin.load(true);
                     }
-                    MenuSeparator { }
-                    MenuItem {
-                        text: qsTr("Clear")
-                        enabled: hideTargetsButton.n > 0
-                        onTriggered: {
-                            logWin.hiddenTargets = ({});
-                            logWin.load(true);
-                        }
+                    onCleared: {
+                        logWin.hiddenTargets = ({});
+                        logWin.load(true);
                     }
                 }
             }
@@ -897,34 +887,24 @@ Window {
                 readonly property int n: logWin.tickedCount(logWin.hiddenKinds)
                 text: n > 0 ? qsTr("Types (%1)").arg(n) : qsTr("Types")
                 implicitWidth: 120
-                onClicked: hideKindsMenu.popup(0, -hideKindsMenu.implicitHeight)
-                ToolTip.visible: hovered
+                onClicked: hideKindsPopup.opened ? hideKindsPopup.close() : hideKindsPopup.open()
+                ToolTip.visible: hovered && !hideKindsPopup.opened
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Tick the types of event to leave out of the list")
-                Menu {
-                    id: hideKindsMenu
-                    Repeater {
-                        model: logWin.hideKindChoices
-                        MenuItem {
-                            text: modelData.label
-                            checkable: true
-                            checked: !!logWin.hiddenKinds[modelData.key]
-                            onTriggered: {
-                                var t = Object.assign({}, logWin.hiddenKinds);
-                                t[modelData.key] = checked;
-                                logWin.hiddenKinds = t;
-                                logWin.load(true);
-                            }
-                        }
+                LeaveOutPopup {
+                    id: hideKindsPopup
+                    y: -height - 4
+                    choices: logWin.hideKindChoices
+                    ticked: logWin.hiddenKinds
+                    onTickChanged: {
+                        var t = Object.assign({}, logWin.hiddenKinds);
+                        t[key] = checked;
+                        logWin.hiddenKinds = t;
+                        logWin.load(true);
                     }
-                    MenuSeparator { }
-                    MenuItem {
-                        text: qsTr("Clear")
-                        enabled: hideKindsButton.n > 0
-                        onTriggered: {
-                            logWin.hiddenKinds = ({});
-                            logWin.load(true);
-                        }
+                    onCleared: {
+                        logWin.hiddenKinds = ({});
+                        logWin.load(true);
                     }
                 }
             }

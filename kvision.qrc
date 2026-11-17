@@ -53,6 +53,7 @@
         <file>src/CameraToolsPanel.qml</file>
         <file>src/NvrCamerasWindow.qml</file>
         <file>src/DetectionLogWindow.qml</file>
+        <file>src/LeaveOutPopup.qml</file>
         <file>src/CameraSettingsWindow.qml</file>
         <file>src/SetupCheckWindow.qml</file>
         <file>src/CameraHealthWindow.qml</file>
