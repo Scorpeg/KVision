@@ -1112,9 +1112,10 @@ ApplicationWindow {
 
         onCountChanged: stackLayout.currentIndex = stackLayout.currentIndex.clamp(0, layoutsCollectionModel.count - 1)
         Component.onCompleted: {
-            // Demo streams
-            get(0).get(0).url = "rtmp://live.a71.ru/demo/0";
-            get(0).get(1).url = "rtmp://live.a71.ru/demo/1";
+            // First-run pictures, only used when no layout has been saved yet. Both are public road cameras
+            // published for anyone to view: a Norwegian highway camera, and a Minnesota highway camera.
+            get(0).get(0).url = "https://kamera.vegvesen.no/public/1029002_1/manifest.m3u8";
+            get(0).get(1).url = "https://video.dot.state.mn.us/public/C30083.stream/playlist.m3u8";
 
             var initialModels = "";
             var needsUid = false;
