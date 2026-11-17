@@ -282,3 +282,15 @@ that report the feature.
   `isSupportSmartOverlapParams`). Only KVision drawing its own boxes from event reports remains, and only while an event fires.
 - [ ] **Unit tests:** `ctest` printed only its usage and no `run_unit_tests` binary was found, so the tests were not run this day.
   Find out how they are meant to be built and run.
+
+## Note, 16 Nov 2026: no Tracking lines when the PTZ lens takes its events from the recorder
+- **What was seen:** the dual PTZ camera (`192.0.0.115`) tracked a person at 10:24, but the detection log had no Tracking
+  line for it. The last Tracking lines were from 15 Nov. All of 16 Nov's lines for the PTZ lens (NVR Ch. 14) said
+  "via NVR", and `targetSourceOverrides` held `{"192.0.0.99#14":"recorder"}`.
+- **Why:** the camera's "left its park position" message (`presetSwitchingInformation`) is only read on a direct
+  connection to the camera. A tile set to take events from the recorder has no such connection, so `logTracking` never runs.
+- **Fix used:** set that camera's event source back to the camera (Settings > Choose cameras and event source). The
+  override is gone from the settings now. This is not yet proven: walk in front of the PTZ lens and look for a Tracking line.
+- [ ] **Check that Tracking lines are back** on `192.0.0.115` after a person is followed.
+- [ ] **Maybe:** keep a direct connection to a PTZ camera for the tracking messages even when its events come from the
+  recorder, or warn in the detection frame window that Tracking is not logged for a camera on the recorder source.
