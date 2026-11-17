@@ -392,8 +392,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
 
 // A camera with face detection on sends "facedetection" while a face is in view, about once a second. The report names no box and
 // brings no picture, so there is nothing to frame. The first one of a run is written to the detection log (the next line only after
-// kMotionQuietMs without one) and a still is taken from the device that sent it (the camera or the recorder, whichever is the
-// camera's chosen event source; sourceAllowed() has already dropped the other connection's copy); every one keeps the tile's "FACE DETECTED" label up.
+// kMotionQuietMs without one); no picture is taken for it (sourceAllowed() has already dropped the copy from the other connection, the
+// camera's or the recorder's, whichever is not the camera's chosen event source); every one keeps the tile's "FACE DETECTED" label up.
 // The tile label follows the "Face detection" choice of the on-screen settings (on by default); a face is not a target kind, so the
 // target choices do not apply to it.
 void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body, const QString &cameraTime, int eventChannel)
@@ -405,15 +405,10 @@ void HikvisionEvents::handleFace(Conn *c, const QString &ip, const QString &body
     const QString key = ip + QStringLiteral("|face|") + QString::number(eventChannel);
     const qint64 lastMs = m_motionSeen.value(key, 0);
     m_motionSeen.insert(key, nowMs);
-    if (nowMs - lastMs >= kMotionQuietMs) {
+    if (nowMs - lastMs >= kMotionQuietMs)
         logDetection(c, QStringLiteral("face"), QStringLiteral("Face detection"), cameraTime, eventChannel);
-        QDateTime when = QDateTime::fromString(cameraTime, Qt::ISODate);
-        if (!when.isValid())
-            when = QDateTime::currentDateTime();
-        takeSnapshot(ip, eventChannel > 0 ? eventChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Face detection"));
-    }
     if (!m_allowedKinds.contains(QStringLiteral("face")))
-        return; // "Face detection" is switched off for the screen (the log and the picture are not affected)
+        return; // "Face detection" is switched off for the screen (the log is not affected)
     qDebug() << "[Events] face from" << ip << "channel" << eventChannel;
     emit targetDetected(ip, QStringLiteral("face"), QStringLiteral("FACE"), eventChannel);
 }
@@ -425,23 +420,11 @@ void HikvisionEvents::notePictureRect(Conn *c, const QString &body, int eventCha
     static const QRegularExpression picRx(QStringLiteral("<detectionPicturesNumber>(\\d+)</detectionPicturesNumber>"));
     c->pendingValid = false;
     c->pendingHasRect = false;
+    if (picRx.match(body).captured(1).toInt() < 1)
+        return; // this event brings no picture
     QDateTime when = QDateTime::fromString(cameraTime, Qt::ISODate);
     if (!when.isValid())
         when = QDateTime::currentDateTime();
-    if (picRx.match(body).captured(1).toInt() < 1) {
-        // This event brings no picture and no box. An older camera never does, so a still is taken instead (see kSmartPictureGapMs). A camera
-        // that does send pictures sometimes sends a report without one; that report gets a still too, only if none was taken for this kind of
-        // rule in the last few seconds. Not for a camera behind a recorder: its picture is the recorder's to send.
-        if (!c->recorderMode) {
-            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-            const QString key = c->ip + QLatin1Char('|') + QString::number(eventChannel) + QLatin1Char('|') + kind;
-            if (nowMs - m_smartPictureAt.value(key, 0) >= kSmartPictureGapMs) {
-                m_smartPictureAt.insert(key, nowMs);
-                takeSnapshot(c->ip, eventChannel > 0 ? eventChannel : 1, when.toSecsSinceEpoch(), kind);
-            }
-        }
-        return;
-    }
     c->pendingSecs = when.toSecsSinceEpoch();
     c->pendingAddress = cameraAddress(c, eventChannel);
     c->pendingLens = pictureLens(c, eventChannel);
@@ -1199,23 +1182,6 @@ QVariantMap HikvisionEvents::readDetections(int skip, int count, const QString &
                         if (QFile::exists(t)) {
                             pic = t;
                             break;
-                        }
-                    }
-                }
-                // A camera that sends no picture with its reports gets one still per burst (kSmartPictureGapMs), named for the burst's first
-                // second. A later line of the same burst has no picture of its own: use the newest one of the same kind just before it. Only a
-                // line with no box (a camera that sends a box sends its own picture), and never a Motion or Tracking line.
-                if (pic.isEmpty() && ms > 0 && e.value(QStringLiteral("box")).toList().isEmpty()
-                    && kindText != QLatin1String("Motion") && kindText != QLatin1String("Tracking") && kindText != QLatin1String("Face detection")) {
-                    for (qint64 back = 1; back <= kSmartPictureGapMs / 1000 && pic.isEmpty(); ++back) {
-                        // Named with the lens when the camera has more than one, without it when it has one: try both, as above.
-                        const QString tries2[2] = { picturePath(configDir, picIp, ms / 1000 - back, channel > 0 ? channel : 0, kindText),
-                                                    picturePath(configDir, picIp, ms / 1000 - back, 0, kindText) };
-                        for (const QString &t : tries2) {
-                            if (QFile::exists(t)) {
-                                pic = t;
-                                break;
-                            }
                         }
                     }
                 }

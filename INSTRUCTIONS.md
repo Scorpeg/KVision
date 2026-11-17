@@ -258,8 +258,6 @@ It also turns off if the tile is zoomed in or put at 1:1. The tile shows what ha
 
 ---
 
-**Pictures for events from older cameras.** A camera without human or vehicle detection reports a line crossing or intrusion but sends no picture with it. For such a camera KVision takes a still from the camera when the report arrives (at most one every 10 seconds for each camera, lens and kind of rule, since the camera repeats the report while something is in view). The Detection events window shows it for that event and for the repeats in the same burst. It is a snapshot a moment after the report, with no box around the target, so it shows the scene and not which object set it off.
-
 ### Camera status
 
 **Settings > Camera Tools > Camera settings (read only)...** (or right-click a camera > Quick tools > Camera settings) has a **Status** section for each camera: how long it has been up, how busy its processor and memory are, how often it has restarted, how long it has run in total, how much its moving parts have worked (a PTZ's zoom, focus, iris, pan and tilt, and the day/night filter), and whether its fan or heater is on. Values are green when fine, grey for a note, orange for a warning and red for a problem. The **All cameras** table has **Up**, **CPU** and **Memory** columns with the same colors, so you can compare cameras at a glance. **Right-click a camera > Quick tools > Camera settings** opens the same window already on that camera and reads it at once, so the Status section is one of its sections.

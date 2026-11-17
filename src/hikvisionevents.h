@@ -193,7 +193,7 @@ private:
     // Returns true if a whole picture was there (so the event is done with).
     bool judgePicture(Conn *c, const QByteArray &data);
     // Remembers the target rectangle an event names, so the picture that follows it can be judged.
-    // A "facedetection" report: logged, a still taken, and a label shown on the tile (it has no box to frame).
+    // A "facedetection" report: logged, and a label shown on the tile (it has no box to frame). It brings no picture and none is taken.
     void handleFace(Conn *c, const QString &ip, const QString &body, const QString &cameraTime, int eventChannel);
     void notePictureRect(Conn *c, const QString &body, int eventChannel, const QString &cameraTime, const QString &kind);
     // A recorder sends a link to the picture instead of the picture. Downloads it with the connection's login
@@ -213,12 +213,6 @@ private:
     // quarter of the "pictures per camera" setting) so they cannot push a camera's smart-event pictures out.
     static constexpr qint64 kMotionPictureGapMs = 30000;
     QHash<QString, qint64> m_motionPictureAt; // "ip|channel" -> when the last one was taken (ms)
-    // A smart event (line, intrusion, region) from a camera that sends no picture with it (an older camera without human or vehicle detection)
-    // gets a still taken from the camera, at most once per kSmartPictureGapMs for each camera, lens and kind of rule. The first report of a
-    // burst is the one that gets it: a camera repeats the same report many times a second while something is in view. The still shows the
-    // scene about a second after the report and has no box, since the camera names no target position.
-    static constexpr qint64 kSmartPictureGapMs = 10000;
-    QHash<QString, qint64> m_smartPictureAt; // "ip|channel|kind" -> when the last one was taken (ms)
     bool sourceAllowed(const Conn *c, int eventChannel) const;
     QHash<QString, QString> m_sourceOverrides; // "recorderIp#channel" -> "camera" or "recorder"
     QString m_defaultSource = QStringLiteral("camera");

@@ -269,8 +269,11 @@ that report the feature.
   status badge. The 3D text is not in the translation files.
 - [ ] **Max bitrate tool:** try Set on all cameras once (the log shows five single changes by the owner), a constant-rate stream (none
   seen), and the Doorbell.
-- [ ] **A picture for an older camera's smart event:** check it on the real High PTZ (walk through a zone, look for
-  `192.168.20.90_..._intrusion.jpg` in `logs/pictures`). Then the same for the Doorbell, 192.168.20.97 and 192.0.0.11.
+- [x] **A picture for an older camera's smart event: removed on 16 Nov.** The forced still (one per 10 s per camera, lens and rule kind)
+  was taken out again: the owner does not want workarounds for cameras that do not send event pictures. Motion pictures and the Tracking
+  stills stay. The face-detection still was removed too. Left for later: the High PTZ (192.168.20.90), where no picture was ever seen.
+  The Doggie Cam (192.168.20.97) was tried with the camera's own FTP picture upload (see the audit, section 12): it works, but sends
+  one picture per report, about one a second, so it needs a receiver that keeps the first of each burst. Not built.
 - [ ] **Restart the background logger** (`./install.sh --update`) so it has the new picture and picture-trimming code.
 - [ ] **The next cost on the main thread is `judgePicture`** (22 to 31% in a profile): record a bad moment before changing it.
   The freeze itself is fixed (the picture trimming took 92% of the hot seconds, now about 1%).
