@@ -132,6 +132,8 @@ Window {
     // When set (epoch milliseconds), playback starts at this moment instead of near the latest recording.
     // Used to open an entry of the detection log. It is cleared once it has been used.
     property real initialStartMs: 0
+    // ip_channel -> the start time (ms) of the quick 24-hour search. A day search
+    // starts at midnight, so an answer is the quick search only when its start matches.
     property var activeFastSearches: ({})
     
     // User selected layout columns/rows (max 2x2, default 2x2)
@@ -144,6 +146,24 @@ Window {
     function getDateKey(date) {
         if (!date) return "";
         return date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+    }
+
+    function searchStartMs(startTime) {
+        if (!startTime) return 0;
+        return startTime.getTime ? startTime.getTime() : new Date(startTime).getTime();
+    }
+
+    // The quick search and the day searches share one answer signal. The quick search is the
+    // one whose start time was saved. A day search starts at midnight and is never this.
+    function takeFastSearchResult(recorderIp, channelId, startTime) {
+        var key = recorderIp + "_" + channelId;
+        var expected = activeFastSearches[key];
+        if (expected === undefined || Math.abs(searchStartMs(startTime) - expected) > 2000)
+            return false;
+        var tempFast = Object.assign({}, activeFastSearches);
+        delete tempFast[key];
+        activeFastSearches = tempFast;
+        return true;
     }
     
     onSelectedPlayerIndexChanged: {
@@ -500,12 +520,7 @@ Window {
     Connections {
         target: HikvisionISAPI
         function onSearchFinished(recorderIp, channelId, startTime, segments) {
-            var fastKey = recorderIp + "_" + channelId;
-            if (activeFastSearches[fastKey] === true) {
-                var tempFast = Object.assign({}, activeFastSearches);
-                delete tempFast[fastKey];
-                activeFastSearches = tempFast;
-
+            if (takeFastSearchResult(recorderIp, channelId, startTime)) {
                 var fastAdjustedSegments = [];
                 if (segments) {
                     for (var i = 0; i < segments.length; i++) {
@@ -520,9 +535,10 @@ Window {
 
                 if (fastAdjustedSegments.length > 0) {
                     checkInitialSeek(recorderIp, channelId, fastAdjustedSegments);
-                    return; // Return early, let the main search cache full 3-day segments
+                    return; // The day searches cache the full timeline on their own answers.
                 }
                 checkInitialSeek(recorderIp, channelId, []);
+                return;
             }
 
             var targetDate = new Date(startTime);
@@ -592,15 +608,7 @@ Window {
                 timeline.requestPaint();
         }
         function onSearchFailed(recorderIp, channelId, startTime, error) {
-            var fastFailedKey = recorderIp + "_" + channelId;
-            if (activeFastSearches[fastFailedKey] === true) {
-                var tempFastFailed = Object.assign({}, activeFastSearches);
-                delete tempFastFailed[fastFailedKey];
-                activeFastSearches = tempFastFailed;
-                var failedFetchKey = recorderIp + "_" + channelId + "_" + getDateKey(currentDate);
-                var tempFailedFetching = Object.assign({}, activePlayersFetching);
-                delete tempFailedFetching[failedFetchKey];
-                activePlayersFetching = tempFailedFetching;
+            if (takeFastSearchResult(recorderIp, channelId, startTime)) {
                 playbackWindow.isSearchingRecordings = isAnyCameraSearching();
                 checkInitialSeek(recorderIp, channelId, []);
                 return;
@@ -883,17 +891,16 @@ Window {
     function startFastSeekSearch(cam) {
         if (!cam) return;
         var key = cam.ip + "_" + cam.channelId;
-        
-        var tempFast = Object.assign({}, activeFastSearches);
-        tempFast[key] = true;
-        activeFastSearches = tempFast;
-        
+
         var end = new Date();
         // Add 2 hours margin for timezone differences and NVR clock discrepancies
         end.setHours(end.getHours() + 2);
-        
+
         var start = new Date(end.getTime() - 24 * 3600 * 1000); // Past 24 hours
-        
+        var tempFast = Object.assign({}, activeFastSearches);
+        tempFast[key] = start.getTime();
+        activeFastSearches = tempFast;
+
         var recorderInfoForCam = {
             "ip": cam.ip,
             "port": cam.sdkPort || cam.port || 8000,

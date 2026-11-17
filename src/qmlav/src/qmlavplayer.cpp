@@ -2,9 +2,41 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QImage>
+#include <QVector>
 #include <atomic>
 
 static std::atomic<int> s_qmlAvPlayerCount{0};
+
+// QPulseAudioOutput's destructor calls processEvents() while it is still on the stack.
+// Opening the archive mutes every tile and drops every live stream at once, so that
+// processEvents deletes the next tile's output before the first destructor has finished.
+// Those deletes are held until the destructor that is running has returned.
+namespace {
+int s_audioReleaseDepth = 0;
+QVector<QAudioOutput *> s_deferredAudioOutputs;
+
+void destroyAudioOutput(QAudioOutput *output)
+{
+    if (!output) {
+        return;
+    }
+    if (s_audioReleaseDepth > 0) {
+        s_deferredAudioOutputs.append(output);
+        return;
+    }
+
+    ++s_audioReleaseDepth;
+    delete output;
+    --s_audioReleaseDepth;
+
+    while (s_audioReleaseDepth == 0 && !s_deferredAudioOutputs.isEmpty()) {
+        QAudioOutput *next = s_deferredAudioOutputs.takeLast();
+        ++s_audioReleaseDepth;
+        delete next;
+        --s_audioReleaseDepth;
+    }
+}
+}
 
 QmlAVPlayer::QmlAVPlayer(QObject *parent)
     : QObject(parent)
@@ -30,10 +62,7 @@ QmlAVPlayer::~QmlAVPlayer()
         qDebug() << "[MEM-TRACK] Destroyed QmlAVPlayer. Total active:" << current;
 
     stop();
-    if (m_audioOutput) {
-        delete m_audioOutput;
-        m_audioOutput = nullptr;
-    }
+    releaseAudioOutput();
 }
 
 void QmlAVPlayer::componentComplete()
@@ -85,11 +114,16 @@ void QmlAVPlayer::stop()
     setVideoCodec(QString());
     
     if (wasStopped) {
+        m_holdLastFrame = false;
         m_stopping.store(false);
         return;
     }
 
-    if (m_videoSurface) {
+    // The archive pause sets this so the grid keeps the last picture instead of a black frame.
+    // The demuxer is already gone, so nothing keeps decoding behind that picture.
+    const bool keepFrame = m_holdLastFrame;
+    m_holdLastFrame = false;
+    if (!keepFrame && m_videoSurface) {
         if (m_videoSurface->isActive()) {
             m_videoSurface->stop();
         }
@@ -102,13 +136,7 @@ void QmlAVPlayer::stop()
         m_videoSurface->present(blackFrame);
     }
 
-    if (m_audioOutput) {
-        m_audioOutput->stop();
-        delete m_audioOutput;
-        m_audioOutput = nullptr;
-    }
-
-    m_audioIODevice.clear();
+    releaseAudioOutput();
     if (m_fps != 0) {
         m_fps = 0;
         m_fpsCounter = 0;
@@ -243,8 +271,10 @@ void QmlAVPlayer::frameHandler(const std::shared_ptr<QmlAVFrame> frame)
                 } else {
                     if (m_audioOutput->format() != f) {
                         logDebug() << "Audio format changed, recreating QAudioOutput. Old:" << m_audioOutput->format() << "New:" << f;
-                        m_audioOutput->stop();
-                        m_audioOutput->deleteLater();
+                        QAudioOutput *oldOutput = m_audioOutput;
+                        m_audioOutput = nullptr;
+                        oldOutput->stop();
+                        destroyAudioOutput(oldOutput);
                         auto outputDevice = QAudioDeviceInfo::defaultOutputDevice();
                         m_audioOutput = new QAudioOutput(outputDevice, f);
                         m_audioOutput->setVolume(QAudio::convertVolume(m_volume,
@@ -307,6 +337,7 @@ void QmlAVPlayer::setAutoPlay(QmlAVPropertyType<bool> autoPlay)
 void QmlAVPlayer::setSource(QmlAVPropertyType<QUrl> source)
 {
     if (m_source == source) {
+        m_holdLastFrame = false;
         return;
     }
 
@@ -328,15 +359,42 @@ void QmlAVPlayer::setMuted(QmlAVPropertyType<bool> muted)
     m_muted = muted;
 
     if (m_muted) {
-        if (m_audioOutput) {
-            m_audioOutput->stop();
-            delete m_audioOutput;
-            m_audioOutput = nullptr;
-        }
-        m_audioIODevice.clear();
+        releaseAudioOutput();
     }
 
     emit mutedChanged(muted);
+}
+
+void QmlAVPlayer::releaseAudioOutput()
+{
+    if (!m_audioOutput) {
+        return;
+    }
+
+    QAudioOutput *output = m_audioOutput;
+    m_audioOutput = nullptr;
+
+    // stop() can emit stateChanged and, through the Pulse destructor's processEvents(),
+    // end up back in here for a different tile. Count this whole release as one level.
+    const bool nested = s_audioReleaseDepth > 0;
+    if (!nested) {
+        ++s_audioReleaseDepth;
+    }
+    output->stop();
+    m_audioIODevice.clear();
+    if (nested) {
+        s_deferredAudioOutputs.append(output);
+        return;
+    }
+    delete output;
+    --s_audioReleaseDepth;
+
+    while (s_audioReleaseDepth == 0 && !s_deferredAudioOutputs.isEmpty()) {
+        QAudioOutput *next = s_deferredAudioOutputs.takeLast();
+        ++s_audioReleaseDepth;
+        delete next;
+        --s_audioReleaseDepth;
+    }
 }
 
 void QmlAVPlayer::setVolume(QmlAVPropertyType<double> volume)

@@ -334,6 +334,8 @@ ApplicationWindow {
         property int auxiliaryLimit: 1
         property int playbackOffsetSeconds: 120
         property int playbackTimelineHours: 2
+        // Drop this window's live pictures while the archive is open, and connect them again when it closes.
+        property bool pauseLiveDuringPlayback: true
         property bool enableDiagnosticLogs: false
         property bool confirmOnClose: true
         // The statistics panel's history window, in minutes. Saved here, read
@@ -605,6 +607,10 @@ ApplicationWindow {
             if (generalSettings.playbackTimelineHours !== diskPlaybackTimelineHours) {
                 generalSettings.playbackTimelineHours = diskPlaybackTimelineHours;
             }
+            var diskPauseLiveDuringPlayback = Context.readSetting("", "pauseLiveDuringPlayback", true);
+            if (generalSettings.pauseLiveDuringPlayback !== diskPauseLiveDuringPlayback) {
+                generalSettings.pauseLiveDuringPlayback = diskPauseLiveDuringPlayback;
+            }
             var diskDisableAudio = Context.readSetting("", "disableAudio", false);
             if (generalSettings.disableAudio !== diskDisableAudio) {
                 generalSettings.disableAudio = diskDisableAudio;
@@ -763,7 +769,7 @@ ApplicationWindow {
                     var opts = JSON.parse(diskDefaultAVFormatOptions);
                     var needsMigration = false;
                     if (opts["fflags"] === undefined) {
-                        opts["fflags"] = "nobuffer";
+                        opts["fflags"] = "+nobuffer";
                         needsMigration = true;
                     }
                     if (opts["flags"] === undefined) {
@@ -778,7 +784,7 @@ ApplicationWindow {
                 }
                 Context.writeSetting("ViewportsLayoutsCollection", "migratedLowLatencyFlags", true);
             } else {
-                var defaultStr = "{\"analyzeduration\":100000,\"probesize\":500000,\"fflags\":\"nobuffer\",\"flags\":\"low_delay\",\"stimeout\":5000000,\"rtsp_transport\":\"tcp\"}";
+                var defaultStr = "{\"analyzeduration\":100000,\"probesize\":500000,\"fflags\":\"+nobuffer\",\"flags\":\"low_delay\",\"stimeout\":5000000,\"rtsp_transport\":\"tcp\"}";
                 diskDefaultAVFormatOptions = Context.readSetting("ViewportsLayoutsCollection", "defaultAVFormatOptions", defaultStr);
             }
             
@@ -815,8 +821,8 @@ ApplicationWindow {
                 Context.writeSetting("ViewportsLayoutsCollection", "migratedTimeout5s_v2", true);
             }
 
-            // FFmpeg 4.4 treats RTSP "timeout" as listen_timeout and binds the
-            // remote address (EADDRNOTAVAIL). stimeout/rw_timeout are the I/O timeouts.
+            // The saved socket timeout stays "stimeout". The player maps that name to the one
+            // this build of FFmpeg uses. FFmpeg 4.4 treats a key named "timeout" as listen mode.
             var hasRemovedRtspListenTimeout = Context.readSetting("ViewportsLayoutsCollection", "removedRtspListenTimeout", false);
             if (!hasRemovedRtspListenTimeout) {
                 try {
@@ -847,6 +853,23 @@ ApplicationWindow {
                 Context.writeSetting("ViewportsLayoutsCollection", "migratedRtspTcp", true);
             }
 
+            // "nobuffer" alone replaces every demuxer flag, including the default autobsf bit.
+            // "+nobuffer" adds the no-buffer flag and leaves the others in place.
+            var hasMigratedNobufferPlus = Context.readSetting("ViewportsLayoutsCollection", "migratedFflagsNobufferPlus", false);
+            if (!hasMigratedNobufferPlus) {
+                try {
+                    var optsNobuffer = JSON.parse(diskDefaultAVFormatOptions);
+                    if (optsNobuffer["fflags"] === "nobuffer") {
+                        optsNobuffer["fflags"] = "+nobuffer";
+                        diskDefaultAVFormatOptions = JSON.stringify(optsNobuffer);
+                        Context.writeSetting("ViewportsLayoutsCollection", "defaultAVFormatOptions", diskDefaultAVFormatOptions);
+                    }
+                } catch(err) {
+                    console.warn("Failed to migrate fflags nobuffer");
+                }
+                Context.writeSetting("ViewportsLayoutsCollection", "migratedFflagsNobufferPlus", true);
+            }
+
             if (layoutsCollectionSettings.defaultAVFormatOptions !== diskDefaultAVFormatOptions) {
                 layoutsCollectionSettings.defaultAVFormatOptions = diskDefaultAVFormatOptions;
             }
@@ -875,7 +898,7 @@ ApplicationWindow {
         category: "ViewportsLayoutsCollection"
 
         property string models
-        property string defaultAVFormatOptions: "{\"analyzeduration\":100000,\"probesize\":500000,\"fflags\":\"nobuffer\",\"flags\":\"low_delay\",\"stimeout\":5000000,\"rtsp_transport\":\"tcp\"}"
+        property string defaultAVFormatOptions: "{\"analyzeduration\":100000,\"probesize\":500000,\"fflags\":\"+nobuffer\",\"flags\":\"low_delay\",\"stimeout\":5000000,\"rtsp_transport\":\"tcp\"}"
 
         function toJSValue(key) {
             var obj = {};
@@ -2354,6 +2377,7 @@ ApplicationWindow {
         Context.writeSetting("", "auxiliaryLimit", generalSettings.auxiliaryLimit);
         Context.writeSetting("", "playbackOffsetSeconds", generalSettings.playbackOffsetSeconds);
         Context.writeSetting("", "playbackTimelineHours", generalSettings.playbackTimelineHours);
+        Context.writeSetting("", "pauseLiveDuringPlayback", generalSettings.pauseLiveDuringPlayback);
         Context.writeSetting("", "enableDiagnosticLogs", generalSettings.enableDiagnosticLogs);
         Context.writeSetting("", "language", Context.getLanguage());
 

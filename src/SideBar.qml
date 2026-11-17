@@ -3218,6 +3218,17 @@ FocusScope {
                                         }
                                     }
                                 }
+
+                                CheckBox {
+                                    text: qsTr("Pause live view while archive playback is open")
+                                    checked: generalSettings.pauseLiveDuringPlayback
+                                    onCheckedChanged: generalSettings.pauseLiveDuringPlayback = checked
+                                    Layout.fillWidth: true
+                                    hoverEnabled: true
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 600
+                                    ToolTip.text: qsTr("Drops the live pictures on this window while the archive is open, and connects them again when it closes. Playback stays smooth when many cameras are on screen.")
+                                }
                             }
                         }
                     }

@@ -77,9 +77,15 @@ void ThumbnailFetchWorker::fetchFrame(const QString &rtspUrl, const QString &cac
 
     AVDictionary *opts = nullptr;
     av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-    // Limit stimeout to roughly 80% of total timeout or 5s, whichever is larger
+    // Limit the socket timeout to roughly 80% of the total timeout or 5s, whichever is larger.
+    // FFmpeg 4 names it stimeout. FFmpeg 5 and later name it timeout.
     int connTimeoutMs = qMax(5000, timeoutMs * 80 / 100);
-    av_dict_set(&opts, "stimeout", QString::number(connTimeoutMs * 1000LL).toUtf8().constData(), 0);
+    const QByteArray connTimeoutUs = QString::number(connTimeoutMs * 1000LL).toUtf8();
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+    av_dict_set(&opts, "stimeout", connTimeoutUs.constData(), 0);
+#else
+    av_dict_set(&opts, "timeout", connTimeoutUs.constData(), 0);
+#endif
     av_dict_set(&opts, "rw_timeout", QString::number(connTimeoutMs * 1000LL).toUtf8().constData(), 0);
     av_dict_set(&opts, "analyzeduration", "1000000", 0); // 1s analyze
     av_dict_set(&opts, "probesize", "500000", 0); // 500KB probe

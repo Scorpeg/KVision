@@ -404,9 +404,9 @@ A dialog for the selected tile. It has:
 * **Channel Options**: the **FFmpeg options** for this tile, and a tick box that leaves this tile out of global FFmpeg changes.
   * **Tip:** for the fastest stream connection and maximum stability over RTSP, the recommended parameters are:
     ```ini
-    -analyzeduration 0 -probesize 500000 -fflags nobuffer -flags low_delay -rtsp_transport tcp
+    -analyzeduration 100000 -probesize 500000 -fflags +nobuffer -flags low_delay -rtsp_transport tcp
     ```
-    See the note on `-analyzeduration` under Settings below before using `0` on streams that have no audio.
+    Do not set `-analyzeduration` to `0` on a stream with no audio. The Settings note below says why.
 * Muting and unmuting a tile is done with the **M** key or the speaker button on the tile, not in this dialog.
 
 ### 2. Layout & Grid Tools (hamburger button on the top bar)
@@ -429,11 +429,11 @@ This page has six sections, chosen with the buttons along its top: **Detection**
 * **Hide Cursor in Full Screen**: The checkbox *„Hide cursor in full screen mode”* automatically hides the mouse cursor after a brief inactivity period during fullscreen viewing to ensure an unobstructed view.
 * **Language selection**: Interface language. English is the only language shipped in this version, so the choice has no other effect.
 * **UI Preferences**: Hide/show viewport status labels or control badges (such as auto-hiding the control overlays in the bottom right corner of tiles unless hovering).
-* **Default FFmpeg Options & Bulk Update**: Allows configuring global FFmpeg options applied to new viewports (recommended: `-analyzeduration 100000 -probesize 500000 -fflags nobuffer -flags low_delay`).
+* **Default FFmpeg Options & Bulk Update**: Allows configuring global FFmpeg options applied to new viewports (recommended: `-analyzeduration 100000 -probesize 500000 -fflags +nobuffer -flags low_delay`).
   * **Recommendation:** if your streams are slow to switch, or you are carrying settings over from an old KVision, change `-analyzeduration 0` to `-analyzeduration 100000` in the global settings and click "Update all cameras". Setting `0` on streams without an audio track causes delays in switching because FFmpeg will block for a hardcoded 5-second timeout waiting for audio packets. Setting a very low value (e.g., 100000 microseconds = 0.1s) completely resolves this issue while maintaining instant switching.
   * **Update all cameras button**: The **Update all cameras** button applies these global options to all configured viewports.
   * **Low-latency flags (`nobuffer`, `low_delay`)**:
-    * `-fflags nobuffer` disables internal demuxer packet buffering to eliminate streaming lag over time, but might cause stuttering if your network connection to the camera is unstable.
+    * `-fflags +nobuffer` adds the flag that disables internal demuxer packet buffering, so the picture does not lag behind, and leaves FFmpeg's other flags in place. It might cause stuttering if your network connection to the camera is unstable.
     * `-flags low_delay` tells the decoder to output frames immediately, but can cause brief artifacts/smearing in streams that use B-frames under rapid movements.
   * **Override checkbox**: You can exclude specific viewports from global updates or dynamic defaults by ticking the option that leaves out global FFmpeg changes in the individual Viewport Settings dialog. Useful for troubleshooting stuttering cameras.
 

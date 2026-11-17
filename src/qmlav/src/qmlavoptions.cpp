@@ -4,6 +4,7 @@
 #include <QGuiApplication>
 
 extern "C" {
+#include <libavformat/version.h>
 #include <libavutil/parseutils.h>
 }
 
@@ -16,7 +17,19 @@ QmlAVOptions::operator AVDictionaryPtr() const
 {
     AVDictionaryPtr dict;
 
-    for (const auto &[key, value] : asKeyValueRange(m_avOptions)) {
+    // The saved name is "stimeout" (microseconds). FFmpeg 4 uses that name. On FFmpeg 5 and
+    // later the same socket timeout is "timeout", and "stimeout" is ignored. On FFmpeg 4,
+    // "timeout" is the listen timeout and makes the open try to bind the remote address.
+    QVariantMap options = m_avOptions;
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+    options.remove(QStringLiteral("timeout"));
+#else
+    if (!options.contains(QStringLiteral("timeout")) && options.contains(QStringLiteral("stimeout")))
+        options.insert(QStringLiteral("timeout"), options.value(QStringLiteral("stimeout")));
+    options.remove(QStringLiteral("stimeout"));
+#endif
+
+    for (const auto &[key, value] : asKeyValueRange(options)) {
         dict.set(key.toStdString(), value.toString().toStdString());
         logDebug() << "Added AVFormat option: -" << key << QmlAV::Space << value;
     }

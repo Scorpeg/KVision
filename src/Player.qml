@@ -464,6 +464,26 @@ FocusScope {
         var rev = NvrStatusManager.offlineRevision; // re-evaluate when the offline set changes
         return root.isHikvision && root.recorderIp !== "" && NvrStatusManager.isAddressOffline(root.recorderIp);
     }
+    // Archive playback uses its own connection. While it is open, drop this tile's live
+    // stream the same way a hidden tile does, so a full grid does not stutter the recording.
+    readonly property bool liveSuspended: (typeof rootWindow !== "undefined") && rootWindow.isPlaybackWindowOpen
+                                          && (typeof generalSettings !== "undefined") && generalSettings.pauseLiveDuringPlayback
+    onLiveSuspendedChanged: {
+        if (liveSuspended) {
+            timer.stop();
+            qmlAvPlayer1.autoPlay = false;
+            qmlAvPlayer2.autoPlay = false;
+        } else {
+            // Keep the held picture until the live stream's next frame replaces it.
+            qmlAvPlayer1.holdLastFrame = true;
+            qmlAvPlayer2.holdLastFrame = true;
+            if (visible && !timer.running)
+                timer.start();
+        }
+        Qt.callLater(updateSource);
+        Qt.callLater(updateTargetWatch);
+    }
+
     onRecorderOfflineChanged: {
         if (recorderOffline) {
             autoReconnectTimer.stop();
@@ -527,10 +547,18 @@ FocusScope {
     function updateSource() {
         // Learn the recorder address first: the Offline check below needs it, and a tile that has not read its address yet
         // would look online and ask the (unreachable) recorder a question that blocks the whole window for seconds.
-        if (root.visible && !root.isQuickPlayback)
+        if (root.visible && !root.liveSuspended && !root.isQuickPlayback)
             parseUri(source);
-        if (!root.visible || root.isQuickPlayback || root.recorderOffline) {
+        if (!root.visible || root.liveSuspended || root.isQuickPlayback || root.recorderOffline) {
             autoReconnectTimer.stop();
+            // Only the archive pause keeps the last picture. Hiding a tile, or a recorder
+            // that is offline, still clears to black.
+            if (root.liveSuspended) {
+                if (qmlAvPlayer1.source != "")
+                    qmlAvPlayer1.holdLastFrame = true;
+                if (qmlAvPlayer2.source != "")
+                    qmlAvPlayer2.holdLastFrame = true;
+            }
             qmlAvPlayer1.source = "";
             qmlAvPlayer1.isSubStreamOfPlayer = false;
             qmlAvPlayer2.source = "";
@@ -806,7 +834,7 @@ FocusScope {
     property bool targetWatching: false
     readonly property bool targetWanted: (typeof generalSettings !== "undefined") && generalSettings.showTargetIndicator
                                           && root.isHikvision && !root.isQuickPlayback && root.recorderIp !== ""
-                                          && root.visible && root.source !== "" && !root.recorderOffline
+                                          && root.visible && !root.liveSuspended && root.source !== "" && !root.recorderOffline
                                           && root.targetSwitchedOn() && root.savedLoginFor(root.recorderIp) !== null
     // The camera this tile is looking at: for a camera behind a recorder (NVR) it is looked up from
     // the recorder, once, and remembered.
@@ -1666,7 +1694,7 @@ FocusScope {
         interval: 50
 
         onTriggered: {
-            if (root.visible) {
+            if (root.visible && !root.liveSuspended) {
                 qmlAvPlayer1.autoPlay = true;
                 qmlAvPlayer2.autoPlay = true;
             }
@@ -1973,8 +2001,6 @@ FocusScope {
                 if (root.rtspTransport === "tcp" || root.rtspTransport === "udp") {
                     avOpts["rtsp_transport"] = root.rtspTransport;
                 }
-                // On FFmpeg 4.4 this is listen_timeout and binds the remote host.
-                delete avOpts["timeout"];
                 return avOpts;
             }
 
@@ -2024,7 +2050,6 @@ FocusScope {
                 if (root.rtspTransport === "tcp" || root.rtspTransport === "udp") {
                     avOpts2["rtsp_transport"] = root.rtspTransport;
                 }
-                delete avOpts2["timeout"];
                 return avOpts2;
             }
 
