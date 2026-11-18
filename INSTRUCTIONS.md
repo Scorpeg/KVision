@@ -473,7 +473,7 @@ Presents an interactive timeline showing the complete release history, updates, 
 * **Right mouse button (Context Menu)**:
   * Opens a quick settings menu for the selected viewport (allows removing the camera from the grid, changing between Main/Sub streams, or accessing individual display parameters).
 * **Mouse Scroll Wheel**:
-  * On the live camera page, scrolls between the saved layouts shown on the top bar (the same views as the preset buttons). Scrolling up moves to the next view on the right, scrolling down moves back, and the list wraps around. Hidden presets are skipped. A short label shows the layout name. Hold **Ctrl** while scrolling over a camera to zoom that view instead. The wheel does not change layouts while a camera is maximized.
+  * On the live camera page, scrolls between the saved layouts shown on the top bar (the same views as the preset buttons). Scrolling up moves to the next view on the right, scrolling down moves back, and the list wraps around. Hidden presets are skipped. A short label shows the layout name. Hold **Ctrl** while scrolling over a camera to zoom that view instead. While a camera is maximized (double-click), the wheel stays on that layout and moves to the next or previous camera in it, skipping empty cells. Scrolling up moves to the next camera, scrolling down to the previous, and the list wraps around.
   * Adjusts scale (Zoom) of the timeline in the playback archive player.
 
 ---
@@ -509,7 +509,7 @@ The application allows you to quickly capture high-quality snapshots from any ca
 
 ## 12. The Right-Click Menu and Quick Tools
 
-Right-click a camera tile to open its menu. Some entries show only when they apply (for example, the web page entry shows only for a Hikvision camera) or when the matching permission is on in Settings. A 4:3 picture in a 16:9 tile fills the tile on its own, so there are no black bars beside it. A 16:9 picture is left at its own shape, and a 4:3 layout is left alone.
+Right-click a camera tile to open its menu. Some entries show only when they apply (for example, the web page entry shows only for a Hikvision camera) or when the matching permission is on in Settings. A 4:3 picture in a 16:9 tile fills the tile on its own, so there are no black bars beside it. A picture only a little wider than its tile, such as a panoramic that does not match the tile exactly, fills the tile the other way, so there are no bars above and below. A picture more than about a third wider than the tile keeps those bars. A 16:9 picture in a matching tile is left at its own shape, and a 4:3 layout is left alone.
 
 * **Replace camera / Add camera**: put a different camera on this tile (see Section 3).
 * **Remove camera**, **Swap viewports**, **Stream selection** (Auto, MAIN only, SUB only), **Playback** and **Snapshot**.

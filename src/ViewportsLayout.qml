@@ -575,6 +575,33 @@ FocusScope {
         }
     }
 
+    // While one camera fills the layout, move to the next or previous camera in this layout
+    // and keep it maximized. Empty cells and cells covered by a merge are skipped. Wraps around.
+    function stepMaximizedCamera(direction) {
+        if (!direction || d.fullScreenIndex < 0 || !model)
+            return false;
+        var count = model.count;
+        if (count < 1)
+            return false;
+        var start = d.fullScreenIndex;
+        for (var step = 1; step <= count; ++step) {
+            var idx = (start + direction * step) % count;
+            if (idx < 0)
+                idx += count;
+            var item = model.get(idx);
+            if (!item || item.visible !== ViewportsLayoutItem.Visible)
+                continue;
+            if (String(item.url || "") === "")
+                continue;
+            var cell = repeater.itemAt(idx);
+            if (cell && cell.maximizeCell) {
+                cell.maximizeCell();
+                return true;
+            }
+        }
+        return false;
+    }
+
     readonly property alias fullScreenIndex: d.fullScreenIndex
     readonly property alias focusIndex: d.focusIndex
     readonly property alias activeFocusIndex: d.activeFocusIndex
@@ -789,6 +816,12 @@ FocusScope {
                 implicitWidth: (layout.width / root.size.width) * Math.max(viewport.columnSpan, 0)
                 implicitHeight: (layout.height / root.size.height) * Math.max(viewport.rowSpan, 0)
                 visible: root.visible && ((model.visible === ViewportsLayoutItem.Visible) ? true : false)
+
+                function maximizeCell() {
+                    viewport.forceActiveFocus();
+                    viewport.fullScreen = true;
+                    d.selectionReset();
+                }
 
                 // Fixed size per cell (grid share x span). Letting GridLayout distribute space
                 // with fillWidth/fillHeight resizes already merged cells once several spans exist.
@@ -1376,6 +1409,14 @@ FocusScope {
                                     }
                                 }
 
+                                wheel.accepted = true;
+                            } else if (viewport.fullScreen &&
+                                       !(wheel.modifiers & (Qt.AltModifier | Qt.MetaModifier))) {
+                                var stepDelta = wheel.angleDelta.y;
+                                if (stepDelta === 0 && wheel.pixelDelta)
+                                    stepDelta = wheel.pixelDelta.y;
+                                if (stepDelta !== 0 && rootWindow.wheelStepAllowed())
+                                    root.stepMaximizedCamera(stepDelta > 0 ? 1 : -1);
                                 wheel.accepted = true;
                             } else if (!(wheel.modifiers & (Qt.AltModifier | Qt.MetaModifier)) &&
                                        !viewport.fullScreen &&

@@ -68,7 +68,9 @@ FocusScope {
     }
 
     // A 4:3 picture (including the usual CCTV sizes such as 704x576 and 720x480) in a 16:9 tile is stretched to
-    // fill the tile. A 16:9 picture, and a 4:3 picture in a 4:3 layout, keep their own shape.
+    // fill the tile. A picture only a little wider than its tile, such as a panoramic that does not match
+    // exactly, is stretched the other way to fill the tile. A picture more than about a third wider than the
+    // tile keeps the bars above and below. A 16:9 picture in a matching tile keeps its own shape.
     function pictureIsFourByThree(frame) {
         if (!frame || frame.width < 16 || frame.height < 16)
             return false;
@@ -79,10 +81,22 @@ FocusScope {
         var r = videoContainer.width / Math.max(1, videoContainer.height);
         return r >= 1.6 && r <= 2.05;
     }
+    // True when filling the tile would make the picture no more than about a third taller than life.
+    function pictureSlightlyWiderThanTile(frame) {
+        if (!frame || frame.width < 16 || frame.height < 16)
+            return false;
+        if (videoContainer.width < 16 || videoContainer.height < 16)
+            return false;
+        var frameRatio = frame.width / frame.height;
+        var tileRatio = videoContainer.width / videoContainer.height;
+        if (tileRatio <= 0 || frameRatio <= tileRatio)
+            return false;
+        return frameRatio / tileRatio <= 1.34;
+    }
 
     function fittedVideoRect() {
         var frame = videoFrameSize();
-        if (pictureIsFourByThree(frame) && tileIsSixteenByNine())
+        if ((pictureIsFourByThree(frame) && tileIsSixteenByNine()) || pictureSlightlyWiderThanTile(frame))
             return Qt.rect(0, 0, videoContainer.width, videoContainer.height);
         var frameRatio = frame.width / Math.max(1, frame.height);
         var containerRatio = videoContainer.width / Math.max(1, videoContainer.height);

@@ -205,8 +205,15 @@ Window {
                         return;
                     }
                 }
-                if (layout && (layout.fullScreenIndex >= 0 ||
-                               (layout.size && layout.size.width === 1 && layout.size.height === 1))) {
+                if (layout && layout.fullScreenIndex >= 0) {
+                    var delta = wheel.angleDelta.y;
+                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    if (delta !== 0 && rootWindow.wheelStepAllowed())
+                        layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
+                    wheel.accepted = true;
+                    return;
+                }
+                if (layout && layout.size && layout.size.width === 1 && layout.size.height === 1) {
                     return;
                 }
                 rootWindow.handleLayoutWheel(wheel, layoutsModel, auxWindow.layoutIndex, function(idx) {

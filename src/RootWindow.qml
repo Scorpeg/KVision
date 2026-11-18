@@ -442,6 +442,14 @@ ApplicationWindow {
         layoutToastHideTimer.restart();
     }
 
+    // One notch of the wheel. Shared by layout changes and by stepping cameras while one is maximized.
+    function wheelStepAllowed() {
+        if (layoutWheelDebounce.running)
+            return false;
+        layoutWheelDebounce.start();
+        return true;
+    }
+
     function handleLayoutWheel(wheel, collection, currentIndex, applyIndex) {
         if (!wheel || !collection) return;
         if (wheel.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return;
@@ -460,11 +468,14 @@ ApplicationWindow {
         var delta = wheel.angleDelta.y;
         if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
         if (delta === 0) return;
+        if (!wheelStepAllowed()) {
+            wheel.accepted = true;
+            return;
+        }
 
         var next = stepVisibleLayout(collection, currentIndex, delta > 0 ? 1 : -1);
         if (next < 0 || next === currentIndex) return;
 
-        layoutWheelDebounce.start();
         applyIndex(next);
         showLayoutToast(layoutDisplayName(collection, next));
         wheel.accepted = true;
@@ -2203,8 +2214,15 @@ ApplicationWindow {
                         return;
                     }
                 }
-                if (layout && (layout.fullScreenIndex >= 0 ||
-                               (layout.size && layout.size.width === 1 && layout.size.height === 1))) {
+                if (layout && layout.fullScreenIndex >= 0) {
+                    var delta = wheel.angleDelta.y;
+                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    if (delta !== 0 && rootWindow.wheelStepAllowed())
+                        layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
+                    wheel.accepted = true;
+                    return;
+                }
+                if (layout && layout.size && layout.size.width === 1 && layout.size.height === 1) {
                     return;
                 }
                 rootWindow.handleLayoutWheel(wheel, layoutsCollectionModel, stackLayout.currentIndex, function(idx) {
@@ -2515,6 +2533,17 @@ ApplicationWindow {
         }
 
         contentItem.wheel.connect(function(wheel) {
+            if (!(wheel.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+                var layout = layoutRepeater.itemAt(stackLayout.currentIndex);
+                if (layout && layout.fullScreenIndex >= 0) {
+                    var delta = wheel.angleDelta.y;
+                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    if (delta !== 0 && wheelStepAllowed())
+                        layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
+                    wheel.accepted = true;
+                    return;
+                }
+            }
             handleLayoutWheel(wheel, layoutsCollectionModel, stackLayout.currentIndex, function(idx) {
                 stackLayout.currentIndex = idx;
             });

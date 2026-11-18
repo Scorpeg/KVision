@@ -242,9 +242,11 @@ Window {
                 pv.hasFrame = verdict;
             }
             // We draw only where the camera drew nothing itself (a picture that has the frame is left as it is).
-            readonly property bool drawMarks: pv.showMarks && pv.items.length > 0 && pv.hasFrame !== 1
-                                              && ((pv.items[pv.shown].box && pv.items[pv.shown].box.length >= 4)
-                                                  || (pv.items[pv.shown].poly && pv.items[pv.shown].poly.length >= 6))
+            // The checkbox is the same test without the tick, so it is hidden when this picture has nothing for KVision to draw.
+            readonly property bool marksAvailable: pv.items.length > 0 && pv.hasFrame !== 1
+                                                   && ((pv.items[pv.shown].box && pv.items[pv.shown].box.length >= 4)
+                                                       || (pv.items[pv.shown].poly && pv.items[pv.shown].poly.length >= 6))
+            readonly property bool drawMarks: pv.showMarks && pv.marksAvailable
             width: 960
             height: 600
             minimumWidth: 320
@@ -339,7 +341,7 @@ Window {
                 spacing: 6
                 CheckBox {
                     id: marksBox
-                    visible: pv.items.length > 0 && ((pv.items[pv.shown].box && pv.items[pv.shown].box.length >= 4) || (pv.items[pv.shown].poly && pv.items[pv.shown].poly.length >= 6))
+                    visible: pv.marksAvailable
                     checked: pv.showMarks
                     text: qsTr("Target and zone")
                     onToggled: pv.showMarks = checked
