@@ -65,6 +65,7 @@
         <file>src/SetupCheckList.qml</file>
         <file>src/HelpMark.qml</file>
         <file>src/PlaybackWindow.qml</file>
+        <file>src/SmartSearchWindow.qml</file>
         <file>images/play.svg</file>
         <file>images/pause.svg</file>
         <file>src/CursorShape.qml</file>

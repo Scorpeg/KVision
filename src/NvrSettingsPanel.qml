@@ -221,8 +221,7 @@ ColumnLayout {
                 var newLayout = layoutsCollectionModel.append();
                 newLayout.visible = true;
                 newLayout.size = Qt.size(gridSize, gridSize);
-                newLayout.isNvr = true;
-                newLayout.nvrIp = ip;
+                newLayout.name = newRecorder.name !== "" ? newRecorder.name : ip;
 
                 for (var i = 0; i < numCams; ++i) {
                     var vp = newLayout.get(i);
@@ -245,29 +244,10 @@ ColumnLayout {
                 rootPanel.recorders = arr2;
                 saveRecorders();
 
-                // Update corresponding NVR view layout and any custom layouts
+                // Point tiles that still use this recorder at its new address. The rest of each layout is left as it is.
                 for (var j = 0; j < layoutsCollectionModel.count; ++j) {
                     var l = layoutsCollectionModel.get(j);
-                    if (l && l.isNvr && l.nvrIp === oldIp) {
-                        l.nvrIp = newRecorder.ip;
-                        var numCams2 = cameras.length;
-                        var gridSize2 = Math.ceil(Math.sqrt(numCams2));
-                        l.size = Qt.size(gridSize2, gridSize2);
-
-                        for (var k = 0; k < numCams2; ++k) {
-                            var vp2 = l.get(k);
-                            if (vp2) {
-                                var newUrl = "hikvision://" + newRecorder.ip + "/" + cameras[k].channelId;
-                                if (vp2.url === newUrl) {
-                                    vp2.url = ""; // force refresh in case only RTSP/HTTP ports changed
-                                }
-                                vp2.url = newUrl;
-                                vp2.secondaryUrl = vp2.url;
-                                vp2.volume = 0;
-                            }
-                        }
-                    } else if (l && !l.isNvr) {
-                        // Update any standalone viewports in custom layouts
+                    if (l) {
                         for (var k2 = 0; k2 < l.count; ++k2) {
                             var vp = l.get(k2);
                             if (vp && vp.url && vp.url.indexOf("hikvision://") !== -1) {
@@ -1199,15 +1179,6 @@ ColumnLayout {
                 arr.splice(targetIndex, 1);
                 rootPanel.recorders = arr;
                 rootPanel.saveRecorders();
-
-                // Automatically remove corresponding NVR view layout(s)
-                for (var j = layoutsCollectionModel.count - 1; j >= 0; --j) {
-                    var l = layoutsCollectionModel.get(j);
-                    if (l && l.isNvr && l.nvrIp === targetIp) {
-                        LayoutBackups.save(l.uid, JSON.stringify(layoutsCollectionModel.toJSValue()[j]), qsTr("Deleted with its recorder"), true);
-                        layoutsCollectionModel.remove(j);
-                    }
-                }
             }
         }
     }

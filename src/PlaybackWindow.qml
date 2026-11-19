@@ -128,6 +128,49 @@ Window {
     }
     property int selectedPlayerIndex: 0
     property var recordersList: []
+    // The list row chosen for smart search. A recorder searches every camera on it.
+    // A camera searches only that camera. Neither has to be on screen.
+    property var selectedRecorder: null
+    property var selectedSmartCamera: null
+    // "rec:<ip>" or "cam:<ip>:<channel>". A string, so the list drops the previous highlight.
+    property string smartSelectionKey: ""
+
+    function selectRecorderForSearch(recorder) {
+        selectedRecorder = recorder
+        selectedSmartCamera = null
+        smartSelectionKey = (recorder && recorder.ip) ? ("rec:" + recorder.ip) : ""
+    }
+
+    function selectCameraForSearch(recorder, camera) {
+        selectedRecorder = recorder
+        var channelId = camera ? camera.channelId : 0
+        selectedSmartCamera = {
+            "ip": recorder ? recorder.ip : "",
+            "channelId": channelId,
+            "name": camera ? (camera.customName || camera.name || camera.cameraName || "") : ""
+        }
+        smartSelectionKey = (recorder && recorder.ip) ? ("cam:" + recorder.ip + ":" + channelId) : ""
+    }
+
+    function selectRecorderByIp(ip) {
+        loadRecordersList()
+        for (var i = 0; i < recordersList.length; ++i) {
+            if (recordersList[i] && recordersList[i].ip === ip) {
+                selectedRecorder = recordersList[i]
+                return selectedRecorder
+            }
+        }
+        return null
+    }
+
+    function recorderForSearch() {
+        loadRecordersList()
+        if (selectedRecorder && selectedRecorder.ip)
+            return selectedRecorder
+        if (recorderInfo && recorderInfo.ip)
+            return selectRecorderByIp(recorderInfo.ip) || recorderInfo
+        return null
+    }
     property var pendingInitialSeek: ({})
     // When set (epoch milliseconds), playback starts at this moment instead of near the latest recording.
     // Used to open an entry of the detection log. It is cleared once it has been used.
@@ -366,6 +409,7 @@ Window {
             list.push(activePlayersList[j]);
         }
         
+        selectRecorderByIp(rec.ip)
         list[selectedPlayerIndex] = {
             "ip": rec.ip,
             "port": rec.sdkPort || rec.port || 8000,
@@ -675,6 +719,11 @@ Window {
         loadRecordersList();
         
         if (recorderInfo) {
+            selectRecorderByIp(recorderInfo.ip)
+            selectCameraForSearch(selectedRecorder || recorderInfo, {
+                "channelId": playbackWindow.channelId,
+                "name": playbackWindow.cameraName || ""
+            })
             var recName = recorderInfo.name || recorderInfo.ip;
             
             // Register to pendingInitialSeek
@@ -955,10 +1004,14 @@ Window {
                 }
             }
 
-            // Fallback: if no segments or maxEndTime is 0, play at the current playhead time
-            var fallbackDate = new Date(playheadTimeMs);
+            // An event time was requested. Play that moment and put the marker in the middle of the timeline.
+            var fallbackMs = initialStartMs > 0 ? initialStartMs : playheadTimeMs;
+            var fallbackDate = new Date(fallbackMs);
             var fStart = new Date(fallbackDate);
             fStart.setHours(0, 0, 0, 0);
+            currentDate = fStart;
+            playheadTimeMs = fallbackMs;
+            panOffsetMs = (fallbackMs - fStart.getTime()) - (zoomHours * 3600000) / 2;
             playAtTime(fStart, playheadTimeMs - fStart.getTime());
             initialStartMs = 0;
         }
@@ -1019,6 +1072,7 @@ Window {
             "password": cam.password
         };
         HikvisionISAPI.searchRecordings(recorderInfoForCam, cam.channelId, start, end);
+        HikvisionISAPI.searchEvents(recorderInfoForCam, cam.channelId, start, end);
     }
 
     function searchRecordingsForDate(date) {
@@ -1075,7 +1129,9 @@ Window {
                 var cacheKey = cam.ip + "_" + cam.channelId + "_" + searchDateKey;
                 var fetchKey = cam.ip + "_" + cam.channelId + "_" + searchDateKey;
                 
-                if (rootWindow.playbackSegmentsCache[cacheKey] !== undefined || tempFetching[fetchKey] === true) {
+                var haveSegments = rootWindow.playbackSegmentsCache[cacheKey] !== undefined
+                var haveEvents = rootWindow.playbackEventsCache[cacheKey] !== undefined
+                if (tempFetching[fetchKey] === true || (haveSegments && haveEvents)) {
                     continue;
                 }
                 
@@ -1090,9 +1146,6 @@ Window {
                         continue;
                     }
                 }
-                
-                tempFetching[fetchKey] = true;
-                changedFetching = true;
                 
                 var start = new Date(currentSearchDate)
                 start.setHours(0,0,0,0)
@@ -1111,8 +1164,13 @@ Window {
                     "username": cam.username,
                     "password": cam.password
                 };
-                HikvisionISAPI.searchRecordings(recorderInfoForCam, cam.channelId, start, end);
-                HikvisionISAPI.searchEvents(recorderInfoForCam, cam.channelId, start, end);
+                if (!haveSegments) {
+                    tempFetching[fetchKey] = true;
+                    changedFetching = true;
+                    HikvisionISAPI.searchRecordings(recorderInfoForCam, cam.channelId, start, end);
+                }
+                if (!haveEvents)
+                    HikvisionISAPI.searchEvents(recorderInfoForCam, cam.channelId, start, end);
             }
         }
         
@@ -1183,6 +1241,7 @@ Window {
         var dayStart = new Date(eventTime);
         dayStart.setHours(0, 0, 0, 0);
         currentDate = dayStart;
+        panOffsetMs = (eventTime - dayStart.getTime()) - (zoomHours * 3600000) / 2;
         playAtTime(currentDate, eventTime - dayStart.getTime());
     }
 
@@ -1765,7 +1824,11 @@ Window {
                                     id: headerRect
                                     Layout.fillWidth: true
                                     height: 28
-                                    color: headerMouseArea.containsMouse ? "#202c39" : "#141c24"
+                                    color: playbackWindow.smartSelectionKey === ("rec:" + recorderObj.ip)
+                                           ? "#14332e"
+                                           : (headerMouseArea.containsMouse ? "#202c39" : "#141c24")
+                                    border.width: playbackWindow.smartSelectionKey === ("rec:" + recorderObj.ip) ? 1 : 0
+                                    border.color: "#00f5d4"
                                     radius: 4
                                     
                                     Text {
@@ -1793,6 +1856,7 @@ Window {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
+                                            playbackWindow.selectRecorderForSearch(recorderGroup.recorderObj)
                                             var query = cameraSearchField.text.trim().toLowerCase();
                                             if (query !== "") {
                                                 recorderGroup.userCollapsedDuringSearch = !recorderGroup.userCollapsedDuringSearch;
@@ -1811,16 +1875,22 @@ Window {
                                         Layout.fillWidth: true
                                         visible: recorderGroup.expanded && cameraMatches(modelData, cameraSearchField.text.trim().toLowerCase(), recorderGroup.recorderObj)
                                         height: visible ? 62 : 0
-                                        color: itemMouseArea.containsMouse ? "#1c242c" : "transparent"
+                                        color: cameraRowSelected ? "#14332e" : (itemMouseArea.containsMouse ? "#1c242c" : "transparent")
                                         radius: 4
+                                        border.width: cameraRowSelected ? 1 : 0
+                                        border.color: "#00f5d4"
                                         
                                         property var parentRecorder: recorderGroup.recorderObj
+                                        property bool cameraRowSelected: playbackWindow.smartSelectionKey === ("cam:" + parentRecorder.ip + ":" + modelData.channelId)
                                         
                                         MouseArea {
                                             id: itemMouseArea
                                             anchors.fill: parent
                                             hoverEnabled: true
-                                            cursorShape: Qt.ArrowCursor
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                playbackWindow.selectCameraForSearch(parentRecorder, modelData)
+                                            }
                                         }
                                         
                                         RowLayout {
@@ -1901,6 +1971,7 @@ Window {
                                                      hoverEnabled: true
                                                      cursorShape: Qt.PointingHandCursor
                                                      onClicked: {
+                                                         playbackWindow.selectCameraForSearch(parentRecorder, modelData)
                                                          addCameraToGrid(parentRecorder, modelData);
                                                      }
                                                  }               
@@ -2071,6 +2142,7 @@ Window {
                                         channelId: modelData ? modelData.channelId : 1
                                         port: modelData ? (modelData.port || 8000) : 8000
                                         muted: !tileContainer.isAudible || tileContainer.userMuted
+                                        volume: 0.1
                                          playerStatusMessage: {
                                               if (!modelData || recorderIp === "") {
                                                   return "";
@@ -3148,6 +3220,16 @@ Window {
                                 ToolTip.timeout: Compact.toolTipTimeout
                                 ToolTip.visible: hovered
                                 ToolTip.text: qsTr("LNG_00141")
+                            }
+                            CctvButton {
+                                id: smartSearchBtn
+                                text: qsTr("Smart")
+                                isSmall: true
+                                onClicked: smartSearchWindow.openForCurrent()
+                                ToolTip.delay: Compact.toolTipDelay
+                                ToolTip.timeout: Compact.toolTipTimeout
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("Smart search: pictures of people, vehicles and faces, then play from that time")
                             }
                             CctvButton {
                                 id: refreshBtn
@@ -4527,5 +4609,10 @@ Window {
     SnapshotSavedDialog {
         id: rootSnapshotSavedDialog
         z: 99999
+    }
+
+    SmartSearchWindow {
+        id: smartSearchWindow
+        playback: playbackWindow
     }
 }

@@ -8,6 +8,7 @@
 #include <QUuid>
 #include <QXmlStreamReader>
 #include <QDebug>
+#include <QtGlobal>
 
 namespace {
 const char kMulticastGroup[] = "239.255.255.250";
@@ -95,12 +96,36 @@ void HikvisionProbe::addChannel(const QNetworkInterface &iface, const QNetworkAd
     }
     socket->setMulticastInterface(iface);
     socket->setSocketOption(QAbstractSocket::MulticastTtlOption, 2);
+    // Membership makes the adapter transmit the multicast. Without it, the
+    // recorder's network stays silent even though a direct inquiry is answered.
+    socket->joinMulticastGroup(QHostAddress(QLatin1String(kMulticastGroup)), iface);
 
     if (socket->writeDatagram(probe, QHostAddress(QLatin1String(kMulticastGroup)), kProbePort) < 0) {
         qWarning() << "[Probe] send failed on" << iface.name() << socket->errorString();
         delete socket;
         ++m_failed;
         return;
+    }
+    const QHostAddress broadcast = entry.broadcast();
+    if (!broadcast.isNull() && broadcast != addr)
+        socket->writeDatagram(probe, broadcast, kProbePort);
+
+    // This recorder (DS-7732) does not answer the multicast. It answers the same
+    // Probe sent to its own address, after the multicast. Only small subnets are
+    // walked, so a scan cannot spray a huge network.
+    int prefix = entry.prefixLength();
+    if (prefix < 0)
+        prefix = qPopulationCount(entry.netmask().toIPv4Address());
+    if (prefix >= 24 && prefix <= 30) {
+        const quint32 mask = entry.netmask().toIPv4Address();
+        const quint32 network = addr.toIPv4Address() & mask;
+        const quint32 lastHost = ~mask;
+        for (quint32 host = 1; host < lastHost; ++host) {
+            const quint32 dest = network + host;
+            if (dest == addr.toIPv4Address())
+                continue;
+            socket->writeDatagram(probe, QHostAddress(dest), kProbePort);
+        }
     }
 
     Channel ch;

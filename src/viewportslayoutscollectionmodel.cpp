@@ -89,6 +89,23 @@ ViewportsLayoutModel *ViewportsLayoutsCollectionModel::insert(int index, Viewpor
     return p;
 }
 
+void ViewportsLayoutsCollectionModel::move(int from, int to)
+{
+    if (from == to || from < 0 || to < 0 || from >= m_models.size() || to >= m_models.size()) {
+        return;
+    }
+
+    // beginMoveRows places the row immediately before `destination`. Moving down, that index is one past
+    // the slot the row should end in, because the source row is still in the list when the call is made.
+    const int destination = from < to ? to + 1 : to;
+    if (!beginMoveRows(QModelIndex(), from, from, QModelIndex(), destination)) {
+        return;
+    }
+    m_models.move(from, to);
+    endMoveRows();
+    emit changed();
+}
+
 void ViewportsLayoutsCollectionModel::remove(int index, int count)
 {
     beginRemoveRows(QModelIndex(), index, index + count - 1);

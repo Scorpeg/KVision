@@ -405,8 +405,35 @@ ApplicationWindow {
     }
 
     property var toolbarLayoutModel: []
+    // Set while a preset row is moved, so the layout on screen is not stopped and started again.
+    property bool layoutReorderHold: false
+    // Bumped whenever the layout order changes, so the list and the toolbar buttons re-read that order.
+    property int layoutOrderRevision: 0
+
+    // Reorder the saved layouts without letting the screen switch to a different one along the way.
+    // The stack follows the moved row after this function returns, so the index is put back
+    // on the next turn while the hold is still set.
+    function moveLayoutKeepingView(fromIndex, toIndex) {
+        var showing = layoutsCollectionModel.get(stackLayout.currentIndex);
+        layoutReorderHold = true;
+        layoutsCollectionModel.move(fromIndex, toIndex);
+        Qt.callLater(function() {
+            if (showing) {
+                for (var j = 0; j < layoutsCollectionModel.count; ++j) {
+                    if (layoutsCollectionModel.get(j) === showing) {
+                        if (stackLayout.currentIndex !== j)
+                            stackLayout.currentIndex = j;
+                        break;
+                    }
+                }
+            }
+            layoutReorderHold = false;
+            windowLayoutSettings.currentIndex = stackLayout.currentIndex;
+        });
+    }
 
     function refreshToolbarLayouts() {
+        layoutOrderRevision = layoutOrderRevision + 1;
         toolbarLayoutModel = toolbarLayoutIndices(layoutsCollectionModel)
     }
 
@@ -1844,7 +1871,7 @@ ApplicationWindow {
                 }
 
                 Repeater {
-                    model: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 18]
+                    model: [1, 2, 3, 4, 5, 6]
                     delegate: Button {
                         id: gridBtn
                         property int gridSize: modelData
@@ -1957,7 +1984,12 @@ ApplicationWindow {
                             id: viewBtn
                             property int layoutIndex: modelData
 
-                            text: rootWindow.layoutDisplayName(layoutsCollectionModel, layoutIndex)
+                            text: {
+                                var order = rootWindow.layoutOrderRevision;
+                                if (order < 0)
+                                    return "";
+                                return rootWindow.layoutDisplayName(layoutsCollectionModel, layoutIndex);
+                            }
 
                             height: 30
                             anchors.verticalCenter: parent.verticalCenter
@@ -2178,6 +2210,8 @@ ApplicationWindow {
             anchors.fill: parent
 
             onCurrentIndexChanged: {
+                if (rootWindow.layoutReorderHold)
+                    return;
                 windowLayoutSettings.currentIndex = currentIndex;
                 rootWindow.triggerGcDeferred();
             }

@@ -244,8 +244,8 @@ that report the feature.
 
 - Alarm panel, doorbell, speaker and access-control nodes: outside what KVision is for.
 - Network discovery of devices by multicast: done on 15 Nov as **Scan network** (Hikvision SADP probe only, on every active
-  network). It finds standalone cameras; a recorder or the cameras behind it may not answer it (192.0.0.x here did not), so
-  adding by address stays. A wider scan (open ports on each address) was offered and not built.
+  network). The DS-7732 on 192.0.0.99 answers a Probe sent to its own address and does not answer the multicast, so the
+  scan also asks each address on a /24 or smaller. Adding by address stays for a device with discovery turned off.
 - Licence-plate recognition: only worth it if a plate camera is added.
 - Other events on the same stream (tamper, defocus, scene change, video loss, storage errors, temperature): worth a
   look later as a separate "camera problem" frame.

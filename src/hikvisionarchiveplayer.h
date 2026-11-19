@@ -125,7 +125,7 @@ private:
 
     bool m_isPlaying = false;
     qint64 m_currentPlayheadMs = 0;
-    double m_volume = 1.0;
+    double m_volume = 0.1;
     bool m_muted = true;
     QString m_playerStatusMessage;
     int m_currentSpeedMultiplier = 1;

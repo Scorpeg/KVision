@@ -101,9 +101,8 @@ FocusScope {
         refreshDeletedBackups();
     }
 
-    property var regularIndices: []
-    property var nvrIndices: []
-    property var nvrPresetIndices: []
+    property var savedLayoutIndices: []
+    property int selectedLayoutIndex: -1
 
     property bool hasNewVersion: false
     property string newVersionString: ""
@@ -165,24 +164,68 @@ FocusScope {
     }
 
     function updateIndices() {
-        var regs = [];
-        var nvrs = [];
-        var nvrPres = [];
+        var saved = [];
+        var scratch = (typeof rootWindow !== "undefined" && rootWindow) ? rootWindow.scratchLayout : null;
         for (var i = 0; i < layoutsCollectionModel.count; ++i) {
             var layout = layoutsCollectionModel.get(i);
-            if (layout) {
-                if (layout.isNvr) {
-                    nvrs.push(i);
-                } else if (layout.isNvrPreset) {
-                    nvrPres.push(i);
-                } else {
-                    regs.push(i);
-                }
+            if (!layout || layout === scratch)
+                continue;
+            saved.push(i);
+        }
+        savedLayoutIndices = saved;
+        var stillThere = false;
+        for (var s = 0; s < saved.length; ++s) {
+            if (saved[s] === selectedLayoutIndex) {
+                stillThere = true;
+                break;
             }
         }
-        regularIndices = regs;
-        nvrIndices = nvrs;
-        nvrPresetIndices = nvrPres;
+        if (!stillThere) {
+            var pick = -1;
+            for (var t = 0; t < saved.length; ++t) {
+                if (saved[t] === stackLayout.currentIndex) {
+                    pick = stackLayout.currentIndex;
+                    break;
+                }
+            }
+            if (pick < 0 && saved.length > 0)
+                pick = saved[0];
+            selectedLayoutIndex = pick;
+        }
+    }
+
+    function savedLayoutPosition(collectionIndex) {
+        var saved = savedLayoutIndices;
+        for (var i = 0; i < saved.length; ++i) {
+            if (saved[i] === collectionIndex)
+                return i;
+        }
+        return -1;
+    }
+
+    function canMoveSavedLayout(fromIndex, direction) {
+        var pos = savedLayoutPosition(fromIndex);
+        if (pos < 0)
+            return false;
+        var destPos = pos + direction;
+        return destPos >= 0 && destPos < savedLayoutIndices.length;
+    }
+
+    // direction -1 moves the selected layout toward the top of the list, +1 toward the bottom.
+    // The toolbar buttons walk this same list.
+    function moveSavedLayout(fromIndex, direction) {
+        if (!canMoveSavedLayout(fromIndex, direction))
+            return;
+        var destPos = savedLayoutPosition(fromIndex) + direction;
+        var moving = layoutsCollectionModel.get(fromIndex);
+        var toIndex = savedLayoutIndices[destPos];
+        rootWindow.moveLayoutKeepingView(fromIndex, toIndex);
+        for (var j = 0; j < layoutsCollectionModel.count; ++j) {
+            if (layoutsCollectionModel.get(j) === moving) {
+                selectedLayoutIndex = j;
+                break;
+            }
+        }
     }
 
     Component.onCompleted: {
@@ -1412,7 +1455,7 @@ FocusScope {
                                     text: (rootSideBar.currentViewportIndex >= 0 && Utils.currentModel()) ? Utils.currentModel().get(rootSideBar.currentViewportIndex).url : ""
                                     placeholderText: qsTr("LNG_00304")
                                     selectByMouse: true
-                                    enabled: configUnlockSwitch.checked && (Utils.currentModel() ? (!Utils.currentModel().isNvr && !Utils.currentModel().isNvrPreset) : true)
+                                    enabled: configUnlockSwitch.checked
                                     Layout.fillWidth: true
                                     onEditingFinished: {
                                         if (rootSideBar.currentViewportIndex >= 0) {
@@ -1426,7 +1469,7 @@ FocusScope {
                                     text: (rootSideBar.currentViewportIndex >= 0 && Utils.currentModel()) ? Utils.currentModel().get(rootSideBar.currentViewportIndex).secondaryUrl : ""
                                     placeholderText: qsTr("LNG_00303")
                                     selectByMouse: true
-                                    enabled: configUnlockSwitch.checked && (Utils.currentModel() ? (!Utils.currentModel().isNvr && !Utils.currentModel().isNvrPreset) : true)
+                                    enabled: configUnlockSwitch.checked
                                     Layout.fillWidth: true
                                     onEditingFinished: {
                                         if (rootSideBar.currentViewportIndex >= 0) {
@@ -1857,9 +1900,8 @@ FocusScope {
                         }
                     }
 
-                    // Group 1: General Camera Presets
                     GroupBox {
-                        title: qsTr("LNG_00289")
+                        title: qsTr("Layouts")
                         Layout.fillWidth: true
 
                         background: Rectangle {
@@ -1880,14 +1922,86 @@ FocusScope {
                             anchors.margins: 4
                             spacing: 8
 
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+
+                                Column {
+                                    spacing: 8
+                                    Layout.alignment: Qt.AlignVCenter
+
+                                    Button {
+                                        id: moveUpBtn
+                                        implicitWidth: 36
+                                        implicitHeight: 36
+                                        enabled: rootSideBar.canMoveSavedLayout(rootSideBar.selectedLayoutIndex, -1)
+                                        onClicked: rootSideBar.moveSavedLayout(rootSideBar.selectedLayoutIndex, -1)
+                                        contentItem: Image {
+                                            anchors.centerIn: parent
+                                            width: 16
+                                            height: 16
+                                            source: {
+                                                var colorStr = !moveUpBtn.enabled ? "%233a4550" : (moveUpBtn.hovered ? "%23ffffff" : "%238898a6");
+                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 14 12 8 18 14'></polyline></svg>";
+                                            }
+                                        }
+                                        background: Rectangle {
+                                            color: moveUpBtn.pressed ? "#cc121214" : (moveUpBtn.hovered && moveUpBtn.enabled ? "#3a4550" : "#1c242c")
+                                            radius: 18
+                                            border.color: moveUpBtn.enabled ? (moveUpBtn.hovered ? "#8898a6" : "#2a3540") : "#1c242c"
+                                            border.width: 1
+                                        }
+                                        ToolTip.delay: Compact.toolTipDelay
+                                        ToolTip.timeout: Compact.toolTipTimeout
+                                        ToolTip.visible: moveUpBtn.hovered && moveUpBtn.enabled
+                                        ToolTip.text: qsTr("Move the selected layout up")
+                                    }
+
+                                    Button {
+                                        id: moveDownBtn
+                                        implicitWidth: 36
+                                        implicitHeight: 36
+                                        enabled: rootSideBar.canMoveSavedLayout(rootSideBar.selectedLayoutIndex, 1)
+                                        onClicked: rootSideBar.moveSavedLayout(rootSideBar.selectedLayoutIndex, 1)
+                                        contentItem: Image {
+                                            anchors.centerIn: parent
+                                            width: 16
+                                            height: 16
+                                            source: {
+                                                var colorStr = !moveDownBtn.enabled ? "%233a4550" : (moveDownBtn.hovered ? "%23ffffff" : "%238898a6");
+                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 10 12 16 18 10'></polyline></svg>";
+                                            }
+                                        }
+                                        background: Rectangle {
+                                            color: moveDownBtn.pressed ? "#cc121214" : (moveDownBtn.hovered && moveDownBtn.enabled ? "#3a4550" : "#1c242c")
+                                            radius: 18
+                                            border.color: moveDownBtn.enabled ? (moveDownBtn.hovered ? "#8898a6" : "#2a3540") : "#1c242c"
+                                            border.width: 1
+                                        }
+                                        ToolTip.delay: Compact.toolTipDelay
+                                        ToolTip.timeout: Compact.toolTipTimeout
+                                        ToolTip.visible: moveDownBtn.hovered && moveDownBtn.enabled
+                                        ToolTip.text: qsTr("Move the selected layout down")
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
                             Repeater {
-                                model: rootSideBar.regularIndices
+                                model: rootSideBar.savedLayoutIndices
                                 delegate: RowLayout {
                                     id: presetRow
                                     spacing: 12
                                     Layout.fillWidth: true
 
-                                    property var layout: layoutsCollectionModel.get(modelData)
+                                    property var layout: {
+                                        var order = rootWindow.layoutOrderRevision;
+                                        if (order < 0)
+                                            return null;
+                                        return layoutsCollectionModel.get(modelData);
+                                    }
 
                                     // Active preset indicator
                                     Rectangle {
@@ -1908,8 +2022,9 @@ FocusScope {
                                         background: Rectangle {
                                             color: "#0f151b"
                                             radius: 4
-                                            border.color: nameField.activeFocus ? "#ff7a00" : "#2a3540"
+                                            border.color: rootSideBar.selectedLayoutIndex === modelData ? "#00f5d4" : (nameField.activeFocus ? "#ff7a00" : "#2a3540")
                                         }
+                                        onPressed: rootSideBar.selectedLayoutIndex = modelData
                                         onEditingFinished: {
                                             if (presetRow.layout) {
                                                 presetRow.layout.name = text;
@@ -1973,7 +2088,7 @@ FocusScope {
                                         id: delPresetBtn
                                         implicitWidth: 28
                                         implicitHeight: 28
-                                        visible: rootSideBar.regularIndices.length > 1
+                                        visible: rootSideBar.savedLayoutIndices.length > 1
                                         contentItem: Image {
                                             anchors.centerIn: parent
                                             width: 14
@@ -1999,6 +2114,8 @@ FocusScope {
                                         ToolTip.visible: delPresetBtn.hovered
                                         ToolTip.text: qsTr("LNG_00286")
                                     }
+                                }
+                            }
                                 }
                             }
 
@@ -2057,315 +2174,6 @@ FocusScope {
                         ToolTip.text: qsTr("Layouts that were deleted but still have backups. Pick one to put it back.")
                     }
 
-                    // Group 2: NVR Views (Only when NVR layouts configured)
-                    GroupBox {
-                        title: qsTr("LNG_00284")
-                        visible: rootSideBar.nvrIndices.length > 0
-                        Layout.fillWidth: true
-
-                        background: Rectangle {
-                            color: "#141a21"
-                            border.color: "#2a3540"
-                            border.width: 1
-                            radius: 8
-                        }
-                        label: Text {
-                            text: parent.title
-                            color: "#00f5d4"
-                            font.bold: true
-                            font.pixelSize: 12
-                        }
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            spacing: 8
-
-                            Repeater {
-                                model: rootSideBar.nvrIndices
-                                delegate: RowLayout {
-                                    id: nvrRow
-                                    spacing: 12
-                                    Layout.fillWidth: true
-
-                                    property var layout: layoutsCollectionModel.get(modelData)
-
-                                    Rectangle {
-                                        width: 4
-                                        height: 24
-                                        radius: 2
-                                        color: stackLayout.currentIndex === modelData ? "#00f5d4" : "transparent"
-                                    }
-
-                                    TextField {
-                                        id: nvrNameField
-                                        text: (nvrRow.layout && nvrRow.layout.name) ? nvrRow.layout.name : ""
-                                        placeholderText: (nvrRow.layout && nvrRow.layout.nvrIp) ? getRecorderName(nvrRow.layout.nvrIp) : qsTr("LNG_00283")
-                                        selectByMouse: true
-                                        Layout.fillWidth: true
-                                        color: "white"
-                                        background: Rectangle {
-                                            color: "#0f151b"
-                                            radius: 4
-                                            border.color: nvrNameField.activeFocus ? "#ff7a00" : "#2a3540"
-                                        }
-                                        onEditingFinished: {
-                                            if (nvrRow.layout) {
-                                                nvrRow.layout.name = text;
-                                            }
-                                        }
-                                    }
-
-                                    CheckBox {
-                                        text: qsTr("Toolbar")
-                                        ToolTip.visible: hovered
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.text: qsTr("Show this layout on the top toolbar")
-                                        checked: nvrRow.layout ? nvrRow.layout.visible : true
-                                        onCheckedChanged: {
-                                            if (nvrRow.layout) {
-                                                nvrRow.layout.visible = checked;
-                                            }
-                                        }
-                                        palette.highlight: "#00f5d4"
-                                    }
-
-                                    Button {
-                                        id: activateBtnNvr
-                                        implicitWidth: 28
-                                        implicitHeight: 28
-                                        highlighted: stackLayout.currentIndex === modelData
-                                        onClicked: {
-                                            stackLayout.currentIndex = modelData;
-                                        }
-                                        contentItem: Image {
-                                            anchors.centerIn: parent
-                                            width: 14
-                                            height: 14
-                                            source: {
-                                                var colorStr = activateBtnNvr.pressed ? "%23ffffff" : (activateBtnNvr.highlighted ? "%23ffffff" : (activateBtnNvr.hovered ? "%23ffffff" : "%238898a6"));
-                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polygon points='6 3 20 12 6 21 6 3'></polygon></svg>";
-                                            }
-                                        }
-                                        background: Rectangle {
-                                            color: activateBtnNvr.pressed ? "#cc121214" : (activateBtnNvr.highlighted ? "#ff7a00" : (activateBtnNvr.hovered ? "#3a4550" : "#1c242c"))
-                                            radius: 14
-                                            border.color: activateBtnNvr.highlighted ? "#ff9e00" : (activateBtnNvr.hovered ? "#8898a6" : "#2a3540")
-                                            border.width: 1
-                                        }
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.visible: activateBtnNvr.hovered
-                                        ToolTip.text: qsTr("LNG_00282")
-                                    }
-
-                                    LayoutBackupButton {
-                                        layoutUid: (nvrRow.layout && nvrRow.layout.uid) ? nvrRow.layout.uid : ""
-                                        onActivated: layoutBackupDialog.openFor(modelData)
-                                    }
-
-                                    Button {
-                                        id: delNvrBtn
-                                        implicitWidth: 28
-                                        implicitHeight: 28
-                                        contentItem: Image {
-                                            anchors.centerIn: parent
-                                            width: 14
-                                            height: 14
-                                            source: {
-                                                var colorStr = delNvrBtn.hovered ? "%23ff4d4d" : "%238898a6";
-                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3 6 5 6 21 6'></polyline><path d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'></path><line x1='10' y1='11' x2='10' y2='17'></line><line x1='14' y1='11' x2='14' y2='17'></line></svg>";
-                                            }
-                                        }
-                                        background: Rectangle {
-                                            color: delNvrBtn.pressed ? "#40ff0000" : (delNvrBtn.hovered ? "#20ff0000" : "transparent")
-                                            radius: 14
-                                            border.color: delNvrBtn.hovered ? "#ff4d4d" : "#2a3540"
-                                            border.width: 1
-                                        }
-
-                                        onClicked: {
-                                            nvrPresetDeleteDialog.index = modelData;
-                                            nvrPresetDeleteDialog.open();
-                                        }
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.visible: delNvrBtn.hovered
-                                        ToolTip.text: qsTr("LNG_00281")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Group 3: NVR Preset List
-                    GroupBox {
-                        title: qsTr("LNG_00280")
-                        Layout.fillWidth: true
-
-                        background: Rectangle {
-                            color: "#141a21"
-                            border.color: "#2a3540"
-                            border.width: 1
-                            radius: 8
-                        }
-                        label: Text {
-                            text: parent.title
-                            color: "#00f5d4"
-                            font.bold: true
-                            font.pixelSize: 12
-                        }
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 4
-                            spacing: 8
-
-                            Repeater {
-                                model: rootSideBar.nvrPresetIndices
-                                delegate: RowLayout {
-                                    id: nvrPresetRow
-                                    spacing: 12
-                                    Layout.fillWidth: true
-
-                                    property var layout: layoutsCollectionModel.get(modelData)
-
-                                    Rectangle {
-                                        width: 4
-                                        height: 24
-                                        radius: 2
-                                        color: stackLayout.currentIndex === modelData ? "#00f5d4" : "transparent"
-                                    }
-
-                                    TextField {
-                                        id: nvrPresetNameField
-                                        text: (nvrPresetRow.layout && nvrPresetRow.layout.name) ? nvrPresetRow.layout.name : ""
-                                        placeholderText: qsTr("LNG_00279").arg(index + 1)
-                                        selectByMouse: true
-                                        Layout.fillWidth: true
-                                        color: "white"
-                                        background: Rectangle {
-                                            color: "#0f151b"
-                                            radius: 4
-                                            border.color: nvrPresetNameField.activeFocus ? "#ff7a00" : "#2a3540"
-                                        }
-                                        onEditingFinished: {
-                                            if (nvrPresetRow.layout) {
-                                                nvrPresetRow.layout.name = text;
-                                            }
-                                        }
-                                    }
-
-                                    CheckBox {
-                                        text: qsTr("Toolbar")
-                                        ToolTip.visible: hovered
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.text: qsTr("Show this layout on the top toolbar")
-                                        checked: nvrPresetRow.layout ? nvrPresetRow.layout.visible : true
-                                        onCheckedChanged: {
-                                            if (nvrPresetRow.layout) {
-                                                nvrPresetRow.layout.visible = checked;
-                                            }
-                                        }
-                                        palette.highlight: "#00f5d4"
-                                    }
-
-                                    Button {
-                                        id: activateBtnNvrPreset
-                                        implicitWidth: 28
-                                        implicitHeight: 28
-                                        highlighted: stackLayout.currentIndex === modelData
-                                        onClicked: {
-                                            stackLayout.currentIndex = modelData;
-                                        }
-                                        contentItem: Image {
-                                            anchors.centerIn: parent
-                                            width: 14
-                                            height: 14
-                                            source: {
-                                                var colorStr = activateBtnNvrPreset.pressed ? "%23ffffff" : (activateBtnNvrPreset.highlighted ? "%23ffffff" : (activateBtnNvrPreset.hovered ? "%23ffffff" : "%238898a6"));
-                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polygon points='6 3 20 12 6 21 6 3'></polygon></svg>";
-                                            }
-                                        }
-                                        background: Rectangle {
-                                            color: activateBtnNvrPreset.pressed ? "#cc121214" : (activateBtnNvrPreset.highlighted ? "#ff7a00" : (activateBtnNvrPreset.hovered ? "#3a4550" : "#1c242c"))
-                                            radius: 14
-                                            border.color: activateBtnNvrPreset.highlighted ? "#ff9e00" : (activateBtnNvrPreset.hovered ? "#8898a6" : "#2a3540")
-                                            border.width: 1
-                                        }
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.visible: activateBtnNvrPreset.hovered
-                                        ToolTip.text: qsTr("LNG_00277")
-                                    }
-
-                                    LayoutBackupButton {
-                                        layoutUid: (nvrPresetRow.layout && nvrPresetRow.layout.uid) ? nvrPresetRow.layout.uid : ""
-                                        onActivated: layoutBackupDialog.openFor(modelData)
-                                    }
-
-                                    Button {
-                                        id: delNvrPresetBtn
-                                        implicitWidth: 28
-                                        implicitHeight: 28
-                                        contentItem: Image {
-                                            anchors.centerIn: parent
-                                            width: 14
-                                            height: 14
-                                            source: {
-                                                var colorStr = delNvrPresetBtn.hovered ? "%23ff4d4d" : "%238898a6";
-                                                return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3 6 5 6 21 6'></polyline><path d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'></path><line x1='10' y1='11' x2='10' y2='17'></line><line x1='14' y1='11' x2='14' y2='17'></line></svg>";
-                                            }
-                                        }
-                                        background: Rectangle {
-                                            color: delNvrPresetBtn.pressed ? "#40ff0000" : (delNvrPresetBtn.hovered ? "#20ff0000" : "transparent")
-                                            radius: 14
-                                            border.color: delNvrPresetBtn.hovered ? "#ff4d4d" : "#2a3540"
-                                            border.width: 1
-                                        }
-
-                                        onClicked: {
-                                            nvrPresetDeleteDialog2.index = modelData;
-                                            nvrPresetDeleteDialog2.open();
-                                        }
-                                        ToolTip.delay: Compact.toolTipDelay
-                                        ToolTip.timeout: Compact.toolTipTimeout
-                                        ToolTip.visible: delNvrPresetBtn.hovered
-                                        ToolTip.text: qsTr("LNG_00276")
-                                    }
-                                }
-                            }
-
-                            Button {
-                                id: addNvrPresetBtn
-                                text: qsTr("LNG_00275")
-                                Layout.fillWidth: true
-                                implicitHeight: 32
-                                onClicked: {
-                                    var l = layoutsCollectionModel.append();
-                                    l.size = Qt.size(2, 2);
-                                    l.isNvrPreset = true;
-                                    stackLayout.currentIndex = layoutsCollectionModel.count - 1;
-                                }
-                                background: Rectangle {
-                                    color: addNvrPresetBtn.pressed ? "#cc121214" : (addNvrPresetBtn.hovered ? "#059669" : "#10b981")
-                                    radius: 6
-                                    border.color: addNvrPresetBtn.hovered ? "#34d399" : "#059669"
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    text: addNvrPresetBtn.text
-                                    color: "#ffffff"
-                                    font.bold: true
-                                    font.pixelSize: 11
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -4284,40 +4092,6 @@ FocusScope {
                 }
             }
             return qsTr("LNG_00225").arg(index + 1);
-        }
-        property int index: -1
-        onAccepted: rootSideBar.deleteLayoutAt(index)
-    }
-
-    ConfirmDialog {
-        id: nvrPresetDeleteDialog
-        title: qsTr("LNG_00222")
-        iconSource: "qrc:/images/icon-trash.svg"
-        message: {
-            if (index >= 0 && index < layoutsCollectionModel.count) {
-                var layout = layoutsCollectionModel.get(index);
-                if (layout && layout.name && layout.name.trim() !== "") {
-                    return qsTr("LNG_00224").arg(layout.name);
-                }
-            }
-            return qsTr("LNG_00223");
-        }
-        property int index: -1
-        onAccepted: rootSideBar.deleteLayoutAt(index)
-    }
-
-    ConfirmDialog {
-        id: nvrPresetDeleteDialog2
-        title: qsTr("LNG_00222")
-        iconSource: "qrc:/images/icon-trash.svg"
-        message: {
-            if (index >= 0 && index < layoutsCollectionModel.count) {
-                var layout = layoutsCollectionModel.get(index);
-                if (layout && layout.name && layout.name.trim() !== "") {
-                    return qsTr("LNG_00221").arg(layout.name);
-                }
-            }
-            return qsTr("LNG_00220");
         }
         property int index: -1
         onAccepted: rootSideBar.deleteLayoutAt(index)

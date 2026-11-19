@@ -68,6 +68,7 @@ This section describes the meaning of all graphical icons and buttons used in th
 **Bottom Bar & Timeline Controls:**
 * {ICON:prev_day} **Previous Day**: Navigates to recordings of the previous calendar day.
 * {ICON:calendar_select} **Date Picker**: Opens a calendar dialog to select a specific date for playback.
+* **Smart**: Click a recorder in the list on the left to search every camera on it, or click one camera to search only that camera, then Smart. Tick Human, Vehicle and Face, then Search. The recorder's pictures of those targets are shown, cropped to the target and labelled with the camera. Click a picture and that camera plays from that time. A camera that only keeps event recordings on its card, and not smart-search pictures, lists those recordings instead. Click one and playback starts at that time. The note also says KVision's Detection events may have the properly tagged event for the video timestamp. Playback sound starts at one tenth of full volume.
 * {ICON:next_day} **Next Day**: Navigates to recordings of the next calendar day.
 * {ICON:today} **Today**: Instantly shifts the playback focus to the current calendar day.
 * {ICON:refresh_recordings} **Refresh recordings**: Refreshes and re-queries available recording segments from the device.
@@ -223,7 +224,7 @@ env QT_FONT_DPI=96 QT_SCALE_FACTOR=1.5 kvision
 
 To configure the connection to a Hikvision recorder:
 1. Open the options window and go to the **Recorders** tab (server icon).
-2. **Optional: find the device.** Click **Scan network**. KVision asks every network this computer is connected to for Hikvision devices (about 4 seconds) and lists what answers, with the model, address, serial number and which of your networks heard it. Click a row to fill in the name, IP address and ports, then type the user name and password. A row can carry notes: *Already added*, *Not activated: set a password on the device first*, and *Different subnet from this computer* (the device cannot be reached until its address is changed or a route exists). If nothing is found, the device may be on another subnet or VLAN, a switch or access point may block multicast, or the device may have discovery turned off; enter its address by hand. A camera that sits behind a recorder you have already added is not listed, because that recorder already gives you the camera. The scan only listens for answers and sends no password.
+2. **Optional: find the device.** Click **Scan network**. KVision asks every network this computer is connected to for Hikvision devices (about 4 seconds) and lists what answers, with the model, address, serial number and which of your networks heard it. Click a row to fill in the name, IP address and ports, then type the user name and password. A row can carry notes: *Already added*, *Not activated: set a password on the device first*, and *Different subnet from this computer* (the device cannot be reached until its address is changed or a route exists). On a small network the same inquiry is also sent to each address, so a recorder that ignores the multicast still shows up. If nothing is found, the device may be on another subnet or VLAN, or it may have discovery turned off; enter its address by hand. A camera that sits behind a recorder you have already added is not listed, because that recorder already gives you the camera. The scan only listens for answers and sends no password.
 3. Enter the device access details:
    * **IP Address**: The network address of the recorder.
    * **Port**: The SDK network port (default is `8000`).
@@ -242,7 +243,7 @@ To configure the connection to a Hikvision recorder:
 11. **Removing a Recorder from List**: Beside each configured recorder on the list, there is a red trash can button. Clicking it initiates a two-stage security protocol designed to prevent accidental deletion:
     * **Step 1 (Confirmation)**: A dialog titled *“Confirm NVR Deletion”* appears, asking if you are sure you want to delete the recorder.
     * **Step 2 (Warning)**: A second warning dialog titled *“Warning!”* appears, asking if you are absolutely sure and aware of what you are doing.
-    * **Effect of Deletion**: Upon accepting the second warning, the program logs out from that NVR in the background, deletes its entry from the application configuration, and **automatically sweeps the preset layouts list**, removing all dynamic grids generated for this NVR device.
+    * **Effect of Deletion**: Upon accepting the second warning, the program logs out from that NVR in the background and deletes its entry from the application configuration. Saved layouts stay, including tiles that used this recorder.
 
 ---
 
@@ -315,9 +316,9 @@ The top sliding toolbar provides a comprehensive set of navigation and applicati
 8. **INSTRUCTIONS**: Opens this manual window (the yellow book button).
 9. **📊 STATS Switch**: Toggle switch to slide out the System Statistics monitoring panel from the left screen edge.
 10. **Grid Lock Switch (Padlock)**: Switch that, when turned ON (highlighted in bright orange), disables grid-resizing actions on the adjacent grid buttons, protecting your active camera layout from accidental changes.
-11. **Grid Size Selectors (from 1x1 to 9x9)**: A row of nine buttons that lets you instantly define the row and column structure of your viewport (from a single camera 1x1 view up to 81 simultaneous camera feeds in a 9x9 layout). The currently active size highlights in bright orange.
+11. **Grid Size Selectors (from 1x1 to 6x6)**: A row of six buttons that lets you instantly define the row and column structure of your viewport (from a single camera 1x1 view up to 36 simultaneous camera feeds in a 6x6 layout). The currently active size highlights in bright orange.
 12. **More Options (Hamburger Menu with three lines)**: Button opening the sliding `Layout & Grid Tools` toolbox for advanced grid tuning, geometry adjustments, and debugging options (detailed below).
-13. **Preset/View Buttons**: Dynamically rendered buttons on the right side of the toolbar representing your configured and visible preset layouts (e.g. *📹 NVR*, *View 1*, etc.). Clicking a button immediately switches the grid. The active view highlights in bright light-turquoise.
+13. **Preset/View Buttons**: Buttons on the right side of the toolbar for the layouts whose Toolbar tick is on. They follow the order of the Presets list. Clicking a button switches to that layout. The active view highlights in bright light-turquoise.
 
 ### Advanced Grid Customization & Ratios (Layout & Grid Tools)
 Opening the Hamburger (More Options) menu brings up a specialized layout toolbox. To activate its controls:
@@ -417,7 +418,7 @@ A window with three groups: **Window Division**, **Geometry Ratio** and **Grid O
 Full configuration manager for connections to Hikvision NVR/DVR devices (described in detail in Section 3).
 
 ### 4. Presets tab (Star Icon)
-Manager for your saved grid layouts and camera assignments. Allows creating empty grid templates, changing their order, toggling their top-bar visibility (via the "Visible" switch), or activating them in the current window.
+One list of your saved grid layouts. A tile on any layout can hold a camera from any recorder. You can add an empty layout, rename one, show or hide it on the top bar (the Toolbar tick), or switch to it. Click a layout to select it, then use the round up and down buttons on the left of the list to move that one row. The layout buttons on the top bar follow that list order. Moving a row past the layout on screen still switches that picture. The temporary grid from the toolbar grid-size buttons is not in this list.
 
 ### 5. Settings tab (Gear Icon)
 This page has six sections, chosen with the buttons along its top: **Detection**, **NVR**, **Cameras and display**, **Audio**, **General** and **Camera Tools**. Detection is described in Section 13 and Camera Tools in Section 14. Global application settings include:

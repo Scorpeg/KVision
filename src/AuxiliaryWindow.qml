@@ -549,7 +549,7 @@ Window {
                     }
 
                     Repeater {
-                        model: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+                        model: [1, 2, 3, 4, 5, 6]
                         delegate: Button {
                             id: gridBtn
                             property int gridSize: modelData
@@ -668,7 +668,12 @@ Window {
                                 id: viewBtn
                                 property int layoutIndex: modelData
 
-                                text: rootWindow.layoutDisplayName(layoutsModel, layoutIndex)
+                                text: {
+                                    var order = rootWindow.layoutOrderRevision;
+                                    if (order < 0)
+                                        return "";
+                                    return rootWindow.layoutDisplayName(layoutsModel, layoutIndex);
+                                }
 
                                 height: 30
                                 anchors.verticalCenter: parent.verticalCenter

@@ -811,6 +811,9 @@ FocusScope {
     }
 
     onVisibleChanged: {
+        // A preset-list reorder can hide and show this tile for a moment. Leave the stream running.
+        if (typeof rootWindow !== "undefined" && rootWindow && rootWindow.layoutReorderHold)
+            return;
         if (visible) {
             updateSource();
             if (!timer.running) {
