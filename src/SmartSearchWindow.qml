@@ -34,8 +34,9 @@ Window {
             return
         }
         searchRecorder = recorder
-        if (!humanBox.checked && !vehicleBox.checked && !faceBox.checked) {
-            note = qsTr("Choose at least one: human, vehicle or face.")
+        if (!humanBox.checked && !vehicleBox.checked && !faceBox.checked && !otherBox.checked
+                && !lineBox.checked && !intrusionBox.checked && !entranceBox.checked) {
+            note = qsTr("Choose at least one: human, vehicle, face, other, or an event.")
             return
         }
         var day = new Date(playback.currentDate.getTime())
@@ -61,7 +62,8 @@ Window {
         note = channels.length === 1 ? qsTr("Searching the camera…") : qsTr("Searching the recorder…")
         results = []
         HikvisionISAPI.searchSmartTargets(recorder, channels, day, end,
-                                           humanBox.checked, vehicleBox.checked, faceBox.checked, token)
+                                           humanBox.checked, vehicleBox.checked, faceBox.checked, otherBox.checked,
+                                           lineBox.checked, intrusionBox.checked, entranceBox.checked, token)
     }
 
     function playHit(hit) {
@@ -70,7 +72,7 @@ Window {
         var recorder = searchRecorder
         if (!recorder || !recorder.ip)
             return
-        var when = new Date(hit.timeMs)
+        var when = new Date(hit.timeMs - 5000)
         var channel = hit.channelId || playback.channelId
         playback.openCameraAt(recorder, {
             channelId: channel,
@@ -101,15 +103,30 @@ Window {
             color: "#c5d0d8"
             font.pixelSize: 12
             wrapMode: Text.WordWrap
-            text: qsTr("Every camera on this recorder")
-                  + (playback ? ("  ·  " + playback.formatDay(playback.currentDate)) : "")
+            text: {
+                var chosen = playback ? playback.smartSelectionKey : ""
+                var day = (playback && playback.formatDay) ? playback.formatDay(playback.currentDate) : ""
+                var one = playback ? playback.selectedSmartCamera : null
+                var rec = playback ? playback.selectedRecorder : null
+                var who = qsTr("Every camera on this recorder")
+                if (chosen.indexOf("cam:") === 0 && one && one.channelId && (!rec || one.ip === rec.ip))
+                    who = one.name || qsTr("Camera %1").arg(one.channelId)
+                return who + (day !== "" ? ("  ·  " + day) : "")
+            }
+        }
+
+        Text {
+            color: "#8898a6"
+            font.pixelSize: 11
+            font.bold: true
+            text: qsTr("Target Type")
         }
 
         RowLayout {
             spacing: 14
             CheckBox {
                 id: humanBox
-                checked: true
+                checked: false
                 text: qsTr("Human")
                 palette.highlight: "#00f5d4"
                 contentItem: Text {
@@ -122,7 +139,7 @@ Window {
             }
             CheckBox {
                 id: vehicleBox
-                checked: true
+                checked: false
                 text: qsTr("Vehicle")
                 palette.highlight: "#00f5d4"
                 contentItem: Text {
@@ -135,7 +152,7 @@ Window {
             }
             CheckBox {
                 id: faceBox
-                checked: true
+                checked: false
                 text: qsTr("Face")
                 palette.highlight: "#00f5d4"
                 contentItem: Text {
@@ -143,6 +160,19 @@ Window {
                     color: "white"
                     font.pixelSize: 12
                     leftPadding: faceBox.indicator.width + 6
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+            CheckBox {
+                id: otherBox
+                checked: false
+                text: qsTr("Other")
+                palette.highlight: "#00f5d4"
+                contentItem: Text {
+                    text: otherBox.text
+                    color: "white"
+                    font.pixelSize: 12
+                    leftPadding: otherBox.indicator.width + 6
                     verticalAlignment: Text.AlignVCenter
                 }
             }
@@ -168,6 +198,56 @@ Window {
         }
 
         Text {
+            color: "#8898a6"
+            font.pixelSize: 11
+            font.bold: true
+            text: qsTr("Event Type")
+        }
+
+        RowLayout {
+            spacing: 14
+            CheckBox {
+                id: lineBox
+                checked: false
+                text: qsTr("Line crossing")
+                palette.highlight: "#00f5d4"
+                contentItem: Text {
+                    text: lineBox.text
+                    color: "white"
+                    font.pixelSize: 12
+                    leftPadding: lineBox.indicator.width + 6
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+            CheckBox {
+                id: intrusionBox
+                checked: false
+                text: qsTr("Intrusion")
+                palette.highlight: "#00f5d4"
+                contentItem: Text {
+                    text: intrusionBox.text
+                    color: "white"
+                    font.pixelSize: 12
+                    leftPadding: intrusionBox.indicator.width + 6
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+            CheckBox {
+                id: entranceBox
+                checked: false
+                text: qsTr("Region entrance")
+                palette.highlight: "#00f5d4"
+                contentItem: Text {
+                    text: entranceBox.text
+                    color: "white"
+                    font.pixelSize: 12
+                    leftPadding: entranceBox.indicator.width + 6
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+        }
+
+        Text {
             Layout.fillWidth: true
             color: "#ff7a00"
             font.pixelSize: 11
@@ -181,8 +261,8 @@ Window {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: smartWindow.results.length === 0 || smartWindow.results[0].image
-            cellWidth: 150
-            cellHeight: 170
+            cellWidth: 188
+            cellHeight: 248
             clip: true
             model: visible ? smartWindow.results : []
             boundsBehavior: Flickable.StopAtBounds
@@ -201,7 +281,7 @@ Window {
 
                     Image {
                         width: parent.width
-                        height: parent.height - 22
+                        height: parent.height - 72
                         source: modelData.image ? ("file://" + modelData.image) : ""
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
@@ -209,11 +289,33 @@ Window {
                     }
                     Text {
                         width: parent.width
-                        elide: Text.ElideRight
-                        color: "#c5d0d8"
-                        font.pixelSize: 10
+                        height: 68
+                        wrapMode: Text.WordWrap
+                        clip: true
+                        color: "#d5dee6"
+                        font.pixelSize: 11
                         horizontalAlignment: Text.AlignHCenter
-                        text: modelData.label || ""
+                        text: {
+                            var kind = modelData.kind === "human" ? qsTr("Human")
+                                     : modelData.kind === "vehicle" ? qsTr("Vehicle")
+                                     : modelData.kind === "face" ? qsTr("Face")
+                                     : modelData.kind === "other" ? qsTr("Other")
+                                     : modelData.kind === "event" ? qsTr("Event")
+                                     : (modelData.kind || "")
+                            var lines = []
+                            if (modelData.cameraName)
+                                lines.push(modelData.cameraName)
+                            var mid = kind
+                            if (modelData.detail)
+                                mid = mid ? (mid + "  ·  " + modelData.detail) : modelData.detail
+                            if (mid)
+                                lines.push(mid)
+                            if (modelData.timeMs) {
+                                var when = new Date(modelData.timeMs)
+                                lines.push(Qt.formatTime(when, "h:mm:ss AP"))
+                            }
+                            return lines.length ? lines.join("\n") : (modelData.label || "")
+                        }
                     }
                 }
 
@@ -238,18 +340,21 @@ Window {
 
             delegate: Rectangle {
                 width: eventList.width
-                height: 36
+                height: eventLabel.implicitHeight + 16
                 color: eventHit.containsMouse ? "#24313d" : "#0f151b"
                 radius: 4
                 border.color: "#2a3540"
 
                 Text {
-                    anchors.fill: parent
+                    id: eventLabel
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
                     anchors.leftMargin: 12
                     anchors.rightMargin: 12
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    color: "#c5d0d8"
+                    anchors.topMargin: 8
+                    wrapMode: Text.WordWrap
+                    color: "#d5dee6"
                     font.pixelSize: 12
                     text: modelData.label || ""
                 }

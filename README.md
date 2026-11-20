@@ -6,13 +6,15 @@
 
 <p align="center">Personal Linux CCTV client for live Hikvision and RTSP camera walls, playback, and PTZ control.</p>
 
+**KVision is primarily for Hikvision equipment.** That includes Hikvision cameras and recorders sold under another brand, when they still speak Hikvision's own protocol. Discovery, the camera list, playback, PTZ, detection, and smart search all use that protocol. A pasted RTSP or https playlist address can still show a picture on a tile, and that is the whole of the support for anything else.
+
 <p align="center">
   <a href="https://paypal.me/optio50"><img src="images/donate.svg" width="300" alt="Support KVision: donate with PayPal"></a>
 </p>
 
 This repository is a personal fork of the upstream KVision/cctv-viewer project. It keeps the original application and adds the fixes and features I use on my own system, shared in case they are useful to others.
 
-**Version 3.7.0** is an independent, Linux-only fork. It starts from [Arkanista/KVision](https://github.com/Arkanista/KVision) release 2.7.5 and no longer tracks upstream. See [What this fork adds](#what-this-fork-adds-to-upstream-kvision) for the short list, and `CHANGELOG.md` for the full history.
+**Version 3.8.0** is an independent, Linux-only fork. It starts from [Arkanista/KVision](https://github.com/Arkanista/KVision) release 2.7.5 and no longer tracks upstream. See [What this fork adds](#what-this-fork-adds-to-upstream-kvision) for the short list, and `CHANGELOG.md` for the full history.
 
 ## Get it
 

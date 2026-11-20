@@ -46,7 +46,8 @@ public:
     // channels: every camera on the recorder, each {channelId, name}. The search is not limited to one camera.
     Q_INVOKABLE void searchSmartTargets(const QVariantMap &recorderInfo, const QVariantList &channels,
                                         const QDateTime &start, const QDateTime &end,
-                                        bool human, bool vehicle, bool face, int token);
+                                        bool human, bool vehicle, bool face, bool other,
+                                        bool line, bool intrusion, bool entrance, int token);
     Q_INVOKABLE void searchMonthAvailability(const QVariantMap &recorderInfo, int channelId, int year, int month);
     Q_INVOKABLE void cancelAllSearches();
 

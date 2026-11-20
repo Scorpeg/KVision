@@ -187,6 +187,7 @@ Window {
                 start = items.length;
             for (var k = 0; k < pics.length; ++k)
                 items.push({ "path": pics[k], "boxes": boxesOf[pics[k]] || [], "epochMs": e.epochMs + k * 1000, "camera": e.camera, "channel": e.channel, "kind": e.kind,
+                             "entryIndex": i,
                              "box": (pics.length === 1 || k === 0) ? e.box : [], "poly": (pics.length === 1 || k === 0) ? e.poly : [], "zone": e.zone,
                              "caption": e.time + "   " + e.target + "   " + e.kind + (e.zone > 0 ? " (" + qsTr("zone %1").arg(e.zone) + ")" : "") + "   " + e.camera
                                         + (e.source === "NVR" ? "   [" + qsTr("picture from the NVR") + "]" : (e.source === "camera" ? "   [" + qsTr("picture from the camera") + "]" : ""))
@@ -197,13 +198,28 @@ Window {
         var w = pictureViewer.createObject(null, { "items": items, "shown": start });
         if (w) {
             logWin.viewers.push(w);
+            w.shownChanged.connect(function() {
+                var it = w.items[w.shown];
+                if (it)
+                    logWin.selectEntry(it.entryIndex);
+            });
             w.closed.connect(function() {
                 var i = logWin.viewers.indexOf(w);
                 if (i >= 0)
                     logWin.viewers.splice(i, 1);
             });
+            if (items[start])
+                logWin.selectEntry(items[start].entryIndex);
             w.show();
         }
+    }
+
+    // The row of the picture on screen. Contain leaves a row that is already visible where it is.
+    function selectEntry(index) {
+        if (index < 0 || index >= entries.length)
+            return;
+        list.currentIndex = index;
+        list.positionViewAtIndex(index, ListView.Contain);
     }
 
     property var viewers: []
@@ -714,6 +730,7 @@ Window {
             Layout.fillHeight: true
             clip: true
             model: logWin.entries
+            currentIndex: -1
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
 
@@ -721,7 +738,10 @@ Window {
                 id: row
                 width: list.width
                 height: 26
-                color: rowArea.containsMouse && logWin.canPlay(modelData) ? "#22303a" : (index % 2 === 0 ? "#141b22" : "transparent")
+                color: index === list.currentIndex ? "#14332e"
+                       : (rowArea.containsMouse && logWin.canPlay(modelData) ? "#22303a" : (index % 2 === 0 ? "#141b22" : "transparent"))
+                border.width: index === list.currentIndex ? 1 : 0
+                border.color: "#00f5d4"
                 readonly property bool playable: logWin.canPlay(modelData)
                 readonly property bool gone: logWin.videoGone(modelData)
 

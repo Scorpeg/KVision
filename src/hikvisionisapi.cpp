@@ -10,10 +10,16 @@
 #include <QProcess>
 #include <QTemporaryFile>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QImage>
+#include <QLocale>
+#include <QRegularExpression>
+#include <QSettings>
 #include <algorithm>
 #include <cstring>
 #include "hikvisionmanager.h"
+#include "context.h"
 
 HikvisionISAPI::HikvisionISAPI(QObject *parent)
     : QObject(parent)
@@ -581,6 +587,8 @@ QString kindLabel(const QString &kind)
         return QStringLiteral("Human");
     if (kind == QLatin1String("face"))
         return QStringLiteral("Face");
+    if (kind == QLatin1String("other"))
+        return QStringLiteral("Other");
     if (kind == QLatin1String("event"))
         return QStringLiteral("Event");
     return QStringLiteral("Vehicle");
@@ -590,9 +598,10 @@ QString kindLabel(const QString &kind)
 
 void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const QVariantList &channels,
                                         const QDateTime &start, const QDateTime &end,
-                                        bool human, bool vehicle, bool face, int token)
+                                        bool human, bool vehicle, bool face, bool other,
+                                        bool line, bool intrusion, bool entrance, int token)
 {
-    QThread *worker = QThread::create([this, recorderInfo, channels, start, end, human, vehicle, face, token]() {
+    QThread *worker = QThread::create([this, recorderInfo, channels, start, end, human, vehicle, face, other, line, intrusion, entrance, token]() {
         QVariantList hits;
         QString note;
         const QString ip = recorderInfo.value(QStringLiteral("ip")).toString();
@@ -619,7 +628,7 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
             return QString();
         };
 
-        auto addHit = [&](const QString &image, const QDateTime &when, const QString &kind, int channel, const QString &cameraName) {
+        auto addHit = [&](const QString &image, const QDateTime &when, const QString &kind, int channel, const QString &cameraName, const QString &detail = QString()) {
             if (!when.isValid() || (image.isEmpty() && kind != QLatin1String("event")))
                 return;
             const QString shownName = !cameraName.isEmpty() ? cameraName : cameraNameFor(channel);
@@ -629,8 +638,10 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
             hit.insert(QStringLiteral("kind"), kind);
             hit.insert(QStringLiteral("channelId"), channel);
             hit.insert(QStringLiteral("cameraName"), shownName);
+            hit.insert(QStringLiteral("detail"), detail);
             const QString who = shownName.isEmpty() ? kindLabel(kind) : (shownName + QStringLiteral("  ") + kindLabel(kind));
-            hit.insert(QStringLiteral("label"), who + QLatin1Char(' ') + when.toLocalTime().toString(QStringLiteral("h:mm:ss AP")));
+            const QString withDetail = detail.isEmpty() ? who : (who + QStringLiteral("  ") + detail);
+            hit.insert(QStringLiteral("label"), withDetail + QLatin1Char(' ') + when.toLocalTime().toString(QStringLiteral("h:mm:ss AP")));
             hits.append(hit);
         };
 
@@ -709,7 +720,127 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
             return answer == Ask::Answered;
         };
 
-        if (vehicle && !ip.isEmpty()) {
+        auto addLogged = [&](const QString &word, const QString &kind, int cap, int indexBase) -> int {
+            const QString configFile = Context::config() ? Context::config()->fileName() : QSettings().fileName();
+            const QString configDir = QFileInfo(configFile).absolutePath();
+            QFile log(configDir + QStringLiteral("/logs/Detection.log"));
+            if (!log.open(QIODevice::ReadOnly))
+                return 0;
+            struct LoggedPic { QString path; QDateTime when; int channel; QString name; QString detail; double x, y, w, h; };
+            QVector<LoggedPic> logged;
+            const QRegularExpression boxRx(QStringLiteral("box ([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)"));
+            const QString needle = word + QStringLiteral(" detected");
+            const QList<QByteArray> lines = log.readAll().split('\n');
+            for (const QByteArray &rawLine : lines) {
+                const QString text = QString::fromUtf8(rawLine).trimmed();
+                if (!text.contains(needle))
+                    continue;
+                QStringList parts = text.split(QStringLiteral(", "));
+                if (!parts.isEmpty() && parts.last().startsWith(QStringLiteral("via ")))
+                    parts.removeLast();
+                while (!parts.isEmpty() && (parts.last().startsWith(QStringLiteral("box "))
+                                            || parts.last().startsWith(QStringLiteral("zone "))
+                                            || parts.last().startsWith(QStringLiteral("poly "))
+                                            || parts.last().startsWith(QStringLiteral("received "))))
+                    parts.removeLast();
+                if (parts.size() < 6 || !parts.at(1).startsWith(word))
+                    continue;
+                const QString recorderClause = parts.last();
+                bool mine = false;
+                int logical = 0;
+                for (const QVariant &item : channels) {
+                    const int channel = item.toMap().value(QStringLiteral("channelId")).toInt();
+                    if (channel <= 0)
+                        continue;
+                    if (recorderClause == QStringLiteral("recorder %1 ch %2").arg(ip).arg(channel)) {
+                        mine = true;
+                        logical = channel;
+                        break;
+                    }
+                }
+                if (!mine)
+                    continue;
+                QDateTime when = QLocale::c().toDateTime(parts.at(0), QStringLiteral("dd MMM yyyy HH:mm:ss"));
+                when.setTimeSpec(Qt::LocalTime);
+                if (!when.isValid() || when.toMSecsSinceEpoch() < start.toMSecsSinceEpoch()
+                        || when.toMSecsSinceEpoch() > end.toMSecsSinceEpoch())
+                    continue;
+                const QString detail = parts.at(2);
+                // A ticked event keeps only that event. No event ticked keeps every event for the chosen targets.
+                const bool narrowEvents = line || intrusion || entrance;
+                if (narrowEvents) {
+                    const bool keep = (line && detail == QLatin1String("Line crossing"))
+                            || (intrusion && detail == QLatin1String("Intrusion"))
+                            || (entrance && detail == QLatin1String("Region entrance"));
+                    if (!keep)
+                        continue;
+                }
+                const QString address = parts.at(parts.size() - 2);
+                QString key = address;
+                key.replace(QRegularExpression(QStringLiteral("[^0-9A-Za-z.-]")), QStringLiteral("_"));
+                QString slug;
+                for (const QChar ch : parts.at(2).toLower()) {
+                    if (ch.isLetterOrNumber() && ch.unicode() < 128)
+                        slug += ch;
+                }
+                const QString secs = QString::number(when.toSecsSinceEpoch());
+                const QString dirPics = configDir + QStringLiteral("/logs/pictures/");
+                const QStringList tries = {
+                    dirPics + key + QLatin1Char('_') + secs + QLatin1Char('-') + slug + QStringLiteral(".jpg"),
+                    dirPics + key + QStringLiteral("_ch") + QString::number(logical) + QLatin1Char('_') + secs + QLatin1Char('-') + slug + QStringLiteral(".jpg")
+                };
+                QString path;
+                for (const QString &tryPath : tries) {
+                    if (QFile::exists(tryPath)) {
+                        path = tryPath;
+                        break;
+                    }
+                }
+                if (path.isEmpty())
+                    continue;
+                const QRegularExpressionMatch box = boxRx.match(text);
+                LoggedPic row;
+                row.path = path;
+                row.when = when;
+                row.channel = logical;
+                row.name = parts.at(3);
+                row.detail = detail;
+                row.x = box.hasMatch() ? box.captured(1).toDouble() : 0;
+                row.y = box.hasMatch() ? box.captured(2).toDouble() : 0;
+                row.w = box.hasMatch() ? box.captured(3).toDouble() : 0;
+                row.h = box.hasMatch() ? box.captured(4).toDouble() : 0;
+                logged.append(row);
+            }
+            std::sort(logged.begin(), logged.end(), [](const LoggedPic &a, const LoggedPic &b) {
+                return a.when > b.when;
+            });
+            int added = 0;
+            for (const LoggedPic &row : logged) {
+                if (added >= cap)
+                    break;
+                QFile pic(row.path);
+                if (!pic.open(QIODevice::ReadOnly))
+                    continue;
+                const QString saved = saveSmartCrop(pic.readAll(), row.x, row.y, row.w, row.h, dirPath, indexBase + added);
+                addHit(saved, row.when, kind, row.channel, row.name, row.detail);
+                ++added;
+            }
+            return added;
+        };
+
+        const bool narrowEvents = line || intrusion || entrance;
+        const bool eventsOnly = narrowEvents && !human && !vehicle && !face && !other;
+        const int vehiclesFromLog = ((vehicle || eventsOnly) && !ip.isEmpty())
+                ? addLogged(QStringLiteral("Vehicle"), QStringLiteral("vehicle"), 400, 4000) : 0;
+        if ((human || eventsOnly) && !ip.isEmpty())
+            addLogged(QStringLiteral("Human"), QStringLiteral("human"), 200, 3000);
+        if ((other || eventsOnly) && !ip.isEmpty())
+            addLogged(QStringLiteral("Other"), QStringLiteral("other"), 400, 5000);
+
+        // The recorder's own vehicle search is a short sample. When Detection events already
+        // has the vehicle pictures, those are the full set and the sample is left out.
+        // A chosen event (line crossing, intrusion, or region entrance) uses the tagged pictures only.
+        if (vehicle && vehiclesFromLog == 0 && !narrowEvents && !ip.isEmpty()) {
             QList<int> wanted;
             for (const QVariant &item : channels) {
                 const int channel = item.toMap().value(QStringLiteral("channelId")).toInt();
@@ -744,33 +875,91 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
                 const auto &info = deviceInfo.struDeviceV30;
                 const QDateTime startLocal = start.toLocalTime();
                 const QDateTime endLocal = end.toLocalTime();
+                auto sdkChannel = [&](int logical) {
+                    if (info.byChanNum == 0 && info.byIPChanNum > 0)
+                        return logical + info.byStartDChan - 1;
+                    if (info.byChanNum > 0 && logical > info.byChanNum)
+                        return info.byStartDChan + (logical - info.byChanNum) - 1;
+                    if (info.byChanNum > 0)
+                        return logical + info.byStartChan - 1;
+                    return logical;
+                };
                 int kept = 0;
-                const int kinds[2] = {human ? 3 : 0, face ? 1 : 0};
-                for (int kindCode : kinds) {
-                if (kindCode == 0)
-                    continue;
+                // Human pictures are the human-recognition captures (file type 0x2f). The behaviour
+                // search on this recorder is vehicle pictures, so it is not used for Human.
+                int humanKept = 0;
+                if (human && !narrowEvents) {
+                    for (const QVariant &item : channels) {
+                        if (humanKept >= 100)
+                            break;
+                        const int logical = item.toMap().value(QStringLiteral("channelId")).toInt();
+                        if (logical <= 0)
+                            continue;
+                        NET_DVR_FIND_PICTURE_PARAM para;
+                        std::memset(&para, 0, sizeof(para));
+                        para.dwSize = sizeof(para);
+                        para.lChannel = sdkChannel(logical);
+                        para.byFileType = 0x2f;
+                        para.struStartTime.dwYear = static_cast<DWORD>(startLocal.date().year());
+                        para.struStartTime.dwMonth = static_cast<DWORD>(startLocal.date().month());
+                        para.struStartTime.dwDay = static_cast<DWORD>(startLocal.date().day());
+                        para.struStartTime.dwHour = static_cast<DWORD>(startLocal.time().hour());
+                        para.struStartTime.dwMinute = static_cast<DWORD>(startLocal.time().minute());
+                        para.struStartTime.dwSecond = static_cast<DWORD>(startLocal.time().second());
+                        para.struStopTime.dwYear = static_cast<DWORD>(endLocal.date().year());
+                        para.struStopTime.dwMonth = static_cast<DWORD>(endLocal.date().month());
+                        para.struStopTime.dwDay = static_cast<DWORD>(endLocal.date().day());
+                        para.struStopTime.dwHour = static_cast<DWORD>(endLocal.time().hour());
+                        para.struStopTime.dwMinute = static_cast<DWORD>(endLocal.time().minute());
+                        para.struStopTime.dwSecond = static_cast<DWORD>(endLocal.time().second());
+                        const LONG find = NET_DVR_FindPicture(userId, &para);
+                        if (find < 0) {
+                            if (NET_DVR_GetLastError() == NET_DVR_NOSUPPORT)
+                                sawUnsupported = true;
+                            continue;
+                        }
+                        sawSupport = true;
+                        int guard = 0;
+                        while (guard++ < 200 && humanKept < 100) {
+                            NET_DVR_FIND_PICTURE_V40 ret;
+                            std::memset(&ret, 0, sizeof(ret));
+                            const LONG state = NET_DVR_FindNextPicture_V40(find, &ret);
+                            if (state == NET_DVR_ISFINDING)
+                                continue;
+                            if (state != NET_DVR_FILE_SUCCESS)
+                                break;
+                            if (ret.byFileType != 0 && ret.byFileType != 0x2f)
+                                continue;
+                            if (ret.dwFileSize == 0 || ret.dwFileSize > 8 * 1024 * 1024)
+                                continue;
+                            QByteArray jpeg(int(ret.dwFileSize) + 64, 0);
+                            DWORD got = 0;
+                            if (!NET_DVR_GetPicture_V30(userId, ret.sFileName, jpeg.data(), DWORD(jpeg.size()), &got) || got < 32)
+                                continue;
+                            jpeg.truncate(int(got));
+                            const QString path = saveSmartCrop(jpeg, 0, 0, 0, 0, dirPath, 6000 + humanKept);
+                            const QDateTime when(QDate(int(ret.struTime.dwYear), int(ret.struTime.dwMonth), int(ret.struTime.dwDay)),
+                                                 QTime(int(ret.struTime.dwHour), int(ret.struTime.dwMinute), int(ret.struTime.dwSecond)),
+                                                 Qt::LocalTime);
+                            addHit(path, when, QStringLiteral("human"), logical, QString());
+                            ++humanKept;
+                        }
+                        NET_DVR_CloseFindPicture(find);
+                    }
+                }
+                if (face && !narrowEvents) {
                 for (const QVariant &item : channels) {
                     if (kept >= 40)
                         break;
                     const int logical = item.toMap().value(QStringLiteral("channelId")).toInt();
                     if (logical <= 0)
                         continue;
-                    int channel = logical;
-                    if (info.byChanNum == 0 && info.byIPChanNum > 0)
-                        channel = logical + info.byStartDChan - 1;
-                    else if (info.byChanNum > 0 && logical > info.byChanNum)
-                        channel = info.byStartDChan + (logical - info.byChanNum) - 1;
-                    else if (info.byChanNum > 0)
-                        channel = logical + info.byStartChan - 1;
+                    const int channel = sdkChannel(logical);
 
                     NET_DVR_SMART_SEARCH_PIC_PARA para;
                     std::memset(&para, 0, sizeof(para));
                     para.dwChanNo = static_cast<DWORD>(channel);
-                    // Behaviour search filtered to a person. This recorder stores people here;
-                    // the vehicle search does not return them, and the face-attribute search is empty.
-                    para.wSearchType = static_cast<WORD>(kindCode);
-                    if (kindCode == 3)
-                        para.uSmartSearchCond.struBehaviourCond.byHumanMisinfo = 1;
+                    para.wSearchType = 1;
                     para.struStartTime.wYear = static_cast<WORD>(startLocal.date().year());
                     para.struStartTime.byMonth = static_cast<BYTE>(startLocal.date().month());
                     para.struStartTime.byDay = static_cast<BYTE>(startLocal.date().day());
@@ -792,7 +981,7 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
                     }
                     sawSupport = true;
                     int guard = 0;
-                    while (guard++ < 40 && kept < 40) {
+                    while (guard++ < 80 && kept < 40) {
                         NET_DVR_SMART_SEARCH_PIC_RET ret;
                         std::memset(&ret, 0, sizeof(ret));
                         const LONG state = NET_DVR_FindNextSmartPicture(find, &ret);
@@ -800,8 +989,6 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
                             continue;
                         if (state != NET_DVR_FILE_SUCCESS)
                             break;
-                        const bool person = kindCode == 3;
-                        const QString kind = person ? QStringLiteral("human") : QStringLiteral("face");
                         if (ret.dwFileSize == 0 || ret.dwFileSize > 8 * 1024 * 1024)
                             continue;
                         QByteArray jpeg(int(ret.dwFileSize) + 64, 0);
@@ -809,18 +996,12 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
                         if (!NET_DVR_GetPicture_V30(userId, ret.sFileName, jpeg.data(), DWORD(jpeg.size()), &got) || got < 32)
                             continue;
                         jpeg.truncate(int(got));
-                        double cropX = 0, cropY = 0, cropW = 0, cropH = 0;
-                        const NET_VCA_RECT rect = person ? ret.uPicFeature.struBehavior.struVcaRect
-                                                        : ret.uPicFeature.struFaceSubInfo.struVcaRect;
-                        cropX = rect.fX;
-                        cropY = rect.fY;
-                        cropW = rect.fWidth;
-                        cropH = rect.fHeight;
-                        const QString path = saveSmartCrop(jpeg, cropX, cropY, cropW, cropH, dirPath, 1000 + hits.size());
+                        const NET_VCA_RECT rect = ret.uPicFeature.struFaceSubInfo.struVcaRect;
+                        const QString path = saveSmartCrop(jpeg, rect.fX, rect.fY, rect.fWidth, rect.fHeight, dirPath, 1000 + hits.size());
                         QDateTime when(QDate(ret.struTime.wYear, ret.struTime.byMonth, ret.struTime.byDay),
                                        QTime(ret.struTime.byHour, ret.struTime.byMinute, ret.struTime.bySecond),
                                        Qt::LocalTime);
-                        addHit(path, when, kind, logical, QString());
+                        addHit(path, when, QStringLiteral("face"), logical, QString());
                         ++kept;
                     }
                     NET_DVR_CloseSmartSearchPicture(find);
@@ -829,7 +1010,11 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
             }
         }
 
-        if (hits.isEmpty() && !sawSupport && sawUnsupported) {
+        // The event-recording list is for a camera on its own card. A camera on a recorder keeps
+        // the recorder's own picture search, so one channel of that recorder does not get this note.
+        const int recorderCameras = recorderInfo.value(QStringLiteral("cameras")).toList().size();
+        const bool ownCamera = recorderCameras > 0 && recorderCameras <= 2;
+        if (hits.isEmpty() && !sawSupport && sawUnsupported && ownCamera) {
             const QString windowStart = start.toOffsetFromUtc(start.offsetFromUtc()).toString(Qt::ISODate);
             const QString windowEnd = end.toOffsetFromUtc(end.offsetFromUtc()).toString(Qt::ISODate);
             for (const QVariant &item : channels) {
@@ -902,7 +1087,16 @@ void HikvisionISAPI::searchSmartTargets(const QVariantMap &recorderInfo, const Q
             else
                 note = QStringLiteral("Smart-search pictures are not stored on this camera. %1 event recordings. Click one to play from that time. KVision's Detection events may have the properly tagged event for the video timestamp.").arg(hits.size());
         } else if (note.isEmpty()) {
-            if (hits.isEmpty())
+            int humans = 0;
+            for (const QVariant &hit : hits) {
+                if (hit.toMap().value(QStringLiteral("kind")).toString() == QLatin1String("human"))
+                    ++humans;
+            }
+            if (human && humans == 0)
+                note = hits.isEmpty()
+                    ? QStringLiteral("No human pictures for this day.")
+                    : QStringLiteral("No human pictures for this day. %1 other pictures are listed.").arg(hits.size());
+            else if (hits.isEmpty())
                 note = QStringLiteral("No pictures for this day.");
             else
                 note = QStringLiteral("%1 pictures. Click one to play from that time.").arg(hits.size());
