@@ -326,81 +326,20 @@ ColumnLayout {
         }
     }
 
-    function safeDecode(text) {
-        try {
-            return decodeURIComponent(text);
-        } catch (e) {
-            return text;
+    function streamTypeLabel(url) {
+        var scheme = Utils.streamScheme(url);
+        if (scheme === "rtsp")
+            return qsTr("RTSP stream");
+        if (scheme === "http")
+            return qsTr("HTTP stream");
+        if (scheme === "https") {
+            var path = String(url).split("#")[0].split("?")[0].toLowerCase();
+            return path.indexOf(".m3u8") !== -1 ? qsTr("HLS stream") : qsTr("HTTPS stream");
         }
+        return qsTr("Saved stream");
     }
 
-    // Split user and password at the last @, then encode them so a password with @, # or % survives.
-    // Returns { url, host } or null. The address is not opened.
-    function encodeRtspUrl(raw) {
-        var s = String(raw).trim();
-        if (s.indexOf("rtsp://") !== 0)
-            return null;
-        var rest = s.substring(7);
-        var slash = rest.indexOf("/");
-        var main = slash === -1 ? rest : rest.substring(0, slash);
-        var path = slash === -1 ? "" : rest.substring(slash);
-        var at = main.lastIndexOf("@");
-        var hostport = main;
-        var user = "";
-        var pass = "";
-        if (at !== -1) {
-            var creds = main.substring(0, at);
-            hostport = main.substring(at + 1);
-            var colon = creds.indexOf(":");
-            if (colon !== -1) {
-                user = safeDecode(creds.substring(0, colon));
-                pass = safeDecode(creds.substring(colon + 1));
-            } else {
-                user = safeDecode(creds);
-            }
-        }
-        var host = hostport.split(":")[0];
-        if (host.length === 0)
-            return null;
-        var credsOut = "";
-        if (user.length > 0 || pass.length > 0) {
-            credsOut = encodeURIComponent(user);
-            if (pass.length > 0)
-                credsOut += ":" + encodeURIComponent(pass);
-            credsOut += "@";
-        }
-        return { url: "rtsp://" + credsOut + hostport + path, host: host };
-    }
-
-    // The form shows the password decoded. Saving encodes it again.
-    function decodeRtspForEdit(stored) {
-        var parsed = encodeRtspUrl(stored);
-        if (!parsed)
-            return String(stored || "");
-        var s = String(stored);
-        var rest = s.substring(7);
-        var slash = rest.indexOf("/");
-        var main = slash === -1 ? rest : rest.substring(0, slash);
-        var path = slash === -1 ? "" : rest.substring(slash);
-        var at = main.lastIndexOf("@");
-        if (at === -1)
-            return s;
-        var creds = main.substring(0, at);
-        var hostport = main.substring(at + 1);
-        var colon = creds.indexOf(":");
-        var user = colon === -1 ? safeDecode(creds) : safeDecode(creds.substring(0, colon));
-        var pass = colon === -1 ? "" : safeDecode(creds.substring(colon + 1));
-        var shown = "rtsp://";
-        if (user.length > 0 || pass.length > 0) {
-            shown += user;
-            if (pass.length > 0)
-                shown += ":" + pass;
-            shown += "@";
-        }
-        return shown + hostport + path;
-    }
-
-    function rewriteRtspTiles(oldUrl, newUrl) {
+    function rewriteStreamTiles(oldUrl, newUrl) {
         if (!oldUrl || oldUrl === newUrl || typeof layoutsCollectionModel === "undefined")
             return;
         for (var j = 0; j < layoutsCollectionModel.count; ++j) {
@@ -419,12 +358,12 @@ ColumnLayout {
         }
     }
 
-    function openRtspDialog(index) {
+    function openStreamDialog(index) {
         rtspDialog.editingIndex = index;
         rtspDialog.errorText = "";
         if (index >= 0 && index < recorders.length && recorders[index].kind === "rtsp") {
             rtspNameField.text = recorders[index].name || "";
-            rtspUrlField.text = decodeRtspForEdit(recorders[index].streamUrl || "");
+            rtspUrlField.text = Utils.decodeStreamForEdit(recorders[index].streamUrl || "");
             rtspDescField.text = recorders[index].description || "";
         } else {
             rtspDialog.editingIndex = -1;
@@ -435,11 +374,11 @@ ColumnLayout {
         rtspDialog.open();
     }
 
-    function saveRtspStream() {
+    function saveStream() {
         var name = rtspNameField.text.trim();
-        var parsed = encodeRtspUrl(rtspUrlField.text);
+        var parsed = Utils.encodeStreamUrl(rtspUrlField.text);
         if (name.length === 0 || !parsed) {
-            rtspDialog.errorText = qsTr("Enter a name and an rtsp:// address with a host.");
+            rtspDialog.errorText = qsTr("Enter a name and an rtsp://, http:// or https:// address with a host.");
             return;
         }
         var arr = recorders.slice();
@@ -456,6 +395,7 @@ ColumnLayout {
             }
         }
         var entry = {
+            // Legacy storage tag for every saved network stream, including HTTP and HTTPS.
             kind: "rtsp",
             name: name,
             description: rtspDescField.text.trim(),
@@ -465,7 +405,7 @@ ColumnLayout {
         };
         if (editAt >= 0 && editAt < arr.length) {
             arr[editAt] = entry;
-            rewriteRtspTiles(oldUrl, parsed.url);
+            rewriteStreamTiles(oldUrl, parsed.url);
         } else {
             arr.push(entry);
         }
@@ -505,11 +445,11 @@ ColumnLayout {
                 // Same look as the Connect and Cancel buttons below: orange to start, grey to stop.
                 Button {
                     id: rtspAddBtn
-                    text: qsTr("Add RTSP Stream")
+                    text: qsTr("Add Stream")
                     implicitWidth: 148
                     implicitHeight: 30
                     focusPolicy: Qt.NoFocus
-                    onClicked: rootPanel.openRtspDialog(-1)
+                    onClicked: rootPanel.openStreamDialog(-1)
 
                     contentItem: Text {
                         text: rtspAddBtn.text
@@ -1073,7 +1013,7 @@ ColumnLayout {
                         }
                         Text {
                             text: modelData.kind === "rtsp"
-                                  ? (modelData.description ? modelData.description : qsTr("RTSP stream"))
+                                  ? (modelData.description ? modelData.description : rootPanel.streamTypeLabel(modelData.streamUrl))
                                   : qsTr("LNG_00086").arg(modelData.cameras ? modelData.cameras.length : 0)
                             color: "#8898a6"
                             font.pixelSize: 9
@@ -1260,7 +1200,7 @@ ColumnLayout {
 
                         onClicked: {
                             if (modelData.kind === "rtsp") {
-                                rootPanel.openRtspDialog(index);
+                                rootPanel.openStreamDialog(index);
                                 return;
                             }
                             // Populate input fields for editing
@@ -1374,7 +1314,7 @@ ColumnLayout {
 
     Dialog {
         id: rtspDialog
-        title: editingIndex >= 0 ? qsTr("Edit RTSP stream") : qsTr("Add RTSP Stream")
+        title: editingIndex >= 0 ? qsTr("Edit stream") : qsTr("Add Stream")
         modal: true
         anchors.centerIn: parent
         width: 440
@@ -1431,14 +1371,14 @@ ColumnLayout {
                 }
             }
 
-            Label { text: qsTr("RTSP URL"); color: "#8898a6"; font.pixelSize: 11 }
+            Label { text: qsTr("Stream URL"); color: "#8898a6"; font.pixelSize: 11 }
             TextField {
                 id: rtspUrlField
                 selectByMouse: true
                 Layout.fillWidth: true
                 color: "white"
                 font.pixelSize: 12
-                placeholderText: "rtsp://192.168.1.50:554/stream1"
+                placeholderText: "rtsp://... or https://.../playlist.m3u8"
                 background: Rectangle {
                     color: "#0f151b"
                     radius: 4
@@ -1492,7 +1432,7 @@ ColumnLayout {
                 Button {
                     text: qsTr("Save")
                     implicitWidth: 80
-                    onClicked: rootPanel.saveRtspStream()
+                    onClicked: rootPanel.saveStream()
                     contentItem: Text {
                         text: parent.text
                         font.bold: true

@@ -4,8 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+* **Detection events loads 25 entries at a time.** The window opens with the newest 25 matching entries, and **Load 25 more** adds the next 25 older entries.
+
 ### Added
-* **Add RTSP Stream.** Settings > Recorders has an **Add RTSP Stream** button. A name, an `rtsp://` address and an optional description are saved with the other recorders as a one-channel camera. It appears in Add camera and Replace camera, and the tile plays that address with the existing player. The address is kept across a restart and an import or export. A password with `@`, `#` or `%` is encoded. The address is not written to the log. Edit and delete use the same card as a recorder. An address that does not answer is not contacted at startup, so it cannot stop KVision from opening. PTZ, detection, playback and smart search stay on Hikvision cameras.
+* **Add Stream.** Settings > Recorders has an **Add Stream** button. A name, an `rtsp://`, `http://` or `https://` address and an optional description are saved with the other recorders as a one-channel camera. This includes HTTP Live Streaming (HLS) `.m3u8` playlists, which play through the existing FFmpeg player. The entry appears in Add camera and Replace camera, and the address is kept across a restart and an import or export. A password with `@`, `#` or `%` is encoded. The address is not written to the log. Edit and delete use the same card as a recorder. An address that does not answer is not contacted at startup, so it cannot stop KVision from opening. PTZ, detection, playback and smart search stay on Hikvision cameras.
 
 ### Fixed
 * **Closing Camera settings stops an All cameras read.** The read walks every camera one after another. Closing the window now stops it, including the request already in flight, instead of leaving it running through the rest of the list.

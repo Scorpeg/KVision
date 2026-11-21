@@ -6,7 +6,7 @@ import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
 import CCTV_Viewer.Utils 1.0
 
-// A small window that shows the newest entries of the detection log (logs/Detection.log), ten at a
+// A small window that shows the newest entries of the detection log (logs/Detection.log), 25 at a
 // time, with a button to load older ones. Opened from a tile's right-click menu.
 Window {
     id: logWin
@@ -23,7 +23,7 @@ Window {
     // The address of the camera the window was opened from, and its name for the checkbox text.
     property string cameraIp: ""
     property string cameraName: ""
-    readonly property int pageSize: 10
+    readonly property int pageSize: 25
     readonly property int leadInSeconds: 10 // playback starts this long before the logged moment
 
     property var entries: []

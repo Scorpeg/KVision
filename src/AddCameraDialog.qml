@@ -2,6 +2,7 @@ import QtQuick 2.11
 import QtQuick.Controls 2.4
 import QtQuick.Layouts 1.11
 import QtQuick.Window 2.11
+import CCTV_Viewer.Utils 1.0
 
 // Non-modal, always-on-top window (movable by its title bar) so several cameras
 // can be added to a layout in a row without reopening it.
@@ -43,7 +44,7 @@ Window {
             if (!vp || vp.visible !== 0)
                 continue;
             var u = String(vp.url);
-            if (u.indexOf("rtsp://") === 0) {
+            if (Utils.isSupportedStreamUrl(u)) {
                 used[u] = (used[u] || 0) + 1;
                 continue;
             }
@@ -82,7 +83,7 @@ Window {
                 continue;
             if (rec.kind === "rtsp") {
                 var stream = String(rec.streamUrl || "");
-                if (stream.indexOf("rtsp://") !== 0)
+                if (!Utils.isSupportedStreamUrl(stream))
                     continue;
                 var desc = rec.description ? String(rec.description) : "";
                 next.push({

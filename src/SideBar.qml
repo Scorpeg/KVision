@@ -250,6 +250,39 @@ FocusScope {
 
     property var changelogData: [
         {
+            version: "v3.8.0",
+            date: "19 Nov 2026",
+            changes: [
+                qsTr("Smart search in playback: search one camera or every camera on a recorder, using detection-event pictures and recorder face search, and open playback at a result."),
+                qsTr("Camera settings now shows H.265+ and H.264+, and Camera Tools can read and set each stream's maximum bitrate."),
+                qsTr("Camera status readings, 3D positioning for PTZ cameras, network device scanning, face detection reports, and more camera Quick tools."),
+                qsTr("Camera clock and firmware checks, with a firmware reference saved for each model."),
+                qsTr("Presets can be reordered, layouts are unified, and archive playback can pause live pictures.")
+            ]
+        },
+        {
+            version: "v3.7.0",
+            date: "14 Nov 2026",
+            changes: [
+                qsTr("Quick tools in the camera right-click menu, including camera rule lines, plus Camera Tools controls for checking and changing rule lines on every camera."),
+                qsTr("MQTT overlay text supports several cameras and topics, with a choice of what happens when KVision closes."),
+                qsTr("Event pictures can be zoomed and panned, and snapshots can save either the full image or the zoomed view."),
+                qsTr("Layout Backup / Restore, automatic daily backups, recovery of deleted layouts, and a way to apply another layout's grid."),
+                qsTr("Per-camera detection report sources, optional unlabelled motion logging, a browser choice, and settings organized into sections.")
+            ]
+        },
+        {
+            version: "v3.6.0",
+            date: "12 Nov 2026",
+            changes: [
+                qsTr("Read-only Camera settings window for one camera or all cameras, covering device, video, image, detection, schedules, storage and users."),
+                qsTr("Camera configuration backup and restore, with safety checks and a fresh backup before restoring."),
+                qsTr("Detection logging can continue after KVision closes through the background detection service."),
+                qsTr("Detection events shows which entries are older than the recorder's available video, and unknown event types are kept in OtherEvents.log."),
+                qsTr("Statistics history and stream counters, plus working CPU and AMD/Intel GPU readings.")
+            ]
+        },
+        {
             version: "v3.5.0",
             date: "12 Nov 2026",
             changes: [

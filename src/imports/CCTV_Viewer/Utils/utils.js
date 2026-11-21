@@ -1,4 +1,95 @@
 // Helpers
+function streamScheme(raw) {
+    var match = String(raw || "").trim().match(/^(rtsp|http|https):\/\//i);
+    return match ? match[1].toLowerCase() : "";
+}
+
+function isSupportedStreamUrl(raw) {
+    return streamScheme(raw) !== "";
+}
+
+function safeStreamUrlDecode(text) {
+    try {
+        return decodeURIComponent(text);
+    } catch (e) {
+        return text;
+    }
+}
+
+// Split user and password at the last @, then encode them so a password with @, # or % survives.
+// The path and query are kept exactly as entered. Returns { url, host, scheme } or null; does not open the address.
+function encodeStreamUrl(raw) {
+    var s = String(raw || "").trim();
+    var scheme = streamScheme(s);
+    if (scheme === "")
+        return null;
+    var rest = s.substring(scheme.length + 3);
+    var slash = rest.indexOf("/");
+    var main = slash === -1 ? rest : rest.substring(0, slash);
+    var path = slash === -1 ? "" : rest.substring(slash);
+    var at = main.lastIndexOf("@");
+    var hostport = main;
+    var user = "";
+    var pass = "";
+    if (at !== -1) {
+        var creds = main.substring(0, at);
+        hostport = main.substring(at + 1);
+        var colon = creds.indexOf(":");
+        if (colon !== -1) {
+            user = safeStreamUrlDecode(creds.substring(0, colon));
+            pass = safeStreamUrlDecode(creds.substring(colon + 1));
+        } else {
+            user = safeStreamUrlDecode(creds);
+        }
+    }
+    var host = "";
+    if (hostport.charAt(0) === "[") {
+        var closeBracket = hostport.indexOf("]");
+        if (closeBracket > 1)
+            host = hostport.substring(1, closeBracket);
+    } else {
+        host = hostport.split(":")[0];
+    }
+    if (host.length === 0)
+        return null;
+    var credsOut = "";
+    if (user.length > 0 || pass.length > 0) {
+        credsOut = encodeURIComponent(user);
+        if (pass.length > 0)
+            credsOut += ":" + encodeURIComponent(pass);
+        credsOut += "@";
+    }
+    return { url: scheme + "://" + credsOut + hostport + path, host: host, scheme: scheme };
+}
+
+// The form shows the password decoded. Saving encodes it again and preserves the detected scheme.
+function decodeStreamForEdit(stored) {
+    var parsed = encodeStreamUrl(stored);
+    if (!parsed)
+        return String(stored || "");
+    var s = String(stored).trim();
+    var rest = s.substring(parsed.scheme.length + 3);
+    var slash = rest.indexOf("/");
+    var main = slash === -1 ? rest : rest.substring(0, slash);
+    var path = slash === -1 ? "" : rest.substring(slash);
+    var at = main.lastIndexOf("@");
+    if (at === -1)
+        return s;
+    var creds = main.substring(0, at);
+    var hostport = main.substring(at + 1);
+    var colon = creds.indexOf(":");
+    var user = colon === -1 ? safeStreamUrlDecode(creds) : safeStreamUrlDecode(creds.substring(0, colon));
+    var pass = colon === -1 ? "" : safeStreamUrlDecode(creds.substring(colon + 1));
+    var shown = parsed.scheme + "://";
+    if (user.length > 0 || pass.length > 0) {
+        shown += user;
+        if (pass.length > 0)
+            shown += ":" + pass;
+        shown += "@";
+    }
+    return shown + hostport + path;
+}
+
 function currentModel() {
     var win = rootWindow.activeLayoutWindow ? rootWindow.activeLayoutWindow : rootWindow;
     return layoutsCollectionModel.get(win.layoutIndex);
