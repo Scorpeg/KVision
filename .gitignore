@@ -75,3 +75,7 @@ headless_app.log
 /packaging/arch/pkg/
 /packaging/arch/src/
 install.log
+
+# Local development notes; keep these out of the remote repository.
+/docs/TODO.md
+/docs/AUDIT-*.md
