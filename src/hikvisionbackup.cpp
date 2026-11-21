@@ -919,6 +919,8 @@ void HikvisionBackup::startLoad(const QByteArray &json, const QString &configPat
         const QJsonArray list = QJsonDocument::fromJson(json).array();
         for (const QJsonValue &rv : list) {
             const QJsonObject rec = rv.toObject();
+            if (rec.value(QStringLiteral("kind")).toString() == QLatin1String("rtsp"))
+                continue; // a pasted stream has no Hikvision login
             const QString recIp = hostOf(rec.value(QStringLiteral("ip")).toString());
             const QString recUser = rec.value(QStringLiteral("username")).toString();
             const QString recPass = rec.value(QStringLiteral("password")).toString();

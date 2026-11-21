@@ -61,6 +61,8 @@ ColumnLayout {
         // Make sure each added recorder's camera list is known before the answers arrive
         for (var r = 0; r < recorders.length; ++r) {
             var rec = recorders[r];
+            if (rec && rec.kind === "rtsp")
+                continue;
             if (rec && rec.ip && rec.username && rec.password)
                 HikvisionManager.prefetchProxyChannels(rec.ip, rec.httpPort || 80, rec.username, rec.password);
         }
@@ -324,6 +326,154 @@ ColumnLayout {
         }
     }
 
+    function safeDecode(text) {
+        try {
+            return decodeURIComponent(text);
+        } catch (e) {
+            return text;
+        }
+    }
+
+    // Split user and password at the last @, then encode them so a password with @, # or % survives.
+    // Returns { url, host } or null. The address is not opened.
+    function encodeRtspUrl(raw) {
+        var s = String(raw).trim();
+        if (s.indexOf("rtsp://") !== 0)
+            return null;
+        var rest = s.substring(7);
+        var slash = rest.indexOf("/");
+        var main = slash === -1 ? rest : rest.substring(0, slash);
+        var path = slash === -1 ? "" : rest.substring(slash);
+        var at = main.lastIndexOf("@");
+        var hostport = main;
+        var user = "";
+        var pass = "";
+        if (at !== -1) {
+            var creds = main.substring(0, at);
+            hostport = main.substring(at + 1);
+            var colon = creds.indexOf(":");
+            if (colon !== -1) {
+                user = safeDecode(creds.substring(0, colon));
+                pass = safeDecode(creds.substring(colon + 1));
+            } else {
+                user = safeDecode(creds);
+            }
+        }
+        var host = hostport.split(":")[0];
+        if (host.length === 0)
+            return null;
+        var credsOut = "";
+        if (user.length > 0 || pass.length > 0) {
+            credsOut = encodeURIComponent(user);
+            if (pass.length > 0)
+                credsOut += ":" + encodeURIComponent(pass);
+            credsOut += "@";
+        }
+        return { url: "rtsp://" + credsOut + hostport + path, host: host };
+    }
+
+    // The form shows the password decoded. Saving encodes it again.
+    function decodeRtspForEdit(stored) {
+        var parsed = encodeRtspUrl(stored);
+        if (!parsed)
+            return String(stored || "");
+        var s = String(stored);
+        var rest = s.substring(7);
+        var slash = rest.indexOf("/");
+        var main = slash === -1 ? rest : rest.substring(0, slash);
+        var path = slash === -1 ? "" : rest.substring(slash);
+        var at = main.lastIndexOf("@");
+        if (at === -1)
+            return s;
+        var creds = main.substring(0, at);
+        var hostport = main.substring(at + 1);
+        var colon = creds.indexOf(":");
+        var user = colon === -1 ? safeDecode(creds) : safeDecode(creds.substring(0, colon));
+        var pass = colon === -1 ? "" : safeDecode(creds.substring(colon + 1));
+        var shown = "rtsp://";
+        if (user.length > 0 || pass.length > 0) {
+            shown += user;
+            if (pass.length > 0)
+                shown += ":" + pass;
+            shown += "@";
+        }
+        return shown + hostport + path;
+    }
+
+    function rewriteRtspTiles(oldUrl, newUrl) {
+        if (!oldUrl || oldUrl === newUrl || typeof layoutsCollectionModel === "undefined")
+            return;
+        for (var j = 0; j < layoutsCollectionModel.count; ++j) {
+            var l = layoutsCollectionModel.get(j);
+            if (!l)
+                continue;
+            for (var k = 0; k < l.count; ++k) {
+                var vp = l.get(k);
+                if (!vp)
+                    continue;
+                if (vp.url === oldUrl)
+                    vp.url = newUrl;
+                if (vp.secondaryUrl === oldUrl)
+                    vp.secondaryUrl = newUrl;
+            }
+        }
+    }
+
+    function openRtspDialog(index) {
+        rtspDialog.editingIndex = index;
+        rtspDialog.errorText = "";
+        if (index >= 0 && index < recorders.length && recorders[index].kind === "rtsp") {
+            rtspNameField.text = recorders[index].name || "";
+            rtspUrlField.text = decodeRtspForEdit(recorders[index].streamUrl || "");
+            rtspDescField.text = recorders[index].description || "";
+        } else {
+            rtspDialog.editingIndex = -1;
+            rtspNameField.text = "";
+            rtspUrlField.text = "";
+            rtspDescField.text = "";
+        }
+        rtspDialog.open();
+    }
+
+    function saveRtspStream() {
+        var name = rtspNameField.text.trim();
+        var parsed = encodeRtspUrl(rtspUrlField.text);
+        if (name.length === 0 || !parsed) {
+            rtspDialog.errorText = qsTr("Enter a name and an rtsp:// address with a host.");
+            return;
+        }
+        var arr = recorders.slice();
+        var editAt = rtspDialog.editingIndex;
+        var oldUrl = "";
+        if (editAt >= 0 && editAt < arr.length)
+            oldUrl = arr[editAt].streamUrl || "";
+        for (var i = 0; i < arr.length; ++i) {
+            if (i === editAt)
+                continue;
+            if (arr[i] && arr[i].streamUrl === parsed.url) {
+                rtspDialog.errorText = qsTr("That stream is already saved.");
+                return;
+            }
+        }
+        var entry = {
+            kind: "rtsp",
+            name: name,
+            description: rtspDescField.text.trim(),
+            streamUrl: parsed.url,
+            ip: parsed.host,
+            cameras: [{ channelId: 1, name: name, customName: name }]
+        };
+        if (editAt >= 0 && editAt < arr.length) {
+            arr[editAt] = entry;
+            rewriteRtspTiles(oldUrl, parsed.url);
+        } else {
+            arr.push(entry);
+        }
+        recorders = arr;
+        saveRecorders();
+        rtspDialog.close();
+    }
+
     Text {
         text: qsTr("LNG_00098")
         color: "white"
@@ -353,6 +503,30 @@ ColumnLayout {
                 spacing: 8
 
                 // Same look as the Connect and Cancel buttons below: orange to start, grey to stop.
+                Button {
+                    id: rtspAddBtn
+                    text: qsTr("Add RTSP Stream")
+                    implicitWidth: 148
+                    implicitHeight: 30
+                    focusPolicy: Qt.NoFocus
+                    onClicked: rootPanel.openRtspDialog(-1)
+
+                    contentItem: Text {
+                        text: rtspAddBtn.text
+                        font.bold: true
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: 10
+                        rightPadding: 10
+                    }
+
+                    background: Rectangle {
+                        radius: 4
+                        color: rtspAddBtn.pressed ? "#d66600" : (rtspAddBtn.hovered ? "#ff8c00" : "#ff7a00")
+                    }
+                }
+
                 Button {
                     id: scanBtn
                     text: HikvisionProbe.scanning ? qsTr("LNG_00592") : qsTr("LNG_00591")
@@ -898,7 +1072,9 @@ ColumnLayout {
                             Layout.fillWidth: true
                         }
                         Text {
-                            text: qsTr("LNG_00086").arg(modelData.cameras ? modelData.cameras.length : 0)
+                            text: modelData.kind === "rtsp"
+                                  ? (modelData.description ? modelData.description : qsTr("RTSP stream"))
+                                  : qsTr("LNG_00086").arg(modelData.cameras ? modelData.cameras.length : 0)
                             color: "#8898a6"
                             font.pixelSize: 9
                             elide: Text.ElideRight
@@ -908,6 +1084,7 @@ ColumnLayout {
 
                     MouseArea {
                         id: statusArea
+                        visible: modelData.kind !== "rtsp"
                         Layout.alignment: Qt.AlignVCenter
                         Layout.rightMargin: 4
                         Layout.preferredWidth: 100
@@ -946,6 +1123,7 @@ ColumnLayout {
 
                     Button {
                         id: webBtn
+                        visible: modelData.kind !== "rtsp"
                         hoverEnabled: true
                         implicitWidth: 30
                         implicitHeight: 30
@@ -984,6 +1162,7 @@ ColumnLayout {
 
                     Button {
                         id: gridBtn
+                        visible: modelData.kind !== "rtsp"
                         hoverEnabled: true
                         implicitWidth: 30
                         implicitHeight: 30
@@ -1018,6 +1197,7 @@ ColumnLayout {
 
                     Button {
                         id: listBtn
+                        visible: modelData.kind !== "rtsp"
                         hoverEnabled: true
                         implicitWidth: 30
                         implicitHeight: 30
@@ -1079,6 +1259,10 @@ ColumnLayout {
                         }
 
                         onClicked: {
+                            if (modelData.kind === "rtsp") {
+                                rootPanel.openRtspDialog(index);
+                                return;
+                            }
                             // Populate input fields for editing
                             nameField.text = modelData.name || "";
                             ipField.text = modelData.ip;
@@ -1134,6 +1318,7 @@ ColumnLayout {
                         onClicked: {
                             deleteConfirmDialog1.targetIndex = index;
                             deleteConfirmDialog1.targetIp = modelData.ip;
+                            deleteConfirmDialog1.targetIsRtsp = modelData.kind === "rtsp";
                             deleteConfirmDialog1.open();
                         }
 
@@ -1154,10 +1339,12 @@ ColumnLayout {
         message: qsTr("LNG_00077")
         property int targetIndex: -1
         property string targetIp: ""
+        property bool targetIsRtsp: false
         
         onAccepted: {
             deleteConfirmDialog2.targetIndex = targetIndex;
             deleteConfirmDialog2.targetIp = targetIp;
+            deleteConfirmDialog2.targetIsRtsp = targetIsRtsp;
             deleteConfirmDialog2.open();
         }
     }
@@ -1169,16 +1356,155 @@ ColumnLayout {
         message: qsTr("LNG_00075")
         property int targetIndex: -1
         property string targetIp: ""
+        property bool targetIsRtsp: false
         
         onAccepted: {
             if (targetIndex >= 0 && targetIndex < rootPanel.recorders.length) {
-                HikvisionManager.logout(targetIp);
+                if (!targetIsRtsp)
+                    HikvisionManager.logout(targetIp);
                 
                 // Remove from active recorders list
                 var arr = rootPanel.recorders.slice();
                 arr.splice(targetIndex, 1);
                 rootPanel.recorders = arr;
                 rootPanel.saveRecorders();
+            }
+        }
+    }
+
+    Dialog {
+        id: rtspDialog
+        title: editingIndex >= 0 ? qsTr("Edit RTSP stream") : qsTr("Add RTSP Stream")
+        modal: true
+        anchors.centerIn: parent
+        width: 440
+        leftPadding: 16
+        rightPadding: 16
+        topPadding: 16
+        bottomPadding: 16
+        property int editingIndex: -1
+        property string errorText: ""
+
+        background: Rectangle {
+            color: "#1c242c"
+            border.color: "#2a3540"
+            border.width: 1
+            radius: 8
+        }
+
+        header: Rectangle {
+            color: "#0f151b"
+            height: 42
+            radius: 8
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 4
+                color: "#0f151b"
+            }
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                text: rtspDialog.title
+                color: "#00f5d4"
+                font.bold: true
+                font.pixelSize: 13
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label { text: qsTr("Camera name"); color: "#8898a6"; font.pixelSize: 11 }
+            TextField {
+                id: rtspNameField
+                selectByMouse: true
+                Layout.fillWidth: true
+                color: "white"
+                font.pixelSize: 12
+                placeholderText: qsTr("Workshop")
+                background: Rectangle {
+                    color: "#0f151b"
+                    radius: 4
+                    border.color: rtspNameField.activeFocus ? "#ff7a00" : "#2a3540"
+                }
+            }
+
+            Label { text: qsTr("RTSP URL"); color: "#8898a6"; font.pixelSize: 11 }
+            TextField {
+                id: rtspUrlField
+                selectByMouse: true
+                Layout.fillWidth: true
+                color: "white"
+                font.pixelSize: 12
+                placeholderText: "rtsp://192.168.1.50:554/stream1"
+                background: Rectangle {
+                    color: "#0f151b"
+                    radius: 4
+                    border.color: rtspUrlField.activeFocus ? "#ff7a00" : "#2a3540"
+                }
+            }
+
+            Label { text: qsTr("Description (optional)"); color: "#8898a6"; font.pixelSize: 11 }
+            TextField {
+                id: rtspDescField
+                selectByMouse: true
+                Layout.fillWidth: true
+                color: "white"
+                font.pixelSize: 12
+                background: Rectangle {
+                    color: "#0f151b"
+                    radius: 4
+                    border.color: rtspDescField.activeFocus ? "#ff7a00" : "#2a3540"
+                }
+            }
+
+            Text {
+                text: rtspDialog.errorText
+                visible: text.length > 0
+                color: "#ff3333"
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("LNG_00059")
+                    implicitWidth: 80
+                    onClicked: rtspDialog.close()
+                    contentItem: Text {
+                        text: parent.text
+                        font.bold: true
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.pressed ? "#404040" : (parent.hovered ? "#505050" : "#303030")
+                        radius: 4
+                    }
+                }
+                Button {
+                    text: qsTr("Save")
+                    implicitWidth: 80
+                    onClicked: rootPanel.saveRtspStream()
+                    contentItem: Text {
+                        text: parent.text
+                        font.bold: true
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: parent.pressed ? "#d66600" : (parent.hovered ? "#ff8c00" : "#ff7a00")
+                        radius: 4
+                    }
+                }
             }
         }
     }

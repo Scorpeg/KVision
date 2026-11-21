@@ -32,6 +32,8 @@ public:
     // Reads every camera in the list one after the other and emits overviewRead(rows) once, where each row is
     // {name, ip, audio, light, motion, intrusion, line, model, firmware, error}. Used for the all-cameras table.
     Q_INVOKABLE void readOverview();
+    // Stops a read that is still walking the camera list. The request already in flight is cut off too.
+    Q_INVOKABLE void cancelReads();
     // The same data as plain text, for copying.
     Q_INVOKABLE QString sectionsToText(const QVariantList &sections) const;
     // The all-cameras table as text: a header line, then one line per camera, columns separated by tabs so it pastes
@@ -61,6 +63,13 @@ public:
         QList<int> channels;
         QMap<int, QString> chanNames;     // this camera's own channels
         QMap<int, QString> recChanNames;  // every channel of the recorder, to name the cameras that link to it
+        // One entry per lens. local is the camera's own input (1, or 2 for the second lens).
+        struct Lens {
+            int local = 1;
+            int nvrChannel = 0;
+            QString name;
+        };
+        QList<Lens> lenses;
     };
 
 private:

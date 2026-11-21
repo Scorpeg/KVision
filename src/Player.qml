@@ -613,7 +613,7 @@ FocusScope {
             }
             newUrl = "rtsp://" + creds + targetIp + ":" + targetRtspPort + "/Streaming/Channels/" + streamId;
             newCameraId = targetIp + "_" + targetChannel + "_" + streamId;
-            console.log("[Player] Selected stream " + streamIndex + " channel " + channelId + " URL " + newUrl);
+            console.log("[Player] Selected stream " + streamIndex + " channel " + channelId);
         }
 
         if (newUrl === "") {

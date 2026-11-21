@@ -41,6 +41,12 @@ Window {
 
     Component.onCompleted: HikvisionCameraInfo.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName)
 
+    onClosing: {
+        HikvisionCameraInfo.cancelReads();
+        win.overviewDone = 0;
+        win.overviewTotal = 0;
+    }
+
     Connections {
         target: HikvisionCameraInfo
         function onCamerasLoaded(list) {

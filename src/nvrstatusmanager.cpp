@@ -535,6 +535,8 @@ void NvrStatusWorker::run()
 
     for (int i = 0; i < m_recorders.size(); ++i) {
         QJsonObject recorder = m_recorders[i].toObject();
+        if (recorder.value(QStringLiteral("kind")).toString() == QLatin1String("rtsp"))
+            continue; // a pasted stream is not a recorder to log in to
         QString ip = recorder.value("ip").toString();
         int port = recorder.value("port").toInt(8000);
         QString username = recorder.value("username").toString();

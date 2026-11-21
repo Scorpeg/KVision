@@ -357,6 +357,8 @@ ApplicationWindow {
         try {
             var list = JSON.parse(hikvisionSettings.recordersJson);
             for (var i = 0; i < list.length; ++i) {
+                if (list[i].kind === "rtsp")
+                    continue;
                 if (list[i].ip === ip) {
                     if (list[i].name && list[i].name.trim() !== "") {
                         return list[i].name;

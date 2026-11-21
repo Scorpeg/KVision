@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+* **Add RTSP Stream.** Settings > Recorders has an **Add RTSP Stream** button. A name, an `rtsp://` address and an optional description are saved with the other recorders as a one-channel camera. It appears in Add camera and Replace camera, and the tile plays that address with the existing player. The address is kept across a restart and an import or export. A password with `@`, `#` or `%` is encoded. The address is not written to the log. Edit and delete use the same card as a recorder. An address that does not answer is not contacted at startup, so it cannot stop KVision from opening. PTZ, detection, playback and smart search stay on Hikvision cameras.
+
+### Fixed
+* **Closing Camera settings stops an All cameras read.** The read walks every camera one after another. Closing the window now stops it, including the request already in flight, instead of leaving it running through the rest of the list.
+* **Camera settings reads both lenses of a two-lens camera.** A camera that sits on two recorder channels (the close-up and the wide lens) was read as one, and only the first lens was asked. Video, picture and detection are now read once per lens, and each section is named with that lens. In the All cameras table the Motion, Intrusion and Line crossing cells name each lens. Device, time, network, storage and users stay one section.
+
 ## [3.8.0] - 19 Nov 2026
 
 ### Added

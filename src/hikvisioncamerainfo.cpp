@@ -10,9 +10,12 @@
 #include <QMap>
 #include <QMetaObject>
 #include <QProcess>
+#include <atomic>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QThread>
+#include <QVector>
+#include <algorithm>
 
 namespace {
 const char *kLoginGroup = "CameraLogins"; // the same per-camera logins the backup tool keeps
@@ -28,18 +31,35 @@ bool recIsSelf(const QString &camIp, const QString &recIp)
     return camIp == recIp;
 }
 
+// Bumped when a read should stop. Each worker remembers the value from when it started, so a newer
+// read is not cancelled by the stop that ended the previous one.
+std::atomic<int> g_readGen{0};
+thread_local int g_activeGen = 0;
+
+bool readStopped()
+{
+    return g_readGen.load() != g_activeGen;
+}
+
 // GET one ISAPI path with curl. Returns the HTTP status (0 = no connection) and puts the body in *body. A login is
 // sent once; there is no retry here.
 int curlGet(const QString &ip, int port, const QString &user, const QString &pass, const QString &path, QByteArray *body)
 {
+    if (readStopped())
+        return 0;
     QProcess p;
     p.start(QStringLiteral("curl"), {QStringLiteral("-s"), QStringLiteral("-k"), QStringLiteral("--anyauth"), QStringLiteral("-u"),
                                      QStringLiteral("%1:%2").arg(user, pass), QStringLiteral("--max-time"), QStringLiteral("7"),
                                      QStringLiteral("-w"), QStringLiteral("%{http_code}"),
                                      QStringLiteral("http://%1:%2%3").arg(ip).arg(port).arg(path)});
-    if (!p.waitForFinished(12000)) {
-        p.kill();
-        return 0;
+    int waited = 0;
+    while (!p.waitForFinished(200)) {
+        waited += 200;
+        if (readStopped() || waited >= 12000) {
+            p.kill();
+            p.waitForFinished(2000);
+            return 0;
+        }
     }
     const QByteArray out = p.readAllStandardOutput();
     if (body)
@@ -168,6 +188,7 @@ HikvisionCameraInfo::HikvisionCameraInfo(QObject *parent) : QObject(parent) {}
 
 HikvisionCameraInfo::~HikvisionCameraInfo()
 {
+    g_readGen.fetch_add(1);
     for (QThread *t : {m_worker, m_loader}) {
         if (t) {
             t->disconnect(this);
@@ -202,6 +223,8 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
         const QJsonArray list = QJsonDocument::fromJson(json).array();
         for (const QJsonValue &rv : list) {
             const QJsonObject rec = rv.toObject();
+            if (rec.value(QStringLiteral("kind")).toString() == QLatin1String("rtsp"))
+                continue; // a pasted stream has no Hikvision login
             const QString recIp = hostOf(rec.value(QStringLiteral("ip")).toString());
             const QString recUser = rec.value(QStringLiteral("username")).toString();
             const QString recPass = rec.value(QStringLiteral("password")).toString();
@@ -223,13 +246,27 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                     nm = cam.value(QStringLiteral("name")).toString();
                 allNames.insert(ch, nm.isEmpty() ? QStringLiteral("Camera %1").arg(ch) : nm);
             }
-            auto add = [&](const QString &ip, int port, const QString &name, int channel) {
+            auto rememberLens = [&](Cam &c, int local, int nvrChannel, const QString &name) {
+                if (local <= 0)
+                    return;
+                for (const Cam::Lens &have : c.lenses) {
+                    if (have.local == local)
+                        return;
+                }
+                Cam::Lens lens;
+                lens.local = local;
+                lens.nvrChannel = nvrChannel;
+                lens.name = name;
+                c.lenses.append(lens);
+            };
+            auto add = [&](const QString &ip, int port, const QString &name, int channel, int local) {
                 if (ip.isEmpty())
                     return;
                 if (byIp.contains(ip)) { // a camera with two lenses sits on two recorder channels
                     if (channel > 0 && !recIsSelf(ip, recIp)) {
                         byIp[ip].channels << channel;
                         byIp[ip].chanNames.insert(channel, name);
+                        rememberLens(byIp[ip], local, channel, name);
                     }
                     return;
                 }
@@ -244,6 +281,7 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                         c.channels << channel;
                         c.chanNames.insert(channel, name);
                     }
+                    rememberLens(c, local, channel, name);
                 }
                 c.name = name;
                 c.ip = ip;
@@ -259,7 +297,17 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                 byIp.insert(ip, c);
             };
             if (cams.size() <= 2) {
-                add(recIp, http, recName, 0);
+                add(recIp, http, recName, 0, 0);
+                if (byIp.contains(recIp)) {
+                    for (const QJsonValue &cv : cams) {
+                        const QJsonObject cam = cv.toObject();
+                        const int ch = cam.value(QStringLiteral("channelId")).toVariant().toInt();
+                        QString nm = cam.value(QStringLiteral("customName")).toString();
+                        if (nm.isEmpty())
+                            nm = cam.value(QStringLiteral("name")).toString();
+                        rememberLens(byIp[recIp], ch, 0, nm);
+                    }
+                }
                 continue;
             }
             const QHash<int, QVariantMap> proxy = HikvisionManager::fetchProxyChannels(recIp, http, recUser, recPass);
@@ -271,7 +319,9 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                     nm = cam.value(QStringLiteral("name")).toString();
                 if (nm.isEmpty())
                     nm = QStringLiteral("Camera %1").arg(ch);
-                add(proxy.value(ch).value(QStringLiteral("ip")).toString(), 80, QStringLiteral("%1 Ch.%2 %3").arg(recName).arg(ch).arg(nm), ch);
+                const QVariantMap proxyCam = proxy.value(ch);
+                const int local = proxyCam.value(QStringLiteral("channel")).toInt();
+                add(proxyCam.value(QStringLiteral("ip")).toString(), 80, QStringLiteral("%1 Ch.%2 %3").arg(recName).arg(ch).arg(nm), ch, local > 0 ? local : 1);
             }
         }
         const QList<Cam> found = byIp.values();
@@ -294,6 +344,33 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
 
 namespace {
 using Cam = HikvisionCameraInfo::Cam;
+
+struct LensAsk { int local = 1; QString name; };
+
+QVector<LensAsk> lensAsks(const Cam &cam)
+{
+    QVector<LensAsk> out;
+    for (const Cam::Lens &lens : cam.lenses) {
+        if (lens.local <= 0)
+            continue;
+        bool seen = false;
+        for (const LensAsk &have : out)
+            seen = seen || have.local == lens.local;
+        if (!seen)
+            out.append({lens.local, lens.name});
+    }
+    if (out.isEmpty())
+        out.append({1, QString()});
+    std::sort(out.begin(), out.end(), [](const LensAsk &a, const LensAsk &b) { return a.local < b.local; });
+    return out;
+}
+
+QString sectionTitle(const QString &base, const QString &lens, bool many)
+{
+    if (!many || lens.isEmpty())
+        return base;
+    return base + QStringLiteral(" — ") + lens;
+}
 
 bool fetchDoc(const Cam &cam, const QString &path, QByteArray *b, QString *why)
 {
@@ -371,10 +448,10 @@ void deviceSections(const Cam &cam, QVariantList &out, QString *why)
 
 namespace {
 // The "Image Parameters Switch": whether the camera changes its picture scene on a schedule, and which scene applies now.
-void imageSwitchRows(const Cam &cam, QVariantList &rows)
+void imageSwitchRows(const Cam &cam, QVariantList &rows, int local)
 {
     QByteArray b;
-    if (!fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/1/displayParamSwitch"), &b, nullptr))
+    if (!fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/%1/displayParamSwitch").arg(local), &b, nullptr))
         return;
     const QString x = QString::fromUtf8(b);
     const QString mode = tag(x, QStringLiteral("mode"));
@@ -440,8 +517,9 @@ void imageSwitchRows(const Cam &cam, QVariantList &rows)
 // Video streams, overlays and the picture settings.
 void videoSections(const Cam &cam, QVariantList &out)
 {
+    const QVector<LensAsk> asks = lensAsks(cam);
+    const bool many = asks.size() > 1;
     QByteArray b;
-    QVariantList rows;
     // Ask which streams the camera has: it answers a request for one it does not have (103) with a copy of the main stream.
     QStringList ids;
     if (fetchDoc(cam, QStringLiteral("/ISAPI/Streaming/channels"), &b, nullptr)) {
@@ -451,70 +529,79 @@ void videoSections(const Cam &cam, QVariantList &out)
         while (it.hasNext())
             ids << it.next().captured(1);
     }
-    if (ids.isEmpty())
-        ids << QStringLiteral("101") << QStringLiteral("102"); // an old camera that will not list them
-    for (const QString &id : ids) {
-        if (id.size() != 3 || !id.startsWith(QLatin1Char('1')))
-            continue; // the first camera's streams only (101, 102, ...)
-        if (!fetchDoc(cam, QStringLiteral("/ISAPI/Streaming/channels/") + id, &b, nullptr))
-            continue;
-        const QString s = QString::fromUtf8(b);
-        if (tag(s, QStringLiteral("videoCodecType")).isEmpty())
-            continue;
-        const double fps = tag(s, QStringLiteral("maxFrameRate")).toDouble() / 100.0;
-        const QString mode = tag(s, QStringLiteral("videoQualityControlType"));
-        const QString rate = mode == QLatin1String("CBR") ? tag(s, QStringLiteral("constantBitRate")) : tag(s, QStringLiteral("vbrUpperCap"));
-        const QString label = id == QLatin1String("101") ? QStringLiteral("Main stream")
-                            : (id == QLatin1String("102") ? QStringLiteral("Sub stream") : QStringLiteral("Third stream"));
-        // Smart codec (Hikvision's "H.265+" / "H.264+") is a camera setting that the video stream itself does not show.
-        // It is written in this window only, from the camera's current setting.
-        QString codec = tag(s, QStringLiteral("videoCodecType"));
-        const int sc = s.indexOf(QLatin1String("<SmartCodec>"));
-        if (sc >= 0 && tag(s.mid(sc), QStringLiteral("enabled")) == QLatin1String("true")
-            && (codec == QLatin1String("H.265") || codec == QLatin1String("H.264")))
-            codec += QLatin1Char('+');
-        rows << row(label, QStringLiteral("%1, %2x%3, %4 fps, %5 %6 kbps")
-                               .arg(codec, tag(s, QStringLiteral("videoResolutionWidth")),
-                                    tag(s, QStringLiteral("videoResolutionHeight")))
-                               .arg(fps, 0, 'g', 4).arg(mode, rate));
-        const int a = s.indexOf(QLatin1String("<Audio>"));
-        if (id == QLatin1String("101"))
-            rows << row(QStringLiteral("Audio"), a < 0 ? QStringLiteral("none")
-                        : QStringLiteral("%1, %2").arg(onOff(tag(s.mid(a), QStringLiteral("enabled"))), tag(s, QStringLiteral("audioCompressionType"))));
+    if (ids.isEmpty()) {
+        for (const LensAsk &lens : asks) {
+            const QString n = QString::number(lens.local);
+            ids << n + QStringLiteral("01") << n + QStringLiteral("02");
+        }
     }
-    if (fetchDoc(cam, QStringLiteral("/ISAPI/System/Video/inputs/channels/1/overlays"), &b, nullptr)) {
-        const QString o = QString::fromUtf8(b);
-        const int dt = o.indexOf(QLatin1String("<DateTimeOverlay>")), cn = o.indexOf(QLatin1String("<channelNameOverlay>"));
-        rows << row(QStringLiteral("Date and time overlay"), dt >= 0 ? onOff(tag(o.mid(dt), QStringLiteral("enabled"))) : QStringLiteral("-"))
-             << row(QStringLiteral("Name overlay"), cn >= 0 ? onOff(tag(o.mid(cn), QStringLiteral("enabled"))) : QStringLiteral("-"));
-    }
-    if (!rows.isEmpty())
-        out << section(QStringLiteral("Video"), rows);
-
-    rows.clear();
-    // The picture values live in their own "Color" document. The whole image document also has a brightnessLevel inside
-    // the supplement light's block, which is a different thing, so the first tag of that name must not be used.
-    const bool haveColor = fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/1/color"), &b, nullptr);
-    const QString color = haveColor ? QString::fromUtf8(b) : QString();
-    const bool haveImage = fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/1"), &b, nullptr);
-    const QString im = haveImage ? QString::fromUtf8(b) : QString();
-    if (haveColor || haveImage) {
-        auto pick = [&](const QString &label, const QString &name, const QString &from) {
-            const QString v = tag(from, name);
-            if (!v.isEmpty())
-                rows << row(label, v);
-        };
-        const QString &pic = haveColor ? color : im;
-        pick(QStringLiteral("Brightness"), QStringLiteral("brightnessLevel"), pic);
-        pick(QStringLiteral("Contrast"), QStringLiteral("contrastLevel"), pic);
-        pick(QStringLiteral("Saturation"), QStringLiteral("saturationLevel"), pic);
-        pick(QStringLiteral("Sharpness"), QStringLiteral("SharpnessLevel"), im);
-        pick(QStringLiteral("Day/night filter"), QStringLiteral("IrcutFilterType"), im);
-        pick(QStringLiteral("White balance"), QStringLiteral("WhiteBalanceStyle"), im);
-        pick(QStringLiteral("Mains frequency"), QStringLiteral("powerLineFrequencyMode"), im);
-        imageSwitchRows(cam, rows);
+    for (const LensAsk &lens : asks) {
+        QVariantList rows;
+        const QString prefix = QString::number(lens.local);
+        for (const QString &id : ids) {
+            if (id.size() != 3 || !id.startsWith(prefix))
+                continue;
+            if (!fetchDoc(cam, QStringLiteral("/ISAPI/Streaming/channels/") + id, &b, nullptr))
+                continue;
+            const QString s = QString::fromUtf8(b);
+            if (tag(s, QStringLiteral("videoCodecType")).isEmpty())
+                continue;
+            const double fps = tag(s, QStringLiteral("maxFrameRate")).toDouble() / 100.0;
+            const QString mode = tag(s, QStringLiteral("videoQualityControlType"));
+            const QString rate = mode == QLatin1String("CBR") ? tag(s, QStringLiteral("constantBitRate")) : tag(s, QStringLiteral("vbrUpperCap"));
+            const QString tail = id.mid(1);
+            const QString label = tail == QLatin1String("01") ? QStringLiteral("Main stream")
+                                : (tail == QLatin1String("02") ? QStringLiteral("Sub stream") : QStringLiteral("Third stream"));
+            // Smart codec (Hikvision's "H.265+" / "H.264+") is a camera setting that the video stream itself does not show.
+            // It is written in this window only, from the camera's current setting.
+            QString codec = tag(s, QStringLiteral("videoCodecType"));
+            const int sc = s.indexOf(QLatin1String("<SmartCodec>"));
+            if (sc >= 0 && tag(s.mid(sc), QStringLiteral("enabled")) == QLatin1String("true")
+                && (codec == QLatin1String("H.265") || codec == QLatin1String("H.264")))
+                codec += QLatin1Char('+');
+            rows << row(label, QStringLiteral("%1, %2x%3, %4 fps, %5 %6 kbps")
+                                   .arg(codec, tag(s, QStringLiteral("videoResolutionWidth")),
+                                        tag(s, QStringLiteral("videoResolutionHeight")))
+                                   .arg(fps, 0, 'g', 4).arg(mode, rate));
+            const int a = s.indexOf(QLatin1String("<Audio>"));
+            if (tail == QLatin1String("01"))
+                rows << row(QStringLiteral("Audio"), a < 0 ? QStringLiteral("none")
+                            : QStringLiteral("%1, %2").arg(onOff(tag(s.mid(a), QStringLiteral("enabled"))), tag(s, QStringLiteral("audioCompressionType"))));
+        }
+        if (fetchDoc(cam, QStringLiteral("/ISAPI/System/Video/inputs/channels/%1/overlays").arg(lens.local), &b, nullptr)) {
+            const QString o = QString::fromUtf8(b);
+            const int dt = o.indexOf(QLatin1String("<DateTimeOverlay>")), cn = o.indexOf(QLatin1String("<channelNameOverlay>"));
+            rows << row(QStringLiteral("Date and time overlay"), dt >= 0 ? onOff(tag(o.mid(dt), QStringLiteral("enabled"))) : QStringLiteral("-"))
+                 << row(QStringLiteral("Name overlay"), cn >= 0 ? onOff(tag(o.mid(cn), QStringLiteral("enabled"))) : QStringLiteral("-"));
+        }
         if (!rows.isEmpty())
-            out << section(QStringLiteral("Image"), rows);
+            out << section(sectionTitle(QStringLiteral("Video"), lens.name, many), rows);
+
+        rows.clear();
+        // The picture values live in their own "Color" document. The whole image document also has a brightnessLevel inside
+        // the supplement light's block, which is a different thing, so the first tag of that name must not be used.
+        const bool haveColor = fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/%1/color").arg(lens.local), &b, nullptr);
+        const QString color = haveColor ? QString::fromUtf8(b) : QString();
+        const bool haveImage = fetchDoc(cam, QStringLiteral("/ISAPI/Image/channels/%1").arg(lens.local), &b, nullptr);
+        const QString im = haveImage ? QString::fromUtf8(b) : QString();
+        if (haveColor || haveImage) {
+            auto pick = [&](const QString &label, const QString &name, const QString &from) {
+                const QString v = tag(from, name);
+                if (!v.isEmpty())
+                    rows << row(label, v);
+            };
+            const QString &pic = haveColor ? color : im;
+            pick(QStringLiteral("Brightness"), QStringLiteral("brightnessLevel"), pic);
+            pick(QStringLiteral("Contrast"), QStringLiteral("contrastLevel"), pic);
+            pick(QStringLiteral("Saturation"), QStringLiteral("saturationLevel"), pic);
+            pick(QStringLiteral("Sharpness"), QStringLiteral("SharpnessLevel"), im);
+            pick(QStringLiteral("Day/night filter"), QStringLiteral("IrcutFilterType"), im);
+            pick(QStringLiteral("White balance"), QStringLiteral("WhiteBalanceStyle"), im);
+            pick(QStringLiteral("Mains frequency"), QStringLiteral("powerLineFrequencyMode"), im);
+            imageSwitchRows(cam, rows, lens.local);
+            if (!rows.isEmpty())
+                out << section(sectionTitle(QStringLiteral("Image"), lens.name, many), rows);
+        }
     }
 }
 }
@@ -549,27 +636,37 @@ QString triggerActions(const Cam &cam, const QString &id)
 // Detection rules, and what each one does.
 void detectionSection(const Cam &cam, QVariantList &out)
 {
-    QByteArray b;
-    QVariantList rows;
-    auto rule = [&](const QString &label, const QString &path, const QString &trig, bool hasEnabled) {
-        QString state = QStringLiteral("-");
-        if (hasEnabled) {
-            if (!fetchDoc(cam, path, &b, nullptr))
-                return;
-            state = onOff(tag(QString::fromUtf8(b), QStringLiteral("enabled")));
-        }
-        const QString act = triggerActions(cam, trig);
-        rows << row(label, act.isEmpty() ? state : QStringLiteral("%1 | actions: %2").arg(state, act));
-    };
-    rule(QStringLiteral("Motion detection"), QStringLiteral("/ISAPI/System/Video/inputs/channels/1/motionDetection"), QStringLiteral("VMD-1"), true);
-    rule(QStringLiteral("Intrusion"), QStringLiteral("/ISAPI/Smart/FieldDetection/1"), QStringLiteral("fielddetection-1"), true);
-    rule(QStringLiteral("Line crossing"), QStringLiteral("/ISAPI/Smart/LineDetection/1"), QStringLiteral("linedetection-1"), true);
-    rule(QStringLiteral("Region entrance"), QStringLiteral("/ISAPI/Smart/regionEntrance/1"), QStringLiteral("regionEntrance-1"), true);
-    rule(QStringLiteral("Region exit"), QStringLiteral("/ISAPI/Smart/regionExit/1"), QStringLiteral("regionExiting-1"), true);
-    if (fetchDoc(cam, QStringLiteral("/ISAPI/Smart/FaceDetect/1"), &b, nullptr))
-        rows << row(QStringLiteral("Face detection"), onOff(tag(QString::fromUtf8(b), QStringLiteral("enabled"))));
-    if (!rows.isEmpty())
-        out << section(QStringLiteral("Detection"), rows);
+    const QVector<LensAsk> asks = lensAsks(cam);
+    const bool many = asks.size() > 1;
+    for (const LensAsk &lens : asks) {
+        const QString n = QString::number(lens.local);
+        QByteArray b;
+        QVariantList rows;
+        auto rule = [&](const QString &label, const QString &path, const QString &trig, bool hasEnabled) {
+            QString state = QStringLiteral("-");
+            if (hasEnabled) {
+                if (!fetchDoc(cam, path, &b, nullptr))
+                    return;
+                state = onOff(tag(QString::fromUtf8(b), QStringLiteral("enabled")));
+            }
+            const QString act = triggerActions(cam, trig);
+            rows << row(label, act.isEmpty() ? state : QStringLiteral("%1 | actions: %2").arg(state, act));
+        };
+        rule(QStringLiteral("Motion detection"), QStringLiteral("/ISAPI/System/Video/inputs/channels/%1/motionDetection").arg(n),
+             QStringLiteral("VMD-%1").arg(n), true);
+        rule(QStringLiteral("Intrusion"), QStringLiteral("/ISAPI/Smart/FieldDetection/%1").arg(n),
+             QStringLiteral("fielddetection-%1").arg(n), true);
+        rule(QStringLiteral("Line crossing"), QStringLiteral("/ISAPI/Smart/LineDetection/%1").arg(n),
+             QStringLiteral("linedetection-%1").arg(n), true);
+        rule(QStringLiteral("Region entrance"), QStringLiteral("/ISAPI/Smart/regionEntrance/%1").arg(n),
+             QStringLiteral("regionEntrance-%1").arg(n), true);
+        rule(QStringLiteral("Region exit"), QStringLiteral("/ISAPI/Smart/regionExit/%1").arg(n),
+             QStringLiteral("regionExiting-%1").arg(n), true);
+        if (fetchDoc(cam, QStringLiteral("/ISAPI/Smart/FaceDetect/%1").arg(n), &b, nullptr))
+            rows << row(QStringLiteral("Face detection"), onOff(tag(QString::fromUtf8(b), QStringLiteral("enabled"))));
+        if (!rows.isEmpty())
+            out << section(sectionTitle(QStringLiteral("Detection"), lens.name, many), rows);
+    }
 }
 
 // One alarm output (audio or white light): its settings, and its hours as a week.
@@ -851,14 +948,30 @@ QVariantMap overviewRow(const Cam &cam, const QVariantList &sections, const QStr
         } else if (t.startsWith(QLatin1String("Linked events"))) {
             r[QStringLiteral("lightFrom")] = s.value(QStringLiteral("lightFrom")).toString();
             r[QStringLiteral("audioFrom")] = s.value(QStringLiteral("audioFrom")).toString();
-        } else if (t == QLatin1String("Detection")) {
-            r[QStringLiteral("motion")] = value(s, QStringLiteral("Motion detection")).section(QLatin1String(" | "), 0, 0);
-            r[QStringLiteral("intrusion")] = value(s, QStringLiteral("Intrusion")).section(QLatin1String(" | "), 0, 0);
-            r[QStringLiteral("line")] = value(s, QStringLiteral("Line crossing")).section(QLatin1String(" | "), 0, 0);
+        } else if (t == QLatin1String("Detection") || t.startsWith(QStringLiteral("Detection — "))) {
+            const QString mark = QStringLiteral("Detection — ");
+            const QString who = t.startsWith(mark) ? t.mid(mark.size()) : QString();
+            auto put = [&](const char *key, const QString &label) {
+                QString v = value(s, label).section(QLatin1String(" | "), 0, 0);
+                if (v.isEmpty())
+                    return;
+                if (!who.isEmpty())
+                    v = who + QStringLiteral(": ") + v;
+                const QString cur = r.value(QString::fromLatin1(key)).toString();
+                r[QString::fromLatin1(key)] = (cur.isEmpty() || cur == QLatin1String("-")) ? v : cur + QStringLiteral("; ") + v;
+            };
+            put("motion", QStringLiteral("Motion detection"));
+            put("intrusion", QStringLiteral("Intrusion"));
+            put("line", QStringLiteral("Line crossing"));
         }
     }
     return r;
 }
+}
+
+void HikvisionCameraInfo::cancelReads()
+{
+    g_readGen.fetch_add(1);
 }
 
 void HikvisionCameraInfo::readCamera(const QString &ip, const QString &user, const QString &password)
@@ -886,15 +999,19 @@ void HikvisionCameraInfo::readCamera(const QString &ip, const QString &user, con
         m_worker->deleteLater();
     }
     m_worker = QThread::create([this, cam]() {
+        g_activeGen = g_readGen.load();
         QString why;
         const QVariantList sections = (cam.user.isEmpty() || cam.pass.isEmpty())
             ? QVariantList() : readSections(cam, &why);
         if (sections.isEmpty() && why.isEmpty())
             why = (cam.user.isEmpty() || cam.pass.isEmpty()) ? QStringLiteral("no login saved for this camera (a blank password is never sent)")
                                                               : QStringLiteral("the camera did not answer");
-        QMetaObject::invokeMethod(this, [this, cam, sections, why]() {
+        const bool stopped = readStopped();
+        QMetaObject::invokeMethod(this, [this, cam, sections, why, stopped]() {
             m_busy = false;
             emit busyChanged();
+            if (stopped)
+                return;
             if (sections.isEmpty())
                 emit readFailed(cam.ip, why);
             else
@@ -920,10 +1037,13 @@ void HikvisionCameraInfo::readOverview()
         m_worker->deleteLater();
     }
     m_worker = QThread::create([this, cams]() {
+        g_activeGen = g_readGen.load();
         QVariantList rows;
         int n = 0;
         QMap<QString, RecLink> links; // one read of each recorder's rules, shared by its cameras
         for (const Cam &cam : cams) {
+            if (readStopped())
+                break;
             QString why;
             const RecLink *shared = nullptr;
             if (!cam.recIp.isEmpty()) {
@@ -938,10 +1058,12 @@ void HikvisionCameraInfo::readOverview()
             ++n;
             QMetaObject::invokeMethod(this, [this, n, total = cams.size()]() { emit overviewProgress(n, total); }, Qt::QueuedConnection);
         }
-        QMetaObject::invokeMethod(this, [this, rows]() {
+        const bool stopped = readStopped();
+        QMetaObject::invokeMethod(this, [this, rows, stopped]() {
             m_busy = false;
             emit busyChanged();
-            emit overviewRead(rows);
+            if (!stopped)
+                emit overviewRead(rows);
         }, Qt::QueuedConnection);
     });
     m_worker->start();

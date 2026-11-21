@@ -43,6 +43,10 @@ Window {
             if (!vp || vp.visible !== 0)
                 continue;
             var u = String(vp.url);
+            if (u.indexOf("rtsp://") === 0) {
+                used[u] = (used[u] || 0) + 1;
+                continue;
+            }
             var at = u.indexOf("hikvision://");
             if (at === -1)
                 continue;
@@ -76,6 +80,26 @@ Window {
             var rec = recorders[i];
             if (!rec)
                 continue;
+            if (rec.kind === "rtsp") {
+                var stream = String(rec.streamUrl || "");
+                if (stream.indexOf("rtsp://") !== 0)
+                    continue;
+                var desc = rec.description ? String(rec.description) : "";
+                next.push({
+                    kind: "recorder",
+                    ip: rec.ip || "",
+                    streamUrl: stream,
+                    name: rec.name && String(rec.name).length > 0 ? String(rec.name) : (rec.ip || stream),
+                    cameraCount: 1,
+                    expandable: false,
+                    expanded: false,
+                    channelId: 1,
+                    cameraName: desc,
+                    addedCount: 0,
+                    added: !!used[stream]
+                });
+                continue;
+            }
             var cams = rec.cameras || [];
             var single = cams.length <= 1;
             var ip = rec.ip || "";
@@ -88,6 +112,7 @@ Window {
             next.push({
                 kind: "recorder",
                 ip: ip,
+                streamUrl: "",
                 name: rec.name && String(rec.name).length > 0 ? String(rec.name) : ip,
                 cameraCount: cams.length,
                 expandable: cams.length > 1,
@@ -102,6 +127,7 @@ Window {
                     next.push({
                         kind: "camera",
                         ip: ip,
+                        streamUrl: "",
                         name: rootDialog.cameraLabel(cams[j]),
                         cameraCount: 0,
                         expandable: false,
@@ -155,13 +181,13 @@ Window {
         return -1;
     }
 
-    function assignCamera(ip, channelId) {
+    function assignCamera(ip, channelId, streamUrl) {
         if (!layoutModel || targetIndex < 0 || targetIndex >= layoutModel.count)
             return;
         var vp = layoutModel.get(targetIndex);
         if (!vp)
             return;
-        var url = "hikvision://" + ip + "/" + channelId;
+        var url = (streamUrl && String(streamUrl).length > 0) ? String(streamUrl) : ("hikvision://" + ip + "/" + channelId);
         vp.url = url;
         vp.secondaryUrl = url;
         vp.streamMode = 0;
@@ -313,7 +339,7 @@ Window {
                             if (modelData.expandable)
                                 rootDialog.toggleExpanded(modelData.ip);
                             else
-                                rootDialog.assignCamera(modelData.ip, modelData.channelId);
+                                rootDialog.assignCamera(modelData.ip, modelData.channelId, modelData.streamUrl || "");
                         }
                     }
                 }
