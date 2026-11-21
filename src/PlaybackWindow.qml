@@ -2141,6 +2141,7 @@ Window {
                                         password: modelData ? modelData.password : ""
                                         channelId: modelData ? modelData.channelId : 1
                                         port: modelData ? (modelData.port || 8000) : 8000
+                                        showVcaOverlay: (typeof generalSettings === "undefined") || generalSettings.showPlaybackVcaOverlay
                                         muted: !tileContainer.isAudible || tileContainer.userMuted
                                         volume: 0.1
                                          playerStatusMessage: {
@@ -2730,6 +2731,50 @@ Window {
                                             ToolTip.timeout: 5000
                                             ToolTip.visible: snapshotMouseAreaBtn.containsMouse
                                             ToolTip.text: qsTr("LNG_00156")
+                                        }
+
+                                        Control {
+                                            id: vcaBadge
+                                            readonly property bool vcaOn: (typeof generalSettings === "undefined") || generalSettings.showPlaybackVcaOverlay
+                                            implicitWidth: 24
+                                            implicitHeight: 24
+                                            padding: 5
+
+                                            background: Rectangle {
+                                                radius: 12
+                                                color: vcaBadge.vcaOn ?
+                                                    (vcaMouseAreaBtn.pressed ? "#4400f5d4" : (vcaMouseAreaBtn.containsMouse ? "#3300f5d4" : "#2200f5d4")) :
+                                                    (vcaMouseAreaBtn.pressed ? "#4a5560" : (vcaMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214"))
+                                                border.color: vcaBadge.vcaOn ?
+                                                    "#cc00f5d4" :
+                                                    ((vcaMouseAreaBtn.containsMouse || vcaMouseAreaBtn.pressed) ? "#cc8898a6" : "#802a3540")
+                                                border.width: 1
+                                            }
+
+                                            // A target box inside a rule zone
+                                            contentItem: Image {
+                                                sourceSize: Qt.size(32, 32)
+                                                fillMode: Image.PreserveAspectFit
+                                                source: (vcaBadge.vcaOn || vcaMouseAreaBtn.containsMouse) ?
+                                                    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f5d4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='2 6 22 3 22 21 2 21'></polygon><rect x='8' y='9' width='6' height='9'></rect></svg>" :
+                                                    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='2 6 22 3 22 21 2 21'></polygon><rect x='8' y='9' width='6' height='9'></rect></svg>"
+                                            }
+
+                                            MouseArea {
+                                                id: vcaMouseAreaBtn
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    if (typeof generalSettings !== "undefined")
+                                                        generalSettings.showPlaybackVcaOverlay = !generalSettings.showPlaybackVcaOverlay;
+                                                }
+                                            }
+
+                                            ToolTip.delay: 500
+                                            ToolTip.timeout: 5000
+                                            ToolTip.visible: vcaMouseAreaBtn.containsMouse
+                                            ToolTip.text: vcaBadge.vcaOn ? qsTr("Hide smart lines and target boxes") : qsTr("Show smart lines and target boxes")
                                         }
 
                                         Control {

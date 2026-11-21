@@ -11,7 +11,30 @@
 #include <QRunnable>
 #include <iostream>
 #include <set>
+#include <algorithm>
 #include <QAudioDeviceInfo>
+
+// PlayCtrl's own parsers for the smart (VCA) data a Hikvision camera writes into its recordings.
+// They are exported from libPlayCtrl.so with C linkage but are not in plaympeg4.h.
+// The bit reader they take: a pointer at +8 and the byte count at +0x10/+0x14; the rest is their scratch space.
+extern "C" int IVS_META_DATA_sys_parse(void *out, void *in);
+extern "C" int IVS_RULE_DATA_sys_parse(void *out, void *in);
+namespace {
+struct IvsBitReader {
+    quint64 scratch;
+    const unsigned char *data;
+    quint32 size1;
+    quint32 size2;
+    quint64 pad[4];
+};
+constexpr int kIvsTargetRecord = 28;   // IVS_META_DATA_sys_parse: count byte, then 28-byte records from +8
+constexpr int kIvsRuleRecord = 184;    // IVS_RULE_DATA_sys_parse: count dword, then 184-byte records from +4
+constexpr int kVcaHoldMs = 400;        // a box with no newer report is dropped after this
+// The camera sets bit 7 of byte 23 of a target packet while a rule is alarmed (red box in iVMS-4200,
+// green otherwise). The flag is per packet, and a packet that also lists another target can come
+// without it, so a target stays in alarm this long after its last flagged report.
+constexpr int kVcaAlarmHoldMs = 1500;
+}
 
 // Hikvision PlayM4 decoder constants (usually YV12)
 #define T_YV12 3
@@ -179,10 +202,10 @@ public:
         QPointer<HikvisionArchivePlayer> pPlayer = m_player;
         if (pPlayer) {
             pPlayer->m_guiPendingTasks++;
-            QMetaObject::invokeMethod(pPlayer.data(), [pPlayer, img, sessionId = m_taskSessionId]() {
+            QMetaObject::invokeMethod(pPlayer.data(), [pPlayer, img, sessionId = m_taskSessionId, stampMs = m_frame->stampMs]() {
                 if (pPlayer) {
                     if (pPlayer->m_playbackSessionId.load() == sessionId) {
-                        pPlayer->updateImage(img);
+                        pPlayer->updateImage(img, stampMs);
                     }
                     pPlayer->m_guiPendingTasks--;
                 }
@@ -349,7 +372,9 @@ void HikvisionArchivePlayer::cleanupPlayback()
     {
         std::lock_guard<std::mutex> lock(m_imageMutex);
         m_currentImage = QImage();
+        m_currentFrameStampMs = -1;
     }
+    resetVcaState();
     
     if (QThread::currentThread() != qApp->thread()) {
         QMetaObject::invokeMethod(this, [this]() {
@@ -965,6 +990,7 @@ void HikvisionArchivePlayer::PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType
             std::lock_guard<std::mutex> lock(player->m_stateMutex);
             player->m_sysHeadReceived = true;
         }
+        player->resetVcaState(); // the decoder's frame stamps start again from 0 with a new stream
         qDebug() << "[HikArchive] Got SYSHEAD (stream header), size=" << dwBufSize;
 
         if (activePort < 0) {
@@ -1044,6 +1070,10 @@ void HikvisionArchivePlayer::PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType
         if (activePort < 0) {
             return;
         }
+        // Always read the smart data, even while the overlay is hidden: the box timing is taken from the
+        // first video frame of the stream, so skipping data here would leave the boxes out of step
+        // (and never shown) after the overlay is switched back on.
+        player->parsePrivateData(pBuffer, dwBufSize);
         int retryCount = 0;
         while (!PlayM4_InputData(activePort, pBuffer, dwBufSize)) {
             LONG currentHandle = -1;
@@ -1151,6 +1181,7 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
 
         // Copy raw YV12 data to the frame buffer
         std::memcpy(fb->yv12Data.data(), pBuf, nSize);
+        fb->stampMs = info->nStamp;
 
         player->m_pendingTasks++;
 
@@ -1326,15 +1357,24 @@ std::shared_ptr<HikvisionArchivePlayer::FrameBuffer> HikvisionArchivePlayer::get
     return fb;
 }
 
-void HikvisionArchivePlayer::updateImage(const QImage &img)
+void HikvisionArchivePlayer::updateImage(const QImage &img, qint64 stampMs)
 {
     bool sizeChanged = false;
     {
         std::lock_guard<std::mutex> lock(m_imageMutex);
+        // Frames are turned into pictures on several threads at once, so they can finish out of order.
+        // Showing an older frame after a newer one makes moving things jump back and leave a ghostly trail,
+        // so a frame older than the one on screen is dropped. A big step back is a new position (seek or
+        // restart; the decoder counts from 0 again) and is shown.
+        if (m_currentSpeedMultiplier > 0 && stampMs >= 0 && m_currentFrameStampMs >= 0 && stampMs <= m_currentFrameStampMs
+                && m_currentFrameStampMs - stampMs < 2000) {
+            return;
+        }
         if (m_currentImage.size() != img.size()) {
             sizeChanged = true;
         }
         m_currentImage = img;
+        m_currentFrameStampMs = stampMs;
     }
     if (sizeChanged) {
         emit videoSizeChanged();
@@ -1375,6 +1415,9 @@ void HikvisionArchivePlayer::paint(QPainter *painter)
             scaledSize.height()
         );
         painter->drawImage(targetRect, m_currentImage);
+        if (m_showVca.load()) {
+            drawVca(painter, targetRect, m_currentFrameStampMs);
+        }
     } else {
         QString msg = m_playerStatusMessage;
         if (msg.isEmpty()) {
@@ -1603,4 +1646,242 @@ void HikvisionArchivePlayer::AudioCallBack(long nPort, char * pAudioBuf, long nS
     }, Qt::QueuedConnection);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Smart (VCA) overlay: rule lines/zones and target boxes recorded in the stream, as in iVMS-4200.
+//
+// The recording is an MPEG-PS. Next to the video (stream 0xE0) the camera writes private-stream
+// (0xBD) packets with a Hikvision header: bytes 0-1 = 0x0003 for intelligent data, byte 5 =
+// 1 for the target list, 3 for the rule list. Bytes 14-15 carry the coordinate scale; the data
+// starts at byte 22. PlayCtrl's parsers read it after a 4-byte {0xffff, scale} prefix:
+//  - targets: IVS_META_DATA_sys_parse -> count (byte 0), then 28-byte records from +8:
+//      +0 id, +12 x, +16 y, +20 width, +24 height (floats 0..1 of the picture)
+//  - rules:   IVS_RULE_DATA_sys_parse on one rule at a time (each ends with five zero bytes) ->
+//      +4 record: byte 0 id, byte 2 kind (0 = line, 1 = zone), +0x64 point count, +0x68 x/y floats
+// A packet's PTS minus the first video PTS is the decoder stamp (FRAME_INFO::nStamp) of its frame.
+// ---------------------------------------------------------------------------------------------
+
+static qint64 psPts(const unsigned char *pes)
+{
+    if (!(pes[7] & 0x80))
+        return -1;
+    const unsigned char *b = pes + 9;
+    return (static_cast<qint64>((b[0] >> 1) & 7) << 30) | (static_cast<qint64>(b[1]) << 22)
+         | (static_cast<qint64>(b[2] >> 1) << 15) | (static_cast<qint64>(b[3]) << 7) | (b[4] >> 1);
+}
+
+void HikvisionArchivePlayer::resetVcaState()
+{
+    std::lock_guard<std::mutex> lock(m_vcaMutex);
+    m_psCarry.clear();
+    m_psVideoBasePts = -1;
+    m_vcaSamples.clear();
+    m_vcaRules.clear();
+    m_vcaAlarmUntil.clear();
+}
+
+void HikvisionArchivePlayer::parsePrivateData(const BYTE *data, DWORD size)
+{
+    std::lock_guard<std::mutex> lock(m_vcaMutex);
+    m_psCarry.append(reinterpret_cast<const char *>(data), static_cast<int>(size));
+    const unsigned char *buf = reinterpret_cast<const unsigned char *>(m_psCarry.constData());
+    const int n = m_psCarry.size();
+    int pos = 0;
+    int keepFrom = n;
+    while (pos + 4 <= n) {
+        if (!(buf[pos] == 0 && buf[pos + 1] == 0 && buf[pos + 2] == 1)) {
+            ++pos;
+            continue;
+        }
+        const unsigned char id = buf[pos + 3];
+        if (id == 0xBA) { // pack header: 14 bytes plus stuffing
+            if (pos + 14 > n) { keepFrom = pos; break; }
+            pos += 14 + (buf[pos + 13] & 0x07);
+            continue;
+        }
+        if (id < 0xBB) { // not a PES start code (e.g. a start code inside the video data)
+            pos += 3;
+            continue;
+        }
+        if (pos + 6 > n) { keepFrom = pos; break; }
+        const int pesLen = (buf[pos + 4] << 8) | buf[pos + 5];
+        const int total = 6 + pesLen;
+        if (pos + total > n) { keepFrom = pos; break; }
+        if ((id == 0xE0 || id == 0xBD) && pesLen >= 8) {
+            const qint64 pts = psPts(buf + pos);
+            if (id == 0xE0) {
+                if (m_psVideoBasePts < 0 && pts >= 0)
+                    m_psVideoBasePts = pts;
+            } else {
+                const int hl = buf[pos + 8];
+                const int payload = pesLen - 3 - hl;
+                if (payload > 0 && pts >= 0)
+                    handlePrivatePacket(buf + pos + 9 + hl, payload, pts);
+            }
+        }
+        pos += total;
+    }
+    if (keepFrom >= n)
+        m_psCarry.clear();
+    else
+        m_psCarry.remove(0, keepFrom);
+    if (m_psCarry.size() > 512 * 1024)
+        m_psCarry.clear(); // lost sync; start again
+}
+
+void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len, qint64 pts)
+{
+    if (len < 24 || p[0] != 0x00 || p[1] != 0x03 || m_psVideoBasePts < 0)
+        return;
+    const int kind = p[5];
+    if (kind == 1) {
+        const qint64 ms = (pts - m_psVideoBasePts) / 90;
+        QByteArray in;
+        in.append('\xff').append('\xff').append(static_cast<char>(p[14])).append(static_cast<char>(p[15]));
+        in.append(reinterpret_cast<const char *>(p + 22), len - 22);
+        const int inLen = in.size();
+        in.append(QByteArray(64, '\0'));
+        alignas(16) unsigned char out[8 + 32 * kIvsTargetRecord + 64];
+        std::memset(out, 0, sizeof(out));
+        IvsBitReader reader;
+        std::memset(&reader, 0, sizeof(reader));
+        reader.data = reinterpret_cast<const unsigned char *>(in.constData());
+        reader.size1 = reader.size2 = static_cast<quint32>(inLen);
+        if (IVS_META_DATA_sys_parse(out, &reader) != 1)
+            return;
+        const int count = std::min<int>(out[0], 30);
+        const bool packetAlarm = (p[23] & 0x80) != 0;
+        if (!m_vcaSamples.empty() && m_vcaSamples.back().ms > ms)
+            m_vcaAlarmUntil.clear(); // went backwards: a new position in the stream
+        VcaSample sample;
+        sample.ms = ms;
+        for (int i = 0; i < count; ++i) {
+            const unsigned char *rec = out + 8 + kIvsTargetRecord * i;
+            quint32 tid;
+            float x, y, w, h;
+            std::memcpy(&tid, rec, 4);
+            std::memcpy(&x, rec + 12, 4);
+            std::memcpy(&y, rec + 16, 4);
+            std::memcpy(&w, rec + 20, 4);
+            std::memcpy(&h, rec + 24, 4);
+            // A real target has an id and a sensible box; anything else is another record type.
+            if (tid == 0 || !(w > 0.002f && h > 0.002f && x >= 0.f && y >= 0.f && x + w <= 1.01f && y + h <= 1.01f))
+                continue;
+            if (packetAlarm)
+                m_vcaAlarmUntil.insert(tid, ms + kVcaAlarmHoldMs);
+            const bool alarm = m_vcaAlarmUntil.value(tid, -1) >= ms;
+            sample.targets.append({tid, QRectF(x, y, w, h), alarm});
+        }
+        // Keep the samples in stamp order; the same report is often sent twice.
+        if (!m_vcaSamples.empty() && m_vcaSamples.back().ms > ms)
+            m_vcaSamples.clear(); // went backwards: a new position in the stream
+        if (!m_vcaSamples.empty() && m_vcaSamples.back().ms == ms)
+            m_vcaSamples.back() = sample;
+        else
+            m_vcaSamples.push_back(sample);
+        while (m_vcaSamples.size() > 600)
+            m_vcaSamples.pop_front();
+        return;
+    }
+    if (kind != 3)
+        return;
+
+    // Rule list (sent about once a second): split into rules, parse each.
+    const int ruleCount = p[22];
+    int pos = 24;
+    QVector<VcaRule> rules;
+    for (int k = 0; k < ruleCount && pos < len; ++k) {
+        int end = pos;
+        while (end + 5 <= len && std::memcmp(p + end, "\0\0\0\0\0", 5) != 0)
+            ++end;
+        if (end + 5 > len)
+            break;
+        QByteArray in;
+        in.append('\xff').append('\xff').append(static_cast<char>(p[14])).append(static_cast<char>(p[15]));
+        in.append('\x01').append('\x00');
+        in.append(reinterpret_cast<const char *>(p + pos), end - pos);
+        in.append(QByteArray(5, '\0'));
+        const int inLen = in.size();
+        in.append(QByteArray(64, '\0'));
+        alignas(16) unsigned char out[4 + 2 * kIvsRuleRecord + 64];
+        std::memset(out, 0, sizeof(out));
+        IvsBitReader reader;
+        std::memset(&reader, 0, sizeof(reader));
+        reader.data = reinterpret_cast<const unsigned char *>(in.constData());
+        reader.size1 = reader.size2 = static_cast<quint32>(inLen);
+        if (IVS_RULE_DATA_sys_parse(out, &reader) == 1) {
+            const unsigned char *rec = out + 4;
+            quint32 points;
+            std::memcpy(&points, rec + 0x64, 4);
+            if (points >= 2 && points <= 10) {
+                VcaRule rule;
+                rule.id = rec[0];
+                rule.polygon = rec[2] == 1;
+                bool ok = true;
+                for (quint32 q = 0; q < points; ++q) {
+                    float x, y;
+                    std::memcpy(&x, rec + 0x68 + 8 * q, 4);
+                    std::memcpy(&y, rec + 0x6c + 8 * q, 4);
+                    if (!(x >= 0.f && x <= 1.001f && y >= 0.f && y <= 1.001f)) { ok = false; break; }
+                    rule.points.append(QPointF(x, y));
+                }
+                if (ok)
+                    rules.append(rule);
+            }
+        }
+        pos = end + 5;
+    }
+    if (!rules.isEmpty())
+        m_vcaRules = rules;
+}
+
+
+void HikvisionArchivePlayer::drawVca(QPainter *painter, const QRectF &videoRect, qint64 stampMs)
+{
+    QVector<VcaRule> rules;
+    QVector<VcaTarget> targets;
+    {
+        std::lock_guard<std::mutex> lock(m_vcaMutex);
+        rules = m_vcaRules;
+        if (stampMs >= 0) {
+            // The newest report at or before this frame, if it is recent enough.
+            for (auto it = m_vcaSamples.rbegin(); it != m_vcaSamples.rend(); ++it) {
+                if (it->ms <= stampMs) {
+                    if (stampMs - it->ms <= kVcaHoldMs)
+                        targets = it->targets;
+                    break;
+                }
+            }
+        }
+    }
+    if (rules.isEmpty() && targets.isEmpty())
+        return;
+
+    auto toView = [&videoRect](const QPointF &pt) {
+        return QPointF(videoRect.x() + pt.x() * videoRect.width(), videoRect.y() + pt.y() * videoRect.height());
+    };
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setBrush(Qt::NoBrush);
+    const qreal lineWidth = std::max<qreal>(1.0, videoRect.height() / 540.0);
+
+    // Rule lines and zones in blue, as iVMS-4200 draws them.
+    painter->setPen(QPen(QColor(0, 0, 255), lineWidth));
+    for (const VcaRule &rule : rules) {
+        QPolygonF poly;
+        for (const QPointF &pt : rule.points)
+            poly << toView(pt);
+        if (rule.polygon && poly.size() >= 3)
+            painter->drawPolygon(poly);
+        else
+            painter->drawPolyline(poly);
+    }
+
+    // Target boxes: red while the target sets off a rule, green otherwise (as iVMS-4200).
+    for (const VcaTarget &t : targets) {
+        painter->setPen(QPen(t.alarm ? QColor(255, 0, 0) : QColor(0, 255, 0), lineWidth));
+        painter->drawRect(QRectF(toView(t.rect.topLeft()), toView(t.rect.bottomRight())));
+    }
+    painter->restore();
+}
 

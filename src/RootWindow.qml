@@ -336,6 +336,8 @@ ApplicationWindow {
         property int playbackTimelineHours: 2
         // Drop this window's live pictures while the archive is open, and connect them again when it closes.
         property bool pauseLiveDuringPlayback: true
+        // Draw the camera's rule lines/zones and target boxes stored in the recording (Hikvision playback)
+        property bool showPlaybackVcaOverlay: true
         property bool enableDiagnosticLogs: false
         property bool confirmOnClose: true
         // The statistics panel's history window, in minutes. Saved here, read

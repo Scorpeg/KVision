@@ -298,11 +298,32 @@ FocusScope {
         }
     }
 
+    property var playbackVcaEvent: null
+    function updatePlaybackVcaEvent() {
+        if (!root.isQuickPlayback || !root.quickPlaybackActivationTime) {
+            root.playbackVcaEvent = null;
+            return;
+        }
+        var windowEnd = root.quickPlaybackActivationTime.getTime();
+        var windowStart = windowEnd - 1800000; // 30 minutes
+        var currentMs = windowEnd - (1800 - root.quickPlaybackOffset) * 1000;
+        for (var i = 0; i < root.quickPlaybackEvents.length; i++) {
+            var ev = root.quickPlaybackEvents[i];
+            if (!ev || ev.startTime > windowEnd || ev.endTime < windowStart) continue;
+            if (currentMs >= ev.startTime && currentMs <= ev.endTime) {
+                root.playbackVcaEvent = ev;
+                return;
+            }
+        }
+        root.playbackVcaEvent = null;
+    }
+
     function updateQuickPlaybackEvents() {
         if (!isQuickPlayback || !quickPlaybackActivationTime || !rootWindow) return;
         var cacheKey = recorderIp + "_" + channelId + "_" + getDateKey(quickPlaybackActivationTime);
         var events = rootWindow.playbackEventsCache[cacheKey];
         quickPlaybackEvents = events ? events : [];
+        root.updatePlaybackVcaEvent();
     }
 
     onIsQuickPlaybackChanged: {
@@ -853,12 +874,20 @@ FocusScope {
                                           && root.isHikvision && !root.isQuickPlayback && root.recorderIp !== ""
                                           && root.visible && !root.liveSuspended && root.source !== "" && !root.recorderOffline
                                           && root.targetSwitchedOn() && root.savedLoginFor(root.recorderIp) !== null
+    // Normalized target rectangle (0.001-1.0) from the camera's VCA report: fX/fY upper-left corner, fWidth/fHeight size.
+    // Kept in video coordinates for the frame overlay; cleared when the frame is hidden.
+    property double targetRectX: 0
+    property double targetRectY: 0
+    property double targetRectWidth: 0
+    property double targetRectHeight: 0
+    property bool targetRectValid: false // has a rectangle for the current target (vs no rect / plain motion)
+    property double targetRectLastReport: 0 // timestamp of last rect report, used to fade the box quickly
+    readonly property int targetRectHoldMs: 2000 // box stays visible 2s after last rect report (label stays longer)
     // The camera this tile is looking at: for a camera behind a recorder (NVR) it is looked up from
     // the recorder, once, and remembered.
     property var targetCam: null
     property string targetCamFor: ""
     // A standalone camera is its own recorder with one or two channels (a dual-lens camera has two).
-    // Anything with more channels is treated as an NVR and is not watched.
     function standaloneFor(ip) {
         if (ip === "" || typeof rootWindow === "undefined" || !rootWindow.hikvisionRecordersJson)
             return false;
@@ -1074,6 +1103,11 @@ FocusScope {
             root.targetWatching = false;
             root.targetType = "";
             root.targetSource = "";
+            root.targetRectValid = false;
+            root.targetRectX = 0;
+            root.targetRectY = 0;
+            root.targetRectWidth = 0;
+            root.targetRectHeight = 0;
         }
     }
     property string watchedIp: ""
@@ -1112,6 +1146,11 @@ FocusScope {
             root.targetWatching = false;
             root.targetType = "";
             root.targetSource = "";
+            root.targetRectValid = false;
+            root.targetRectX = 0;
+            root.targetRectY = 0;
+            root.targetRectWidth = 0;
+            root.targetRectHeight = 0;
             root.targetCam = null;
         }
         root.updateTargetWatch();
@@ -1128,13 +1167,26 @@ FocusScope {
                 // one, a plain motion report (which is often somebody elsewhere in the picture) does not change the
                 // label. The detection log keeps every report, so nothing is lost.
                 if (source === "MOTION" && root.targetType !== "" && Date.now() - root.lastSmartAt <= root.smartCarryMs) {
+                    // Plain motion carrying a smart event: keep the label alive, but clear the target box.
+                    // Motion reports don't carry a <TargetRect>, so the box must not linger.
                     root.lastTargetReport = Date.now();
+                    root.targetRectValid = false;
+                    root.targetRectX = 0;
+                    root.targetRectY = 0;
+                    root.targetRectWidth = 0;
+                    root.targetRectHeight = 0;
                     return;
                 }
                 if (source !== "MOTION")
                     root.lastSmartAt = Date.now();
                 root.targetSource = source;
                 root.targetType = targetType;
+                // A new report without a rect (plain motion, or a camera that sends none) clears the old box.
+                root.targetRectValid = false;
+                root.targetRectX = 0;
+                root.targetRectY = 0;
+                root.targetRectWidth = 0;
+                root.targetRectHeight = 0;
                 root.lastTargetReport = Date.now();
                 HikvisionEvents.logFrame(ip, root.targetCaption(" - "), root.index, root.cameraNameInfo);
             } else if (root.targetWatching && ip === root.watchedIp && root.lensChannel > 0 && channel > 0 && channel !== root.lensChannel) {
@@ -1143,6 +1195,22 @@ FocusScope {
                 root.siblingType = targetType;
                 root.siblingAt = Date.now();
                 root.showTracking();
+            }
+        }
+        onTargetRectDetected: {
+            // Normalized target rectangle (0.001-1.0) to draw a box around the detected target on the video.
+            // Accepted only for a report this tile owns, and only when a target label is already on screen.
+            if (root.targetWatching && ip === root.watchedIp && root.reportIsMine(channel) && root.targetType !== "") {
+                // Reject invalid or out-of-range rectangles defensively.
+                if (fX >= 0 && fY >= 0 && fWidth > 0 && fHeight > 0
+                        && fX <= 1.0 && fY <= 1.0 && fWidth <= 1.0 && fHeight <= 1.0) {
+                    root.targetRectX = fX;
+                    root.targetRectY = fY;
+                    root.targetRectWidth = fWidth;
+                    root.targetRectHeight = fHeight;
+                    root.targetRectValid = true;
+                    root.targetRectLastReport = Date.now(); // keep the box alive with its report
+                }
             }
         }
     }
@@ -1182,6 +1250,11 @@ FocusScope {
         if (root.targetSource === "TRACKING") {
             root.targetType = "";
             root.targetSource = "";
+            root.targetRectValid = false;
+            root.targetRectX = 0;
+            root.targetRectY = 0;
+            root.targetRectWidth = 0;
+            root.targetRectHeight = 0;
         }
     }
 
@@ -1298,9 +1371,19 @@ FocusScope {
         id: targetHideTimer
         interval: 500
         repeat: true
-        running: root.targetType !== ""
+        running: root.targetType !== "" || root.targetRectValid
         onTriggered: {
-            var age = Date.now() - root.lastTargetReport;
+            var now = Date.now();
+            // Fade the target box quickly (2s) when rect reports stop, so no stale box lingers.
+            if (root.targetRectValid && now - root.targetRectLastReport > root.targetRectHoldMs) {
+                root.targetRectValid = false;
+                root.targetRectX = 0;
+                root.targetRectY = 0;
+                root.targetRectWidth = 0;
+                root.targetRectHeight = 0;
+            }
+            // Keep the label for the full hold time (default 10s).
+            var age = now - root.lastTargetReport;
             if (age >= root.targetHoldMs) {
                 console.debug("[Target] tile " + root.index + " frame cleared after " + age + " ms (hold " + root.targetHoldMs + " ms)");
                 root.targetType = "";
@@ -1800,6 +1883,7 @@ FocusScope {
                     password: root.password
                     channelId: root.channelId
                     port: root.recorderPort
+                    showVcaOverlay: (typeof generalSettings === "undefined") || generalSettings.showPlaybackVcaOverlay
                     muted: root.muted
                     volume: root.volume
                     playerStatusMessage: qsTr("LNG_00159")
@@ -1910,6 +1994,28 @@ FocusScope {
                     text: root.targetCaption(" \u2013 ")
                 }
             }
+        }
+
+        // VCA target rectangle overlay — positioned on the fitted video area using normalized coords (0.001-1.0)
+        // Hidden when native SDK draw mode is active (the SDK draws the box on the video itself).
+        Rectangle {
+            id: targetRectOverlay
+            z: 8 // below targetFrame (9) so the label stays on top
+            // Box fades quickly (targetRectHoldMs = 2s) when rect reports stop, so no stale box lingers.
+            // Also depends on videoContainer size so it resizes/repositions with the video.
+            visible: root.targetRectValid && root.targetType !== ""
+                && (Date.now() - root.targetRectLastReport <= root.targetRectHoldMs)
+                && videoContainer.width > 0 && videoContainer.height > 0
+            color: "transparent"
+            border.width: Math.max(2, Math.round(4 * targetFrame.labelScale))
+            border.color: root.targetSource === "TRACKING" ? "#ffb703" : (root.targetType === "face" ? "#b45cff" : (root.targetType === "human" ? "#ff5a36" : (root.targetType === "vehicle" ? "#2d8cff" : "#2ecc71")))
+            radius: Math.max(2, Math.round(4 * targetFrame.labelScale))
+            // Position and size within the fitted video rectangle.
+            // fittedVideoRect() returns {x, y, width, height} relative to videoContainer.
+            x: root.fittedVideoRect().x + root.fittedVideoRect().width * root.targetRectX
+            y: root.fittedVideoRect().y + root.fittedVideoRect().height * root.targetRectY
+            width: root.fittedVideoRect().width * root.targetRectWidth
+            height: root.fittedVideoRect().height * root.targetRectHeight
         }
 
         Rectangle {
@@ -3898,6 +4004,7 @@ FocusScope {
                         }
                     }
                     root.quickPlaybackOffset = nextOffset;
+                    root.updatePlaybackVcaEvent();
                 }
             }
         }
@@ -3922,6 +4029,7 @@ FocusScope {
         } else if (!isQuickPlaybackPaused) {
             item.resume();
         }
+        root.updatePlaybackVcaEvent();
     }
 
     // Jump to the previous (direction < 0) or next (direction > 0) event inside

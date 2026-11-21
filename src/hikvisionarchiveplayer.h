@@ -10,6 +10,11 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <deque>
+#include <QVector>
+#include <QHash>
+#include <QRectF>
+#include <QPointF>
 #include "hcnetsdk_compat.h"
 
 #include <QAudioOutput>
@@ -33,6 +38,9 @@ class HikvisionArchivePlayer : public QQuickPaintedItem
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
     Q_PROPERTY(QString playerStatusMessage READ playerStatusMessage WRITE setPlayerStatusMessage NOTIFY playerStatusMessageChanged)
+    // Draws the camera's rule lines/zones and target boxes recorded in the stream (like iVMS-4200). On by default.
+    // Only the drawing is switched; the smart data is always read so the boxes stay in step with the video.
+    Q_PROPERTY(bool showVcaOverlay READ showVcaOverlay WRITE setShowVcaOverlay NOTIFY showVcaOverlayChanged)
 
 public:
     explicit HikvisionArchivePlayer(QQuickItem *parent = nullptr);
@@ -66,6 +74,15 @@ public:
 
     bool muted() const { return m_muted; }
     void setMuted(bool muted);
+
+    bool showVcaOverlay() const { return m_showVca.load(); }
+    void setShowVcaOverlay(bool show) {
+        if (m_showVca.load() != show) {
+            m_showVca = show;
+            emit showVcaOverlayChanged();
+            update();
+        }
+    }
 
     QString playerStatusMessage() const { return m_playerStatusMessage; }
     void setPlayerStatusMessage(const QString &msg) {
@@ -102,9 +119,28 @@ signals:
     void volumeChanged();
     void mutedChanged();
     void playerStatusMessageChanged();
+    void showVcaOverlayChanged();
 
 private:
-    void updateImage(const QImage &img);
+    void updateImage(const QImage &img, qint64 stampMs = -1);
+
+    // Smart data the camera writes into the recording (private PS stream 0xBD), decoded with
+    // PlayCtrl's own IVS parsers. Fed from PlayDataCallBack; drawn in paint() on the frame it belongs to.
+    struct VcaTarget { quint32 id; QRectF rect; bool alarm; };
+    struct VcaSample { qint64 ms; QVector<VcaTarget> targets; };
+    struct VcaRule { quint32 id; bool polygon; QVector<QPointF> points; };
+    void parsePrivateData(const BYTE *data, DWORD size);
+    void handlePrivatePacket(const unsigned char *p, int len, qint64 pts);
+    void resetVcaState();
+    void drawVca(QPainter *painter, const QRectF &videoRect, qint64 stampMs);
+    std::atomic<bool> m_showVca{true};
+    std::mutex m_vcaMutex;            // guards everything below
+    QByteArray m_psCarry;             // unfinished PS packet from the previous data callback
+    qint64 m_psVideoBasePts = -1;     // PTS of the first video frame: decoder stamp 0
+    std::deque<VcaSample> m_vcaSamples;
+    QVector<VcaRule> m_vcaRules;
+    QHash<quint32, qint64> m_vcaAlarmUntil; // target id -> stamp until which it counts as in alarm
+    qint64 m_currentFrameStampMs = -1; // decoder stamp of m_currentImage, guarded by m_imageMutex
     static void PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType, BYTE *pBuffer, DWORD dwBufSize, void *pUser);
     static void DecCallBack(long nPort, char *pBuf, long nSize, FRAME_INFO *pFrameInfo, long nReserved1, long nReserved2);
 
@@ -142,6 +178,7 @@ public:
         std::vector<unsigned char> rgbData;
         int width = 0;
         int height = 0;
+        qint64 stampMs = -1; // decoder time stamp (ms from the first frame)
         std::atomic<bool> inUse{false};
     };
 
