@@ -21,6 +21,8 @@ Window {
     // The address of the camera to show when the window opens (from the right-click menu); empty waits for a
     // camera to be chosen in the list before anything is read.
     property string startIp: ""
+    property bool awaitingList: false // this window asked for the camera list and has not had the answer yet
+    property string readingIp: "" // the camera this window asked to read; answers for any other camera belong to another window
     property bool picked: false // true once a camera has been chosen from the list (or came with the window)
     property var cameras: []
     property var sections: []
@@ -41,7 +43,10 @@ Window {
         return state === "problem" ? "#f2574f" : (state === "warning" ? "#ff9f43" : (state === "ok" ? "#3dbb78" : (state === "note" ? "#c8d2dc" : plain)));
     }
 
-    Component.onCompleted: HikvisionCameraInfo.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName)
+    Component.onCompleted: {
+        win.awaitingList = true;
+        HikvisionCameraInfo.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+    }
 
     onClosing: {
         HikvisionCameraInfo.cancelReads();
@@ -51,7 +56,11 @@ Window {
 
     Connections {
         target: HikvisionCameraInfo
+        // HikvisionCameraInfo is shared by every Camera settings window, so each one only takes the answers to its own requests.
         function onCamerasLoaded(list) {
+            if (!win.awaitingList)
+                return;
+            win.awaitingList = false;
             win.cameras = list;
             if (win.startIp !== "") {
                 win.showCamera(win.startIp);
@@ -63,10 +72,14 @@ Window {
             }
         }
         function onCameraRead(ip, secs) {
+            if (ip !== win.readingIp)
+                return;
             win.sections = secs;
             win.message = "";
         }
         function onReadFailed(ip, why) {
+            if (ip !== win.readingIp)
+                return;
             win.sections = [];
             win.message = why;
         }
@@ -102,6 +115,7 @@ Window {
         if (!cam)
             return;
         win.sections = [];
+        win.readingIp = cam.ip;
         win.message = qsTr("Reading %1...").arg(cam.name);
         HikvisionCameraInfo.readCamera(cam.ip, userField.text, passField.text);
         passField.text = "";
