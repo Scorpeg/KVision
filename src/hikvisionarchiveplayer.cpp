@@ -30,10 +30,12 @@ struct IvsBitReader {
 constexpr int kIvsTargetRecord = 28;   // IVS_META_DATA_sys_parse: count byte, then 28-byte records from +8
 constexpr int kIvsRuleRecord = 184;    // IVS_RULE_DATA_sys_parse: count dword, then 184-byte records from +4
 constexpr int kVcaHoldMs = 400;        // a box with no newer report is dropped after this
-// The camera sets bit 7 of byte 23 of a target packet while a rule is alarmed (red box in iVMS-4200,
-// green otherwise). The flag is per packet, and a packet that also lists another target can come
-// without it, so a target stays in alarm this long after its last flagged report.
-constexpr int kVcaAlarmHoldMs = 1500;
+// A target box is red while that target has set off a rule, green otherwise (as iVMS-4200).
+// The camera writes an alarm event packet when a rule fires, naming the rule and the target.
+// For a zone the box stays red while the target is inside it; for a line it stays red this long.
+constexpr int kVcaLineAlarmMs = 2000;
+// A target that steps out of its alarm zone turns green after this long outside (no flicker at the edge).
+constexpr int kVcaZoneLeaveMs = 500;
 }
 
 // Hikvision PlayM4 decoder constants (usually YV12)
@@ -1677,7 +1679,7 @@ void HikvisionArchivePlayer::resetVcaState()
     m_psVideoBasePts = -1;
     m_vcaSamples.clear();
     m_vcaRules.clear();
-    m_vcaAlarmUntil.clear();
+    m_vcaAlarms.clear();
 }
 
 void HikvisionArchivePlayer::parsePrivateData(const BYTE *data, DWORD size)
@@ -1734,6 +1736,22 @@ void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len
     if (len < 24 || p[0] != 0x00 || p[1] != 0x03 || m_psVideoBasePts < 0)
         return;
     const int kind = p[5];
+    if (kind == 2) {
+        // Alarm event, sent (three times) when a rule fires. It ends with the rule id, seven zero
+        // bytes, the 15-bit target id (top bit set) and nine more bytes.
+        if (len < 40)
+            return;
+        const unsigned char *tail = p + len;
+        const bool zeros = std::all_of(tail - 20, tail - 13, [](unsigned char b) { return b == 0; });
+        if (!zeros || !(tail[-13] & 0x80))
+            return;
+        const quint32 rule = tail[-21];
+        const quint32 tid = ((tail[-13] << 8) | tail[-12]) & 0x7fff;
+        const qint64 ms = (pts - m_psVideoBasePts) / 90;
+        if (tid != 0 && rule != 0)
+            m_vcaAlarms.insert(tid, {rule, ms, -1});
+        return;
+    }
     if (kind == 1) {
         const qint64 ms = (pts - m_psVideoBasePts) / 90;
         QByteArray in;
@@ -1750,9 +1768,8 @@ void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len
         if (IVS_META_DATA_sys_parse(out, &reader) != 1)
             return;
         const int count = std::min<int>(out[0], 30);
-        const bool packetAlarm = (p[23] & 0x80) != 0;
         if (!m_vcaSamples.empty() && m_vcaSamples.back().ms > ms)
-            m_vcaAlarmUntil.clear(); // went backwards: a new position in the stream
+            m_vcaAlarms.clear(); // went backwards: a new position in the stream
         VcaSample sample;
         sample.ms = ms;
         for (int i = 0; i < count; ++i) {
@@ -1767,10 +1784,7 @@ void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len
             // A real target has an id and a sensible box; anything else is another record type.
             if (tid == 0 || !(w > 0.002f && h > 0.002f && x >= 0.f && y >= 0.f && x + w <= 1.01f && y + h <= 1.01f))
                 continue;
-            if (packetAlarm)
-                m_vcaAlarmUntil.insert(tid, ms + kVcaAlarmHoldMs);
-            const bool alarm = m_vcaAlarmUntil.value(tid, -1) >= ms;
-            sample.targets.append({tid, QRectF(x, y, w, h), alarm});
+            sample.targets.append({tid, QRectF(x, y, w, h), targetInAlarm(tid, QRectF(x, y, w, h), ms)});
         }
         // Keep the samples in stamp order; the same report is often sent twice.
         if (!m_vcaSamples.empty() && m_vcaSamples.back().ms > ms)
@@ -1835,6 +1849,41 @@ void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len
         m_vcaRules = rules;
 }
 
+
+bool HikvisionArchivePlayer::targetInAlarm(quint32 tid, const QRectF &box, qint64 ms)
+{
+    auto it = m_vcaAlarms.find(tid);
+    if (it == m_vcaAlarms.end())
+        return false;
+    if (ms < it->since)
+        return false; // a report from before the alarm (they can arrive slightly out of order)
+    const VcaRule *rule = nullptr;
+    for (const VcaRule &r : m_vcaRules) {
+        if (r.id == it->rule) {
+            rule = &r;
+            break;
+        }
+    }
+    if (!rule || !rule->polygon || rule->points.size() < 3) {
+        // A line (or a rule not known yet): red for a short while after it fired.
+        if (ms - it->since <= kVcaLineAlarmMs)
+            return true;
+        m_vcaAlarms.erase(it);
+        return false;
+    }
+    // A zone: red while the target's feet (bottom middle of its box) are inside it.
+    const QPointF feet(box.center().x(), box.bottom());
+    if (QPolygonF(rule->points).containsPoint(feet, Qt::OddEvenFill)) {
+        it->outsideSince = -1;
+        return true;
+    }
+    if (it->outsideSince < 0)
+        it->outsideSince = ms;
+    if (ms - it->outsideSince <= kVcaZoneLeaveMs)
+        return true;
+    m_vcaAlarms.erase(it); // left the zone: green until the camera sends a new alarm
+    return false;
+}
 
 void HikvisionArchivePlayer::drawVca(QPainter *painter, const QRectF &videoRect, qint64 stampMs)
 {
