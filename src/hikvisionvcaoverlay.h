@@ -94,7 +94,6 @@ private:
     qint64 m_lastReportMs = -1;   // stream time of the newest report seen
     qint64 m_reportGapMs = 250;   // time between the last two reports
     QElapsedTimer m_sinceReport;  // wall time since the newest report arrived
-    QElapsedTimer m_diag;         // throttles the diagnostic log line
 };
 
 #endif // HIKVISIONVCAOVERLAY_H
