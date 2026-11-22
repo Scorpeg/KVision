@@ -229,7 +229,11 @@ void CALLBACK HikvisionVcaOverlay::dataCallBack(LONG handle, DWORD type, BYTE *b
         return;
     const qint64 before = link->decoder.latestMs();
     link->decoder.feed(buffer, static_cast<int>(size));
-    if (link->decoder.latestMs() == before || link->notifyPending.exchange(true))
+    if (link->decoder.latestMs() == before)
+        return;
+    // Only one repaint request is in flight at a time; it is cleared when the GUI thread has handled it,
+    // even if it found nothing to do, so a request can never stay "pending" for good.
+    if (link->notifyPending.exchange(true))
         return;
     // The callback cannot outlive the link: stop() keeps it until NET_DVR_StopRealPlay has returned. The
     // repaint request is queued on the overlay itself (dropped by Qt if the overlay is gone), and it only
@@ -239,9 +243,13 @@ void CALLBACK HikvisionVcaOverlay::dataCallBack(LONG handle, DWORD type, BYTE *b
         std::lock_guard<std::mutex> lock(link->ownerMutex);
         owner = link->owner;
     }
-    if (!owner)
+    if (!owner) {
+        link->notifyPending = false;
         return;
+    }
     QMetaObject::invokeMethod(owner.data(), [owner, link]() {
+        // The link is only touched while it is the overlay's current one (which keeps it alive); a replaced
+        // link is never touched again, so its flag does not matter.
         if (owner && owner->m_link.get() == link) {
             link->notifyPending = false;
             owner->onData();

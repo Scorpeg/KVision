@@ -85,8 +85,17 @@ void HikVcaDecoder::feed(const unsigned char *data, int size)
             pos += 3;
             continue;
         }
-        if (pos + 6 > n) { keepFrom = pos; break; }
+        if (pos + 9 > n) { keepFrom = pos; break; }
         const int pesLen = (buf[pos + 4] << 8) | buf[pos + 5];
+        // Video data can contain bytes that look like a start code ("00 00 01 bd" inside a picture). A real
+        // video or private-stream header has the MPEG-2 marker bits (10xx xxxx) and a header length that
+        // fits; anything else is skipped, so it cannot inject a nonsense time stamp (which made every box
+        // vanish about every 30 seconds).
+        if ((id == 0xE0 || id == 0xBD)
+                && ((buf[pos + 6] & 0xC0) != 0x80 || pesLen < 3 + buf[pos + 8] || pesLen < 8)) {
+            pos += 3;
+            continue;
+        }
         const int total = 6 + pesLen;
         if (pos + total > n) { keepFrom = pos; break; }
         if ((id == 0xE0 || id == 0xBD) && pesLen >= 8) {
