@@ -1959,6 +1959,14 @@ FocusScope {
             password: login ? login.pass : ""
             channelId: root.channelId
             videoRect: root.fittedVideoRect()
+            // Says why the boxes are not shown (in the log), when they are switched on for this tile.
+            readonly property string whyNot: !root.vcaTargetsHere ? "" :
+                (!root.isHikvision ? "not a Hikvision tile" : root.isQuickPlayback ? "quick playback" :
+                 !root.visible ? "tile hidden" : root.liveSuspended ? "playback window open" :
+                 root.source === "" ? "no source" : login === null ? "no saved login for " + root.recorderIp :
+                 root.isOneToOne ? "1:1 view" : root.isZoomed ? "zoomed" : "")
+            onWhyNotChanged: if (whyNot !== "") console.info("[VcaLive] " + root.recorderIp + " target boxes waiting: " + whyNot)
+            onActiveChanged: console.info("[VcaLive] " + root.recorderIp + " ch " + root.channelId + " target boxes " + (active ? "active" : "inactive"))
         }
 
         }
