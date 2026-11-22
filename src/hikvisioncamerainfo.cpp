@@ -142,6 +142,29 @@ QString targetTypes(const QByteArray &xml)
         if (!type.isEmpty() && isOn)
             types << type;
     }
+    // Intrusion, line crossing and region entrance name their targets per region or line in <detectionTarget>
+    // ("human,vehicle", "others,vehicle,human", ...), after that region's own <enabled>. Only regions that are on count.
+    if (types.isEmpty()) {
+        static const QRegularExpression itemRx(
+            QStringLiteral("<enabled>(\\w+)</enabled>|<detectionTarget>([^<]*)</detectionTarget>"));
+        bool itemOn = false;
+        auto it2 = itemRx.globalMatch(x);
+        while (it2.hasNext()) {
+            const QRegularExpressionMatch m = it2.next();
+            if (m.capturedLength(1) > 0) {
+                itemOn = m.captured(1).compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+                continue;
+            }
+            if (!itemOn)
+                continue;
+            const QStringList parts = m.captured(2).split(QLatin1Char(','), Qt::SkipEmptyParts);
+            for (const QString &p : parts) {
+                const QString t = p.trimmed().toLower();
+                if (!t.isEmpty() && !types.contains(t))
+                    types << t;
+            }
+        }
+    }
     // A JSON answer: {"targetTypeList":[{"type":"human","enabled":true}, ...]}
     if (types.isEmpty()) {
         const QJsonObject o = QJsonDocument::fromJson(x.toUtf8()).object();
