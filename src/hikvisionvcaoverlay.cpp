@@ -104,8 +104,14 @@ void HikvisionVcaOverlay::closeLink(const std::shared_ptr<Link> &link)
 void HikvisionVcaOverlay::start()
 {
     // A blank password counts as a failed login and can lock a camera, so it is never sent.
-    if (m_link || m_ip.isEmpty() || m_user.isEmpty() || m_pass.isEmpty())
+    if (m_link || m_ip.isEmpty())
         return;
+    if (m_user.isEmpty() || m_pass.isEmpty()) {
+        qInfo() << "[VcaLive]" << m_ip << "no saved login for target boxes";
+        setStatus(QStringLiteral("error"));
+        return;
+    }
+    qInfo() << "[VcaLive]" << m_ip << "channel" << m_channel << "connecting for target boxes";
     auto link = std::make_shared<Link>();
     link->owner = this;
     link->ip = m_ip;
@@ -168,6 +174,7 @@ void HikvisionVcaOverlay::start()
             if (!self || self->m_link != link)
                 return;
             if (ok) {
+                qInfo() << "[VcaLive]" << self->m_ip << "channel" << self->m_channel << "target boxes connected";
                 self->setStatus(QStringLiteral("on"));
             } else {
                 self->m_link.reset();

@@ -2317,8 +2317,11 @@ FocusScope {
                     Menu {
                         id: vcaSubMenu
                         property string ruleIp: ""
+                        // Read when the menu opens: the tile's player is kept in a plain map, which bindings do not follow.
+                        property bool targetsOn: false
                         onAboutToShow: {
                             var p = playerPool.activePlayersMap[model.index];
+                            targetsOn = !!p && p.vcaTargetsHere;
                             ruleIp = (p && p.isHikvision && !p.isQuickPlayback) ? p.detectionLogIp() : "";
                             root.refreshRuleState(ruleIp);
                         }
@@ -2383,8 +2386,7 @@ FocusScope {
 
                         MenuItem {
                             id: vcaTargetsMenuItem
-                            readonly property var tilePlayer: playerPool.activePlayersMap[model.index]
-                            text: ((tilePlayer && tilePlayer.vcaTargetsHere) ? "\u2713 " : "    ") + qsTr("Target Boxes")
+                            text: (vcaSubMenu.targetsOn ? "\u2713 " : "    ") + qsTr("Target Boxes")
                             visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             enabled: visible
                             height: visible ? implicitHeight : 0
@@ -2414,8 +2416,12 @@ FocusScope {
                                 vcaSubMenu.close();
                                 contextMenu.close();
                                 var player = playerPool.activePlayersMap[model.index];
-                                if (player)
+                                if (player) {
                                     player.toggleVcaTargetsHere();
+                                    rootWindow.showNotice(qsTr("Target boxes") + "\n" + (player.cameraNameInfo || player.recorderIp) + "\n"
+                                                          + (player.vcaTargetsHere ? qsTr("on") : qsTr("off")),
+                                                          "#00f5d4", 2500);
+                                }
                             }
                         }
                     }
