@@ -462,7 +462,7 @@ ColumnLayout {
                     radius: 4
                 }
                 onClicked: {
-                    var w = cameraSettingsComponent.createObject(rootWindow);
+                    var w = cameraSettingsComponent.createObject(rootWindow, { currentIndex: -1 });
                     if (w)
                         w.show();
                 }

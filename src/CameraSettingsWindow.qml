@@ -52,6 +52,7 @@ Window {
         target: HikvisionCameraInfo
         function onCamerasLoaded(list) {
             win.cameras = list;
+            cameraCombo.currentIndex = -1;
             if (win.startIp !== "")
                 win.showCamera(win.startIp);
         }
