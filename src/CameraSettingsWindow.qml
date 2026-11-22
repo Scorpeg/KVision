@@ -18,7 +18,8 @@ Window {
     color: "#0f151b"
     title: qsTr("Camera settings (read only)")
 
-    // The address of the camera to show when the window opens (from the right-click menu); empty opens on the first camera of the list.
+    // The address of the camera to show when the window opens (from the right-click menu); empty waits for a
+    // camera to be chosen in the list before anything is read.
     property string startIp: ""
     property var cameras: []
     property var sections: []
@@ -51,8 +52,6 @@ Window {
         target: HikvisionCameraInfo
         function onCamerasLoaded(list) {
             win.cameras = list;
-            if (list.length > 0 && cameraCombo.currentIndex < 0)
-                cameraCombo.currentIndex = 0;
             if (win.startIp !== "")
                 win.showCamera(win.startIp);
         }
