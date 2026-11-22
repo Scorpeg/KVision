@@ -119,6 +119,44 @@ QString onOff(const QString &v)
          : (v.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0 ? QStringLiteral("off") : v);
 }
 
+
+// Target types enabled for one smart detection rule (human, vehicle, animal, other).
+QString targetTypes(const QByteArray &xml)
+{
+    const QString x = QString::fromUtf8(xml);
+    QStringList types;
+    // The camera's answer for one smart detection rule: an XML with one <targetType> per target type (each
+    // <type> human/vehicle/animal/other and its <enabled>), or a flat <targetType>human</targetType> list.
+    static const QRegularExpression typeRx(QStringLiteral("<targetType>([\s\S]*?)</targetType>"));
+    auto it = typeRx.globalMatch(x);
+    while (it.hasNext()) {
+        const QString block = it.next().captured(1);
+        QString type = tag(block, QStringLiteral("type"));
+        QString enabled = tag(block, QStringLiteral("enabled"));
+        bool isOn = enabled.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+        if (type.isEmpty() && !block.trimmed().isEmpty()) {
+            // flat list: <targetType>human</targetType>
+            type = block.trimmed().toLower();
+            isOn = true;
+        }
+        if (!type.isEmpty() && isOn)
+            types << type;
+    }
+    // A JSON answer: {"targetTypeList":[{"type":"human","enabled":true}, ...]}
+    if (types.isEmpty()) {
+        const QJsonObject o = QJsonDocument::fromJson(x.toUtf8()).object();
+        const QJsonArray list = o.value(QStringLiteral("targetTypeList")).toArray();
+        for (const QJsonValue &t : list) {
+            const QJsonObject o2 = t.toObject();
+            const QString ty = o2.value(QStringLiteral("type")).toString().toLower();
+            const bool en = o2.value(QStringLiteral("enabled")).toBool();
+            if (!ty.isEmpty() && en)
+                types << ty;
+        }
+    }
+    return types.join(QStringLiteral(", "));
+}
+
 // "05:45" -> minutes since midnight; "24:00" -> 1440
 int minutesOf(const QString &hhmm)
 {
@@ -644,13 +682,18 @@ void detectionSection(const Cam &cam, QVariantList &out)
         QVariantList rows;
         auto rule = [&](const QString &label, const QString &path, const QString &trig, bool hasEnabled) {
             QString state = QStringLiteral("-");
+            QString types;
             if (hasEnabled) {
                 if (!fetchDoc(cam, path, &b, nullptr))
                     return;
                 state = onOff(tag(QString::fromUtf8(b), QStringLiteral("enabled")));
+                types = targetTypes(b);
             }
             const QString act = triggerActions(cam, trig);
-            rows << row(label, act.isEmpty() ? state : QStringLiteral("%1 | actions: %2").arg(state, act));
+            QString value = act.isEmpty() ? state : QStringLiteral("%1 | actions: %2").arg(state, act);
+            if (!types.isEmpty())
+                value += QStringLiteral(" | targets: %1").arg(types);
+            rows << row(label, value);
         };
         rule(QStringLiteral("Motion detection"), QStringLiteral("/ISAPI/System/Video/inputs/channels/%1/motionDetection").arg(n),
              QStringLiteral("VMD-%1").arg(n), true);
