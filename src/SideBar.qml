@@ -250,6 +250,15 @@ FocusScope {
 
     property var changelogData: [
         {
+            version: "v3.9.0",
+            date: "22 Nov 2026",
+            changes: [
+                qsTr("Add Stream saves an RTSP, HTTP or HTTPS address, including an HLS playlist, as a one-channel camera."),
+                qsTr("VCA target boxes and rule lines are drawn on the live tile from the camera's smart data, on the main stream and the sub-stream, including panoramic and G3 cameras. Playback can draw the recorded lines and boxes."),
+                qsTr("Camera settings names the targets of each detection rule, reads both lenses of a two-lens camera, and stops an All cameras read when the window closes.")
+            ]
+        },
+        {
             version: "v3.8.0",
             date: "19 Nov 2026",
             changes: [

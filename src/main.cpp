@@ -11,6 +11,8 @@
 #include <QSettings>
 #include <unistd.h>
 #include <sys/types.h>
+#include <climits>
+#include <cstdlib>
 #include <cstdarg>
 #include <QStandardPaths>
 #include <QDateTime>
@@ -329,8 +331,24 @@ int countAuxiliaryProcesses()
     return count;
 }
 
+// Fontconfig reads its config with the process's current directory. A launch from a folder that has
+// since been deleted makes that read fail, and fontconfig reports the failure as "out of memory".
+// The shell has already printed its own getcwd line by then; this puts the process somewhere real.
+static void ensureWorkingDirectory()
+{
+    char buf[PATH_MAX];
+    if (::getcwd(buf, sizeof(buf)) != nullptr)
+        return;
+    const char *home = std::getenv("HOME");
+    if (home && *home && ::chdir(home) == 0)
+        return;
+    if (::chdir("/") != 0)
+        return;
+}
+
 int main(int argc, char *argv[])
 {
+    ensureWorkingDirectory();
     // Background detection logger: no window, no QML, no video. Handled before anything else is set up.
     if (wantsHeadlessEvents(argc, argv))
         return runHeadlessEvents(argc, argv);

@@ -8,6 +8,12 @@ fi
 root=$(CDPATH= cd -- "$(dirname -- "$source")" && pwd)
 binary=$root/build/kvision
 
+# dash prints "getcwd() failed" on its own when this script is started from a folder that is gone.
+# Move to a real directory before the program starts, so fontconfig and child programs can run.
+if ! cd . >/dev/null 2>&1; then
+    cd -- "$root" 2>/dev/null || cd -- "${HOME:-/}" 2>/dev/null || cd / 2>/dev/null || true
+fi
+
 if [ ! -x "$binary" ]; then
     echo "Building KVision for first run..."
     cmake -S "$root" -B "$root/build" -DCMAKE_BUILD_TYPE=Release

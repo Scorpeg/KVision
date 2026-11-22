@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.9.0] - 22 Nov 2026
+
 ### Changed
 * **Detection events loads 25 entries at a time.** The window opens with the newest 25 matching entries, and **Load 25 more** adds the next 25 older entries.
 * **Camera settings names the targets of each detection rule.** On the Detection lines, motion, intrusion, line crossing, region entrance and region exit now add the targets that rule is set for (human, vehicle, animal, other). Each region or line slot is counted when it is switched on or when a shape is drawn for it, because some cameras report every slot as off even though the rule is on. When the rule is on but no slot is enabled, the first slot's targets are shown.
@@ -17,6 +19,8 @@ All notable changes to this project will be documented in this file.
 * **The event-picture outline is a camera choice.** The manual now says to leave **Overlay Rule Frame and Target Frame on Background Picture** off when pictures are viewed in KVision, so KVision can draw the box and the zone and the tick can hide them. Turn it on only when those pictures are also opened outside KVision. The live-stream switches next to it are a separate choice.
 
 ### Fixed
+* **Startup from a folder that is gone.** Launching from a directory that no longer exists made fontconfig refuse its config and report "out of memory", and the shell printed `getcwd() failed`. KVision now moves to the home directory when the launch folder is gone, so fonts load. The shell can still print its own one-line notice, because it does that before KVision starts.
+* **A device with no detection stream is noted once.** A doorbell, or any device that answers 404, 405 or 501 on the event stream, was warned about on every start. The note is kept, and later starts stay quiet. KVision still asks again every 30 minutes, and uses the stream if the device starts offering it.
 * **VCA lines on a G3 camera.** A G3 sends its rule list in a layout the line drawing skipped, so Show VCA Line Rules drew nothing on those cameras. The lines and zones are read from that layout now. A packet sometimes leaves a rule out, and that rule stays on screen until a later packet sends it again.
 * **Closing Camera settings stops an All cameras read.** The read walks every camera one after another. Closing the window now stops it, including the request already in flight, instead of leaving it running through the rest of the list.
 * **Camera settings reads both lenses of a two-lens camera.** A camera that sits on two recorder channels (the close-up and the wide lens) was read as one, and only the first lens was asked. Video, picture and detection are now read once per lens, and each section is named with that lens. In the All cameras table the Motion, Intrusion and Line crossing cells name each lens. Device, time, network, storage and users stay one section.

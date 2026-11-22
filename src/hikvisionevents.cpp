@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QLocale>
 #include <QThread>
 #include <QTextStream>
@@ -160,6 +161,7 @@ void HikvisionEvents::watch(const QString &ip, int httpPort, const QString &user
     QMutexLocker lock(&m_mu);
     if (m_logDir.isEmpty() && !configDir.isEmpty())
         m_logDir = configDir + QStringLiteral("/logs");
+    loadNoStreamNoted();
     Conn *c = m_conns.value(ip, nullptr);
     if (!c) {
         c = new Conn;
@@ -268,6 +270,36 @@ QVariantList HikvisionEvents::connectionStates() const
     return out;
 }
 
+void HikvisionEvents::loadNoStreamNoted()
+{
+    if (m_noStreamLoaded || m_logDir.isEmpty())
+        return;
+    m_noStreamLoaded = true;
+    QFile in(m_logDir + QStringLiteral("/no-event-stream"));
+    if (!in.open(QIODevice::ReadOnly))
+        return;
+    while (!in.atEnd()) {
+        const QString line = QString::fromUtf8(in.readLine()).trimmed();
+        if (!line.isEmpty())
+            m_noStreamNoted.insert(line);
+    }
+}
+
+void HikvisionEvents::storeNoStreamNoted() const
+{
+    if (m_logDir.isEmpty())
+        return;
+    QDir().mkpath(m_logDir);
+    QSaveFile out(m_logDir + QStringLiteral("/no-event-stream"));
+    if (!out.open(QIODevice::WriteOnly))
+        return;
+    QStringList ips = m_noStreamNoted.values();
+    ips.sort();
+    for (const QString &ip : ips)
+        out.write(ip.toUtf8() + '\n');
+    out.commit();
+}
+
 void HikvisionEvents::open(const QString &ip)
 {
     Conn *c = m_conns.value(ip, nullptr);
@@ -309,7 +341,8 @@ void HikvisionEvents::onReadyRead(const QString &ip)
     if (c->unsupported && c->reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
         c->unsupported = false; // it does offer them after all
         m_noStreamUntil.remove(ip);
-        m_noStreamNoted.remove(ip);
+        if (m_noStreamNoted.remove(ip))
+            storeNoStreamNoted();
         qInfo() << "[Events]" << ip << "now offers detection events";
     }
     c->watchdog->start(); // and the stream is alive: start the stall timer again
@@ -1020,15 +1053,17 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
         emit listenFailed(ip, tr("The camera refused the login. Check its password."));
         return;
     }
-    // This device has no event stream (a doorbell, for example). One warning, then a single question every
-    // 30 minutes: a device that is still starting up can answer like this, and asking more often never helps.
-    // The quiet wait is remembered on the listener, so a connection that is closed and opened again does not
-    // ask at once or print the warning again.
+    // This device has no event stream (a doorbell, for example). One warning the first time, then a single
+    // question every 30 minutes: a device that is still starting up can answer like this, and asking more
+    // often never helps. The note is kept in the log folder, so a later start stays quiet. The quiet wait
+    // is also remembered on the listener, so a connection that is closed and opened again does not ask at once.
     if (httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
         c->unsupported = true;
         m_noStreamUntil.insert(ip, QDateTime::currentMSecsSinceEpoch() + kUnsupportedRetryMs);
+        loadNoStreamNoted();
         if (!m_noStreamNoted.contains(ip)) {
             m_noStreamNoted.insert(ip);
+            storeNoStreamNoted();
             qWarning() << "[Events]" << ip
                        << QStringLiteral("has no detection stream (HTTP %1). Asking again in 30 minutes.").arg(httpStatus);
             emit listenFailed(ip, tr("This device does not offer detection events."));
