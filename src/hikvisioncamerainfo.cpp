@@ -148,6 +148,8 @@ QString targetTypes(const QByteArray &xml)
         static const QRegularExpression itemRx(
             QStringLiteral("<enabled>(\\w+)</enabled>|<detectionTarget>([^<]*)</detectionTarget>"));
         bool itemOn = false;
+        QStringList firstSlot; // the first slot's targets, shown when the camera has the rule on but no slot enabled
+        bool firstDone = false;
         auto it2 = itemRx.globalMatch(x);
         while (it2.hasNext()) {
             const QRegularExpressionMatch m = it2.next();
@@ -155,15 +157,25 @@ QString targetTypes(const QByteArray &xml)
                 itemOn = m.captured(1).compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
                 continue;
             }
-            if (!itemOn)
-                continue;
+            QStringList here;
             const QStringList parts = m.captured(2).split(QLatin1Char(','), Qt::SkipEmptyParts);
             for (const QString &p : parts) {
                 const QString t = p.trimmed().toLower();
-                if (!t.isEmpty() && !types.contains(t))
-                    types << t;
+                if (!t.isEmpty() && !here.contains(t))
+                    here << t;
             }
+            if (!firstDone && !here.isEmpty()) {
+                firstSlot = here;
+                firstDone = true;
+            }
+            if (!itemOn)
+                continue;
+            for (const QString &t : here)
+                if (!types.contains(t))
+                    types << t;
         }
+        if (types.isEmpty() && !firstSlot.isEmpty())
+            return firstSlot.join(QStringLiteral(", ")) + QStringLiteral(" (no region enabled; first slot)");
     }
     // A JSON answer: {"targetTypeList":[{"type":"human","enabled":true}, ...]}
     if (types.isEmpty()) {
