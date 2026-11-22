@@ -111,11 +111,80 @@ void HikVcaDecoder::feed(const unsigned char *data, int size)
         m_carry.clear(); // lost sync; start again
 }
 
+// Newer cameras (G3 series, data type 0x3000/0x3101) send their targets as plain records instead:
+// a 0x0014 packet, 12-byte header, then from byte 12: ..., byte 26 = record count, records from byte 36,
+// each 28 bytes (u32 id, u8 class, 3 bytes, float x, y, width, height (fractions of the picture), 4 bytes)
+// with a 4-byte gap between records.
+void HikVcaDecoder::handleTargetList(const unsigned char *p, int len, qint64 ms)
+{
+    if (len < 36 + 28)
+        return;
+    const int count = std::min<int>(p[26], 30);
+    Sample sample;
+    sample.ms = ms;
+    int pos = 36;
+    for (int k = 0; k < count && pos + 28 <= len; ++k, pos += 32) {
+        quint32 tid;
+        float x, y, w, h;
+        std::memcpy(&tid, p + pos, 4);
+        std::memcpy(&x, p + pos + 8, 4);
+        std::memcpy(&y, p + pos + 12, 4);
+        std::memcpy(&w, p + pos + 16, 4);
+        std::memcpy(&h, p + pos + 20, 4);
+        if (tid == 0 || !(w > 0.002f && h > 0.002f && x >= 0.f && y >= 0.f && x + w <= 1.01f && y + h <= 1.01f))
+            continue;
+        const QRectF box(x, y, w, h);
+        const bool alarm = targetInAlarm(tid, box, ms);
+        if (alarm) {
+            const auto a = m_alarms.constFind(tid);
+            if (a != m_alarms.constEnd() && a->rule != 0 && !sample.alarmRules.contains(a->rule))
+                sample.alarmRules.append(a->rule);
+        }
+        sample.targets.append({tid, box, alarm});
+    }
+    addSample(sample);
+}
+
+void HikVcaDecoder::addSample(const Sample &sample)
+{
+    // Keep the samples in stamp order; the same report is often sent twice.
+    if (!m_samples.empty() && m_samples.back().ms > sample.ms) {
+        m_samples.clear(); // went backwards: a new position in the stream
+        m_alarms.clear();
+    }
+    if (!m_samples.empty() && m_samples.back().ms == sample.ms)
+        m_samples.back() = sample;
+    else
+        m_samples.push_back(sample);
+    while (m_samples.size() > 600)
+        m_samples.pop_front();
+}
+
 void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
 {
-    if (len < 24 || p[0] != 0x00 || p[1] != 0x03 || m_videoBasePts < 0)
+    if (m_videoBasePts < 0 || len < 24)
+        return;
+    if (p[0] == 0x00 && p[1] == 0x14) {
+        handleTargetList(p, len, (pts - m_videoBasePts) / 90);
+        return;
+    }
+    if (p[0] != 0x00 || p[1] != 0x03)
         return;
     const int kind = p[5];
+    const bool newFormat = p[14] == 0x30; // G3 series: data type 0x30xx
+    if (kind == 2 && newFormat) {
+        // Alarm event, G3 layout: the 15-bit target id starts 4 bits into the byte 16 from the end,
+        // after six zero bytes. Which rule fired is not decoded for this layout (rule 0).
+        if (len < 40)
+            return;
+        const unsigned char *t = p + len - 16;
+        if (!std::all_of(t - 6, t, [](unsigned char b) { return b == 0; }))
+            return;
+        const quint32 tid = (((t[0] & 0x0f) << 11) | (t[1] << 3) | (t[2] >> 5)) & 0x7fff;
+        if (tid != 0)
+            m_alarms.insert(tid, {0, (pts - m_videoBasePts) / 90, -1});
+        return;
+    }
     if (kind == 2) {
         // Alarm event, sent (three times) when a rule fires. It ends with the rule id, seven zero
         // bytes, the 15-bit target id (top bit set) and nine more bytes.
@@ -132,6 +201,8 @@ void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
             m_alarms.insert(tid, {rule, ms, -1});
         return;
     }
+    if (kind == 1 && newFormat)
+        return; // a G3 sends its boxes in the 0x0014 target list; this packet is a different layout
     if (kind == 1) {
         const qint64 ms = (pts - m_videoBasePts) / 90;
         QByteArray in;
@@ -173,19 +244,11 @@ void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
             }
             sample.targets.append({tid, QRectF(x, y, w, h), alarm});
         }
-        // Keep the samples in stamp order; the same report is often sent twice.
-        if (!m_samples.empty() && m_samples.back().ms > ms)
-            m_samples.clear(); // went backwards: a new position in the stream
-        if (!m_samples.empty() && m_samples.back().ms == ms)
-            m_samples.back() = sample;
-        else
-            m_samples.push_back(sample);
-        while (m_samples.size() > 600)
-            m_samples.pop_front();
+        addSample(sample);
         return;
     }
-    if (kind != 3)
-        return;
+    if (kind != 3 || newFormat)
+        return; // the G3 rule layout is not decoded (its lines are drawn by the camera itself)
 
     // Rule list (sent about once a second): split into rules, parse each.
     const int ruleCount = p[22];

@@ -43,6 +43,8 @@ public:
 private:
     struct Alarm { quint32 rule; qint64 since; qint64 outsideSince; };
     void handlePacket(const unsigned char *p, int len, qint64 pts);
+    void handleTargetList(const unsigned char *p, int len, qint64 ms); // newer (G3) target records
+    void addSample(const Sample &sample);
     bool targetInAlarm(quint32 tid, const QRectF &box, qint64 ms);
 
     mutable std::mutex m_mutex;     // guards everything below
