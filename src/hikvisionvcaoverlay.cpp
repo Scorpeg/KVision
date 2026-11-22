@@ -1,7 +1,9 @@
 #include "hikvisionvcaoverlay.h"
 #include "hikvisionmanager.h"
 
-#include <QPainter>
+#include <QSGGeometryNode>
+#include <QSGFlatColorMaterial>
+#include <cmath>
 #include <QPointer>
 #include <QThread>
 #include <QCoreApplication>
@@ -32,17 +34,24 @@ struct HikvisionVcaOverlay::Link {
 };
 
 HikvisionVcaOverlay::HikvisionVcaOverlay(QQuickItem *parent)
-    : QQuickPaintedItem(parent)
+    : QQuickItem(parent)
 {
+    setFlag(QQuickItem::ItemHasContents, true);
     setAcceptedMouseButtons(Qt::NoButton);
     m_retry.setSingleShot(true);
     m_retry.setInterval(kRetryMs);
     connect(&m_retry, &QTimer::timeout, this, [this]() { if (m_active && !m_link) start(); });
-    m_frame.setInterval(33);
+    m_frame.setInterval(40);
     connect(&m_frame, &QTimer::timeout, this, [this]() {
         update();
-        if (!m_link || m_sinceReport.elapsed() > kLiveHoldMs)
+        // The box only moves while it glides to the newest report; after that nothing changes until the next
+        // report (or until it is dropped, which a single-shot repaint below takes care of).
+        if (!m_link || m_sinceReport.elapsed() > m_reportGapMs) {
             m_frame.stop();
+            const int left = kLiveHoldMs - int(m_sinceReport.elapsed());
+            if (m_link && left > 0)
+                QTimer::singleShot(left + 20, this, [this]() { update(); });
+        }
     });
 }
 
@@ -256,15 +265,61 @@ void HikvisionVcaOverlay::onData()
     update();
 }
 
-void HikvisionVcaOverlay::paint(QPainter *painter)
+// Builds one outline per box (and per rule, if drawn) as GPU line geometry. A box is a closed
+// strip of thin quads (a rectangle frame), coloured with a flat-colour material.
+namespace {
+QSGGeometryNode *frameNode(const QVector<QPointF> &points, bool closed, qreal width, const QColor &color)
 {
+    const int n = points.size();
+    const int segments = closed ? n : n - 1;
+    if (segments < 1)
+        return nullptr;
+    auto *geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), segments * 6);
+    geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+    QSGGeometry::Point2D *v = geometry->vertexDataAsPoint2D();
+    const qreal h = width / 2.0;
+    for (int i = 0; i < segments; ++i) {
+        const QPointF a = points[i];
+        const QPointF b = points[(i + 1) % n];
+        QPointF d = b - a;
+        const qreal len = std::hypot(d.x(), d.y());
+        if (len <= 0.0)
+            d = QPointF(1, 0);
+        else
+            d /= len;
+        // extend each segment by half the width so the corners close, and offset to both sides
+        const QPointF e = d * h;
+        const QPointF nrm(-d.y() * h, d.x() * h);
+        const QPointF p1 = a - e + nrm, p2 = a - e - nrm, p3 = b + e + nrm, p4 = b + e - nrm;
+        v[i * 6 + 0].set(float(p1.x()), float(p1.y()));
+        v[i * 6 + 1].set(float(p2.x()), float(p2.y()));
+        v[i * 6 + 2].set(float(p3.x()), float(p3.y()));
+        v[i * 6 + 3].set(float(p3.x()), float(p3.y()));
+        v[i * 6 + 4].set(float(p2.x()), float(p2.y()));
+        v[i * 6 + 5].set(float(p4.x()), float(p4.y()));
+    }
+    auto *node = new QSGGeometryNode;
+    node->setGeometry(geometry);
+    node->setFlag(QSGNode::OwnsGeometry);
+    auto *material = new QSGFlatColorMaterial;
+    material->setColor(color);
+    node->setMaterial(material);
+    node->setFlag(QSGNode::OwnsMaterial);
+    return node;
+}
+}
+
+QSGNode *HikvisionVcaOverlay::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
+{
+    // The node tree is small (a few outlines), so it is rebuilt on every update.
+    delete oldNode;
     if (!m_active || !m_link || (!m_showRules && !m_showTargets))
-        return;
+        return nullptr;
     const QRectF video = m_videoRect.isValid() ? m_videoRect : boundingRect();
     QVector<HikVcaDecoder::Target> targets;
     QVector<quint32> alarmRules;
     HikVcaDecoder::Sample older, newer;
-    if (m_link->decoder.latestTwo(&older, &newer) && m_sinceReport.isValid()
+    if (m_showTargets && m_link->decoder.latestTwo(&older, &newer) && m_sinceReport.isValid()
             && m_sinceReport.elapsed() <= kLiveHoldMs) {
         // Glide each box from where the previous report had it to the newest one, over the time between them.
         const qreal t = qBound<qreal>(0.0, qreal(m_sinceReport.elapsed()) / qreal(m_reportGapMs), 1.0);
@@ -282,6 +337,30 @@ void HikvisionVcaOverlay::paint(QPainter *painter)
         }
         alarmRules = newer.alarmRules;
     }
-    HikVcaDecoder::draw(painter, video, m_link->decoder.rules(), m_showRules,
-                        m_showTargets ? targets : QVector<HikVcaDecoder::Target>(), alarmRules);
+    auto toView = [&video](const QPointF &pt) {
+        return QPointF(video.x() + pt.x() * video.width(), video.y() + pt.y() * video.height());
+    };
+    const qreal lineWidth = std::max<qreal>(1.5, video.height() / 540.0);
+    auto *root = new QSGNode;
+    if (m_showRules) {
+        for (const HikVcaDecoder::Rule &rule : m_link->decoder.rules()) {
+            QVector<QPointF> pts;
+            for (const QPointF &pt : rule.points)
+                pts << toView(pt);
+            const bool red = alarmRules.contains(rule.id);
+            if (QSGGeometryNode *n = frameNode(pts, rule.polygon && pts.size() >= 3, lineWidth, red ? QColor(255, 0, 0) : QColor(0, 0, 255)))
+                root->appendChildNode(n);
+        }
+    }
+    for (const HikVcaDecoder::Target &t : targets) {
+        const QRectF r(toView(t.rect.topLeft()), toView(t.rect.bottomRight()));
+        const QVector<QPointF> corners = { r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() };
+        if (QSGGeometryNode *n = frameNode(corners, true, lineWidth, t.alarm ? QColor(255, 0, 0) : QColor(0, 255, 0)))
+            root->appendChildNode(n);
+    }
+    if (!root->childCount()) {
+        delete root;
+        return nullptr;
+    }
+    return root;
 }

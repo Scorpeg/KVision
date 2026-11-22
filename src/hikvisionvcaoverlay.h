@@ -1,7 +1,7 @@
 #ifndef HIKVISIONVCAOVERLAY_H
 #define HIKVISIONVCAOVERLAY_H
 
-#include <QQuickPaintedItem>
+#include <QQuickItem>
 #include <QElapsedTimer>
 #include <QTimer>
 #include <QSizeF>
@@ -15,7 +15,9 @@
 // The picture comes from the tile's own player; this item only opens a light SDK sub-stream connection to read
 // the camera's smart data (no video is decoded) and draws over the tile. It connects only while it is active.
 // Live boxes arrive a few times a second, so a box glides from one report to the next.
-class HikvisionVcaOverlay : public QQuickPaintedItem
+// The outlines are drawn by the GPU as scene graph line nodes (no full-tile picture is painted and uploaded),
+// so several tiles with several targets each stay cheap.
+class HikvisionVcaOverlay : public QQuickItem
 {
     Q_OBJECT
     Q_PROPERTY(QString recorderIp READ recorderIp WRITE setRecorderIp NOTIFY settingsChanged)
@@ -36,7 +38,7 @@ public:
     explicit HikvisionVcaOverlay(QQuickItem *parent = nullptr);
     ~HikvisionVcaOverlay() override;
 
-    void paint(QPainter *painter) override;
+    QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
 
     QString recorderIp() const { return m_ip; }
     void setRecorderIp(const QString &v);
@@ -87,7 +89,7 @@ private:
 
     std::shared_ptr<Link> m_link;
     QTimer m_retry;      // reconnects after a failure
-    QTimer m_frame;      // repaints while a box is gliding
+    QTimer m_frame;      // repaints while a box is gliding (stops when it has arrived)
     // Smoothing: the box moves from the previous report to the newest over the time between them.
     qint64 m_lastReportMs = -1;   // stream time of the newest report seen
     qint64 m_reportGapMs = 250;   // time between the last two reports
