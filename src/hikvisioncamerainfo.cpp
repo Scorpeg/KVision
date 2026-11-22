@@ -147,8 +147,36 @@ QString targetTypes(const QByteArray &xml)
         if (!type.isEmpty() && isOn)
             types << type;
     }
-    // Intrusion, line crossing and region entrance name their targets per region or line in <detectionTarget>
-    // ("human,vehicle", "others,vehicle,human", ...), after that region's own <enabled>. Only regions that are on count.
+    // Intrusion, line crossing and region entrance have four slots, each with its own <detectionTarget>
+    // ("human,vehicle", "others,vehicle,human", ...). Some cameras (seen on a pano camera) report every slot as
+    // enabled=false although the rules are on in the web page, and mark a rule in use only by drawing it: an unused
+    // slot has all its coordinates at 0. So a slot counts when it is enabled or has a drawn shape.
+    if (types.isEmpty()) {
+        static const QRegularExpression slotRx(
+            QStringLiteral("<(FieldDetectionRegion|LineItem|RegionEntranceRegion|RegionExitingRegion)[ >].*?</\\1>"),
+            QRegularExpression::DotMatchesEverythingOption);
+        static const QRegularExpression posRx(QStringLiteral("<position[XY]>\\s*(-?\\d+)\\s*</position[XY]>"));
+        auto slotIt = slotRx.globalMatch(x);
+        while (slotIt.hasNext()) {
+            const QString blk = slotIt.next().captured(0);
+            const bool enabled = tag(blk, QStringLiteral("enabled")).compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+            bool drawn = false;
+            auto pos = posRx.globalMatch(blk);
+            while (pos.hasNext() && !drawn)
+                drawn = pos.next().captured(1).toInt() != 0;
+            if (!enabled && !drawn)
+                continue;
+            const QStringList parts = tag(blk, QStringLiteral("detectionTarget")).split(QLatin1Char(','), Qt::SkipEmptyParts);
+            for (const QString &p : parts) {
+                const QString t = p.trimmed().toLower();
+                if (!t.isEmpty() && !types.contains(t))
+                    types << t;
+            }
+        }
+        if (!types.isEmpty())
+            return types.join(QStringLiteral(", "));
+    }
+    // Older layout without slot blocks: the targets after each <enabled>. Only entries that are on count.
     if (types.isEmpty()) {
         static const QRegularExpression itemRx(
             QStringLiteral("<enabled>(\\w+)</enabled>|<detectionTarget>([^<]*)</detectionTarget>"));
