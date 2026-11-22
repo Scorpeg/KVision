@@ -127,7 +127,7 @@ QString targetTypes(const QByteArray &xml)
     QStringList types;
     // The camera's answer for one smart detection rule: an XML with one <targetType> per target type (each
     // <type> human/vehicle/animal/other and its <enabled>), or a flat <targetType>human</targetType> list.
-    static const QRegularExpression typeRx(QStringLiteral("<targetType>([\s\S]*?)</targetType>"));
+    static const QRegularExpression typeRx(QStringLiteral("<targetType>([\\s\\S]*?)</targetType>"));
     auto it = typeRx.globalMatch(x);
     while (it.hasNext()) {
         const QString block = it.next().captured(1);
@@ -135,9 +135,14 @@ QString targetTypes(const QByteArray &xml)
         QString enabled = tag(block, QStringLiteral("enabled"));
         bool isOn = enabled.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
         if (type.isEmpty() && !block.trimmed().isEmpty()) {
-            // flat list: <targetType>human</targetType>
-            type = block.trimmed().toLower();
-            isOn = true;
+            // flat list: <targetType>human,vehicle</targetType> (what the motion detection answer uses)
+            const QStringList flat = block.split(QLatin1Char(','), Qt::SkipEmptyParts);
+            for (const QString &f : flat) {
+                const QString t = f.trimmed().toLower();
+                if (!t.isEmpty() && !types.contains(t))
+                    types << t;
+            }
+            continue;
         }
         if (!type.isEmpty() && isOn)
             types << type;
