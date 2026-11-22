@@ -21,6 +21,7 @@ Window {
     // The address of the camera to show when the window opens (from the right-click menu); empty waits for a
     // camera to be chosen in the list before anything is read.
     property string startIp: ""
+    property bool picked: false // true once a camera has been chosen from the list (or came with the window)
     property var cameras: []
     property var sections: []
     property var overview: []
@@ -52,8 +53,14 @@ Window {
         target: HikvisionCameraInfo
         function onCamerasLoaded(list) {
             win.cameras = list;
-            if (win.startIp !== "")
+            if (win.startIp !== "") {
                 win.showCamera(win.startIp);
+            } else if (!win.picked) {
+                // A ComboBox selects its first item by itself once its model fills. Opened from Camera Tools there is no
+                // camera to show, so clear that choice and wait for one to be picked from the list.
+                cameraCombo.currentIndex = -1;
+                Qt.callLater(function() { if (!win.picked && win.startIp === "") cameraCombo.currentIndex = -1; });
+            }
         }
         function onCameraRead(ip, secs) {
             win.sections = secs;
@@ -76,6 +83,7 @@ Window {
     // Picks the camera with this address in the list and reads it. A camera that is not in the list says so and leaves the list as it is.
     function showCamera(ip) {
         win.startIp = ip;
+        win.picked = true;
         win.showOverview = false;
         for (var i = 0; i < win.cameras.length; ++i) {
             if (win.cameras[i].ip === ip) {
@@ -151,7 +159,10 @@ Window {
                 model: win.cameras
                 textRole: "name"
                 enabled: !HikvisionCameraInfo.busy && !win.showOverview
-                onActivated: win.readSelected()
+                onActivated: {
+                    win.picked = true;
+                    win.readSelected();
+                }
                 background: Rectangle {
                     implicitHeight: 32
                     color: "#0f151b"
@@ -159,8 +170,8 @@ Window {
                     radius: 4
                 }
                 contentItem: Text {
-                    text: cameraCombo.displayText
-                    color: "white"
+                    text: cameraCombo.currentIndex < 0 ? qsTr("Select a camera...") : cameraCombo.displayText
+                    color: cameraCombo.currentIndex < 0 ? "#8898a6" : "white"
                     font.pixelSize: 11
                     verticalAlignment: Text.AlignVCenter
                     leftPadding: 10
