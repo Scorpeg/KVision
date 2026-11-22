@@ -127,7 +127,7 @@ private:
     // Smart data the camera writes into the recording (private PS stream 0xBD), decoded with
     // PlayCtrl's own IVS parsers. Fed from PlayDataCallBack; drawn in paint() on the frame it belongs to.
     struct VcaTarget { quint32 id; QRectF rect; bool alarm; };
-    struct VcaSample { qint64 ms; QVector<VcaTarget> targets; };
+    struct VcaSample { qint64 ms; QVector<VcaTarget> targets; QVector<quint32> alarmRules; }; // alarmRules: rules a target here has set off
     struct VcaRule { quint32 id; bool polygon; QVector<QPointF> points; };
     void parsePrivateData(const BYTE *data, DWORD size);
     void handlePrivatePacket(const unsigned char *p, int len, qint64 pts);

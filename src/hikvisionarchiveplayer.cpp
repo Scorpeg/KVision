@@ -1784,7 +1784,14 @@ void HikvisionArchivePlayer::handlePrivatePacket(const unsigned char *p, int len
             // A real target has an id and a sensible box; anything else is another record type.
             if (tid == 0 || !(w > 0.002f && h > 0.002f && x >= 0.f && y >= 0.f && x + w <= 1.01f && y + h <= 1.01f))
                 continue;
-            sample.targets.append({tid, QRectF(x, y, w, h), targetInAlarm(tid, QRectF(x, y, w, h), ms)});
+            const bool alarm = targetInAlarm(tid, QRectF(x, y, w, h), ms);
+            if (alarm) {
+                // The zone or line this target set off is drawn red too, so it shows where the alarm came from.
+                const auto a = m_vcaAlarms.constFind(tid);
+                if (a != m_vcaAlarms.constEnd() && !sample.alarmRules.contains(a->rule))
+                    sample.alarmRules.append(a->rule);
+            }
+            sample.targets.append({tid, QRectF(x, y, w, h), alarm});
         }
         // Keep the samples in stamp order; the same report is often sent twice.
         if (!m_vcaSamples.empty() && m_vcaSamples.back().ms > ms)
@@ -1889,6 +1896,7 @@ void HikvisionArchivePlayer::drawVca(QPainter *painter, const QRectF &videoRect,
 {
     QVector<VcaRule> rules;
     QVector<VcaTarget> targets;
+    QVector<quint32> alarmRules;
     {
         std::lock_guard<std::mutex> lock(m_vcaMutex);
         rules = m_vcaRules;
@@ -1896,8 +1904,10 @@ void HikvisionArchivePlayer::drawVca(QPainter *painter, const QRectF &videoRect,
             // The newest report at or before this frame, if it is recent enough.
             for (auto it = m_vcaSamples.rbegin(); it != m_vcaSamples.rend(); ++it) {
                 if (it->ms <= stampMs) {
-                    if (stampMs - it->ms <= kVcaHoldMs)
+                    if (stampMs - it->ms <= kVcaHoldMs) {
                         targets = it->targets;
+                        alarmRules = it->alarmRules;
+                    }
                     break;
                 }
             }
@@ -1914,16 +1924,22 @@ void HikvisionArchivePlayer::drawVca(QPainter *painter, const QRectF &videoRect,
     painter->setBrush(Qt::NoBrush);
     const qreal lineWidth = std::max<qreal>(1.0, videoRect.height() / 540.0);
 
-    // Rule lines and zones in blue, as iVMS-4200 draws them.
-    painter->setPen(QPen(QColor(0, 0, 255), lineWidth));
-    for (const VcaRule &rule : rules) {
-        QPolygonF poly;
-        for (const QPointF &pt : rule.points)
-            poly << toView(pt);
-        if (rule.polygon && poly.size() >= 3)
-            painter->drawPolygon(poly);
-        else
-            painter->drawPolyline(poly);
+    // Rule lines and zones in blue, as iVMS-4200 draws them; a rule in alarm in red, drawn last so it
+    // stays on top where it shares an edge with another rule.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool alarmPass = pass == 1;
+        painter->setPen(QPen(alarmPass ? QColor(255, 0, 0) : QColor(0, 0, 255), lineWidth));
+        for (const VcaRule &rule : rules) {
+            if (alarmRules.contains(rule.id) != alarmPass)
+                continue;
+            QPolygonF poly;
+            for (const QPointF &pt : rule.points)
+                poly << toView(pt);
+            if (rule.polygon && poly.size() >= 3)
+                painter->drawPolygon(poly);
+            else
+                painter->drawPolyline(poly);
+        }
     }
 
     // Target boxes: red while the target sets off a rule, green otherwise (as iVMS-4200).
