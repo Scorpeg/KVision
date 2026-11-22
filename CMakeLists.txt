@@ -183,6 +183,8 @@ set(PROJ_FILES
     src/thumbnailprovider.cpp src/thumbnailprovider.h
     src/hikvisionisapi.cpp src/hikvisionisapi.h
     src/hikvisionarchiveplayer.cpp src/hikvisionarchiveplayer.h
+    src/hikvisionvca.cpp src/hikvisionvca.h
+    src/hikvisionvcaoverlay.cpp src/hikvisionvcaoverlay.h
     src/hikvisiondownloader.cpp src/hikvisiondownloader.h
     src/hikvisiontalk.cpp src/hikvisiontalk.h src/talkaudio.h
     src/talkaacencoder.cpp src/talkaacencoder.h

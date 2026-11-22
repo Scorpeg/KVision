@@ -16,6 +16,7 @@
 #include <QRectF>
 #include <QPointF>
 #include "hcnetsdk_compat.h"
+#include "hikvisionvca.h"
 
 #include <QAudioOutput>
 #include <QAudioFormat>
@@ -124,24 +125,11 @@ signals:
 private:
     void updateImage(const QImage &img, qint64 stampMs = -1);
 
-    // Smart data the camera writes into the recording (private PS stream 0xBD), decoded with
-    // PlayCtrl's own IVS parsers. Fed from PlayDataCallBack; drawn in paint() on the frame it belongs to.
-    struct VcaTarget { quint32 id; QRectF rect; bool alarm; };
-    struct VcaSample { qint64 ms; QVector<VcaTarget> targets; QVector<quint32> alarmRules; }; // alarmRules: rules a target here has set off
-    struct VcaRule { quint32 id; bool polygon; QVector<QPointF> points; };
-    void parsePrivateData(const BYTE *data, DWORD size);
-    void handlePrivatePacket(const unsigned char *p, int len, qint64 pts);
-    bool targetInAlarm(quint32 tid, const QRectF &box, qint64 ms); // m_vcaMutex held
-    void resetVcaState();
+    // Smart data the camera writes into the recording (rule lines, target boxes, alarms); drawn in paint()
+    // on the frame it belongs to. Always fed, so the boxes stay in step when the overlay is switched on.
     void drawVca(QPainter *painter, const QRectF &videoRect, qint64 stampMs);
     std::atomic<bool> m_showVca{true};
-    std::mutex m_vcaMutex;            // guards everything below
-    QByteArray m_psCarry;             // unfinished PS packet from the previous data callback
-    qint64 m_psVideoBasePts = -1;     // PTS of the first video frame: decoder stamp 0
-    std::deque<VcaSample> m_vcaSamples;
-    QVector<VcaRule> m_vcaRules;
-    struct VcaAlarm { quint32 rule; qint64 since; qint64 outsideSince; };
-    QHash<quint32, VcaAlarm> m_vcaAlarms; // target id -> the rule it set off (from the alarm event packets)
+    HikVcaDecoder m_vca;
     qint64 m_currentFrameStampMs = -1; // decoder stamp of m_currentImage, guarded by m_imageMutex
     static void PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType, BYTE *pBuffer, DWORD dwBufSize, void *pUser);
     static void DecCallBack(long nPort, char *pBuf, long nSize, FRAME_INFO *pFrameInfo, long nReserved1, long nReserved2);

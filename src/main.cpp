@@ -60,6 +60,7 @@ int qmlRegisterSingletonInstance(const char *uri, int versionMajor, int versionM
 
 #include "systemstats.h"
 #include "hikvisionarchiveplayer.h"
+#include "hikvisionvcaoverlay.h"
 #include "hikvisionisapi.h"
 #include "hikvisiondownloader.h"
 #include "hikvisiontalk.h"
@@ -230,6 +231,7 @@ void registerQmlTypes()
 
     qmlRegisterType<HikvisionPlayer>("CCTV_Viewer.Hikvision", 1, 0, "HikvisionPlayer");
     qmlRegisterType<HikvisionArchivePlayer>("CCTV_Viewer.Hikvision", 1, 0, "HikvisionArchivePlayer");
+    qmlRegisterType<HikvisionVcaOverlay>("CCTV_Viewer.Hikvision", 1, 0, "HikvisionVcaOverlay");
     qmlRegisterType<HikvisionDownloader>("CCTV_Viewer.Hikvision", 1, 0, "HikvisionDownloader");
 
     qmlRegisterSingletonType<HikvisionISAPI>("CCTV_Viewer.Hikvision", 1, 0, "HikvisionISAPI",

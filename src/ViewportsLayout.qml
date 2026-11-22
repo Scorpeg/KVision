@@ -1478,6 +1478,7 @@ FocusScope {
                             if (!keepSubMenuOpen) {
                                 streamSubMenu.close();
                                 quickToolsSubMenu.close();
+                                vcaSubMenu.close();
                             }
                             keepSubMenuOpen = false;
                         }
@@ -1530,6 +1531,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
 
@@ -1570,6 +1572,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
                             
@@ -1666,6 +1669,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
                             
@@ -1703,6 +1707,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
                             
@@ -1742,6 +1747,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
                             
@@ -1781,6 +1787,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
 
@@ -1832,6 +1839,7 @@ FocusScope {
                             onHoveredChanged: {
                                 if (hovered) {
                                     streamSubMenu.close();
+                                    vcaSubMenu.close();
                                     root.popupBeside(quickToolsSubMenu, quickToolsMenuItem);
                                 }
                             }
@@ -1839,6 +1847,56 @@ FocusScope {
                             onTriggered: {
                                 contextMenu.keepSubMenuOpen = true;
                                 root.popupBeside(quickToolsSubMenu, quickToolsMenuItem);
+                            }
+                        }
+
+                        MenuItem {
+                            id: vcaMenuItem
+                            text: qsTr("VCA")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: RowLayout {
+                                spacing: 8
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: vcaMenuItem.text
+                                    font { pixelSize: 11; bold: true }
+                                    color: vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    horizontalAlignment: Text.AlignLeft
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    text: "\u25B6"
+                                    font { pixelSize: 9; bold: true }
+                                    color: vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                    rightPadding: 8
+                                }
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: vcaMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: vcaMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            onHoveredChanged: {
+                                if (hovered) {
+                                    streamSubMenu.close();
+                                    quickToolsSubMenu.close();
+                                    root.popupBeside(vcaSubMenu, vcaMenuItem);
+                                }
+                            }
+
+                            onTriggered: {
+                                contextMenu.keepSubMenuOpen = true;
+                                root.popupBeside(vcaSubMenu, vcaMenuItem);
                             }
                         }
 
@@ -1874,6 +1932,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
 
@@ -1916,6 +1975,7 @@ FocusScope {
                                 if (hovered) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
+                                    vcaSubMenu.close();
                                 }
                             }
 
@@ -2067,42 +2127,6 @@ FocusScope {
                             contextMenu.close();
                                 viewportSettingsDialog.index = model.index;
                                 viewportSettingsDialog.open();
-                            }
-                        }
-
-                        MenuItem {
-                            id: ruleLinesMenuItem
-                            text: (root.ruleIsOn(quickToolsSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Rule lines on/off (VCA lines)")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible && !HikvisionBackup.ruleBusy
-                            height: visible ? implicitHeight : 0
-                            leftPadding: 12
-
-                            contentItem: Text {
-                                text: ruleLinesMenuItem.text
-                                font { pixelSize: 11; bold: true }
-                                color: ruleLinesMenuItem.enabled ? (ruleLinesMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
-                                horizontalAlignment: Text.AlignLeft
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                implicitWidth: 150
-                                implicitHeight: 32
-                                color: ruleLinesMenuItem.hovered ? "#2a3540" : "transparent"
-                                border.color: ruleLinesMenuItem.hovered ? "#00f5d4" : "transparent"
-                                border.width: 1
-                                radius: 4
-                            }
-
-                            ToolTip.visible: hovered
-                            ToolTip.delay: 600
-                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). It is drawn on the sub-stream only, so a tile playing the main stream does not show it. The camera is read first and then set the other way. Only this camera is changed.")
-
-                            onTriggered: {
-                                contextMenu.close();
-                                var player = playerPool.activePlayersMap[model.index];
-                                if (player)
-                                    root.toggleRuleLines(player.detectionLogIp(), player.cameraNameInfo);
                             }
                         }
 
@@ -2286,6 +2310,112 @@ FocusScope {
                                 var player = playerPool.activePlayersMap[model.index];
                                 if (player)
                                     root.askReboot(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+                    }
+
+                    Menu {
+                        id: vcaSubMenu
+                        property string ruleIp: ""
+                        onAboutToShow: {
+                            var p = playerPool.activePlayersMap[model.index];
+                            ruleIp = (p && p.isHikvision && !p.isQuickPlayback) ? p.detectionLogIp() : "";
+                            root.refreshRuleState(ruleIp);
+                        }
+                        margins: 6 // keeps the menu inside the window, even for a small cell near an edge
+
+                        topPadding: 5
+                        bottomPadding: 5
+
+                        enter: Transition {
+                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
+                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
+                        }
+                        exit: Transition {
+                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
+                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
+                        }
+
+                        background: Rectangle {
+                            implicitWidth: 200
+                            color: "#151d24"
+                            border.color: "#ff7a00"
+                            border.width: 1
+                            radius: 6
+                        }
+
+                        MenuItem {
+                            id: ruleLinesMenuItem
+                            text: (root.ruleIsOn(vcaSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Show VCA Line Rules")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible && !HikvisionBackup.ruleBusy
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: ruleLinesMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: ruleLinesMenuItem.enabled ? (ruleLinesMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: ruleLinesMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: ruleLinesMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). It is drawn on the sub-stream only, so a tile playing the main stream does not show it. The camera is read first and then set the other way. Only this camera is changed.")
+
+                            onTriggered: {
+                                vcaSubMenu.close();
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    root.toggleRuleLines(player.detectionLogIp(), player.cameraNameInfo);
+                            }
+                        }
+
+                        MenuItem {
+                            id: vcaTargetsMenuItem
+                            readonly property var tilePlayer: playerPool.activePlayersMap[model.index]
+                            text: ((tilePlayer && tilePlayer.vcaTargetsHere) ? "\u2713 " : "    ") + qsTr("Target Boxes")
+                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                            enabled: visible
+                            height: visible ? implicitHeight : 0
+                            leftPadding: 12
+
+                            contentItem: Text {
+                                text: vcaTargetsMenuItem.text
+                                font { pixelSize: 11; bold: true }
+                                color: vcaTargetsMenuItem.enabled ? (vcaTargetsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
+                                horizontalAlignment: Text.AlignLeft
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                implicitWidth: 150
+                                implicitHeight: 32
+                                color: vcaTargetsMenuItem.hovered ? "#2a3540" : "transparent"
+                                border.color: vcaTargetsMenuItem.hovered ? "#00f5d4" : "transparent"
+                                border.width: 1
+                                radius: 4
+                            }
+
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: qsTr("Draw a box on every person or vehicle the camera tracks, as iVMS-4200 does: green, red while it sets off a rule. KVision reads the camera's smart data over its own light connection (works on the main stream and the sub-stream); the camera is not changed.")
+
+                            onTriggered: {
+                                vcaSubMenu.close();
+                                contextMenu.close();
+                                var player = playerPool.activePlayersMap[model.index];
+                                if (player)
+                                    player.toggleVcaTargetsHere();
                             }
                         }
                     }

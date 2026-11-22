@@ -326,6 +326,9 @@ ApplicationWindow {
         onFrameUnlabelledMotionChanged: rootWindow.applyDetectionFilters()
         property string targetOffCameras: "[]" // JSON list of camera addresses with the indicator switched off
         property string targetNvrOnCameras: "[]" // JSON list of "recorderIp#channel" entries switched on for cameras behind a recorder
+        // Right-click > VCA > Target Boxes on a live Hikvision tile: KVision draws the camera's tracked targets
+        // (read from its smart data, as iVMS-4200 does). JSON list of "recorderIp#channel".
+        property string vcaTargetsOnCameras: "[]"
         onTargetNvrOnCamerasChanged: rootWindow.noteNvrList()
         Component.onCompleted: rootWindow.nvrListReady = true
         property string talkMicrophone: ""

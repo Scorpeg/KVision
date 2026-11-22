@@ -1,0 +1,56 @@
+#ifndef HIKVISIONVCA_H
+#define HIKVISIONVCA_H
+
+#include <QByteArray>
+#include <QHash>
+#include <QPointF>
+#include <QRectF>
+#include <QVector>
+#include <deque>
+#include <mutex>
+
+class QPainter;
+
+// The smart (VCA) data a Hikvision camera sends next to its video, in recordings and in an SDK live
+// stream alike: the rule lines and zones, every tracked target's box, and an alarm event when a rule
+// fires (named by rule and target). Fed raw MPEG-PS bytes; decoded with PlayCtrl's own parsers.
+// Used by the archive player (boxes matched to each decoded frame) and the live overlay.
+// Thread safe: feed() and the readers may run on different threads.
+class HikVcaDecoder
+{
+public:
+    struct Target { quint32 id; QRectF rect; bool alarm; };
+    struct Sample { qint64 ms; QVector<Target> targets; QVector<quint32> alarmRules; }; // alarmRules: rules set off here
+    struct Rule { quint32 id; bool polygon; QVector<QPointF> points; };
+
+    // Raw stream bytes (the SDK data callback's NET_DVR_STREAMDATA).
+    void feed(const unsigned char *data, int size);
+    void reset();
+
+    // Stream time (ms from the first video frame) of the newest target report; -1 if none yet.
+    qint64 latestMs() const;
+    QVector<Rule> rules() const;
+    // The newest report at or before stampMs, if no older than holdMs. False when there is none.
+    bool sampleAt(qint64 stampMs, int holdMs, Sample *out) const;
+    // The two newest reports (for smoothing a live box between reports). False when there are fewer than one.
+    bool latestTwo(Sample *older, Sample *newer) const;
+
+    // Rule lines and zones in blue (a rule in alarm in red), then each target box green or red (iVMS-4200 colours).
+    // Points are fractions of the picture; videoRect is where the picture is drawn.
+    static void draw(QPainter *painter, const QRectF &videoRect, const QVector<Rule> &rules, bool drawRules,
+                     const QVector<Target> &targets, const QVector<quint32> &alarmRules);
+
+private:
+    struct Alarm { quint32 rule; qint64 since; qint64 outsideSince; };
+    void handlePacket(const unsigned char *p, int len, qint64 pts);
+    bool targetInAlarm(quint32 tid, const QRectF &box, qint64 ms);
+
+    mutable std::mutex m_mutex;     // guards everything below
+    QByteArray m_carry;             // unfinished PS packet from the previous feed
+    qint64 m_videoBasePts = -1;     // PTS of the first video frame: stream time 0
+    std::deque<Sample> m_samples;
+    QVector<Rule> m_rules;
+    QHash<quint32, Alarm> m_alarms; // target id -> the rule it set off
+};
+
+#endif // HIKVISIONVCA_H

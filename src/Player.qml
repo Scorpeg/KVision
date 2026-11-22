@@ -1057,6 +1057,34 @@ FocusScope {
         }
     }
 
+    // Right-click > VCA > Target Boxes for the camera this tile shows (every tile of that camera follows).
+    readonly property bool vcaTargetsHere: {
+        if (typeof generalSettings === "undefined" || root.recorderIp === "")
+            return false;
+        try {
+            var l = JSON.parse(generalSettings.vcaTargetsOnCameras || "[]");
+            return Array.isArray(l) && l.indexOf(root.nvrKey()) >= 0;
+        } catch (e) {
+            return false;
+        }
+    }
+    function toggleVcaTargetsHere() {
+        if (root.recorderIp === "" || typeof generalSettings === "undefined")
+            return;
+        var l = [];
+        try {
+            l = JSON.parse(generalSettings.vcaTargetsOnCameras || "[]");
+            if (!Array.isArray(l))
+                l = [];
+        } catch (e) {}
+        var i = l.indexOf(root.nvrKey());
+        if (i >= 0)
+            l.splice(i, 1);
+        else
+            l.push(root.nvrKey());
+        generalSettings.vcaTargetsOnCameras = JSON.stringify(l);
+    }
+
     // The login for a camera, read from the saved recorder list. A tile's own username and
     // password properties are not always filled in when this runs, and a blank password sent to a
     // camera counts as a failed login and can lock the camera.
@@ -1994,6 +2022,28 @@ FocusScope {
                     text: root.targetCaption(" \u2013 ")
                 }
             }
+        }
+
+        // Live target boxes (right-click > VCA > Target Boxes): every target the camera tracks, green, red while it
+        // sets off a rule, read from the camera's smart data over a light SDK sub-stream connection and drawn over
+        // the live picture, as iVMS-4200 does. It connects only while switched on and the tile shows live video.
+        // The rule lines themselves are the camera's own (VCA > Show VCA Line Rules), drawn into its sub-stream.
+        HikvisionVcaOverlay {
+            id: liveVcaOverlay
+            z: 8
+            anchors.fill: parent
+            readonly property var login: root.savedLoginFor(root.recorderIp)
+            showRules: false
+            showTargets: true
+            active: root.vcaTargetsHere && root.isHikvision && !root.isQuickPlayback
+                    && root.visible && !root.liveSuspended && root.source !== "" && login !== null
+                    && !root.isOneToOne && !root.isZoomed
+            recorderIp: root.recorderIp
+            port: root.sdkPort || root.recorderPort || 8000
+            username: login ? login.user : ""
+            password: login ? login.pass : ""
+            channelId: root.channelId
+            videoRect: root.fittedVideoRect()
         }
 
         // VCA target rectangle overlay — positioned on the fitted video area using normalized coords (0.001-1.0)
