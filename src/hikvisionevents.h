@@ -150,10 +150,6 @@ signals:
     // channel is the channel number in the report. For a camera behind a recorder that streams its own
     // events it is 1, and for a recorder connection it is the recorder channel; a tile matches on both.
     void targetDetected(const QString &ip, const QString &targetType, const QString &source, int channel);
-    // Normalized target rectangle (0.001–1.0) for VCA overlay positioning on player tiles.
-    // fX/fY are the upper-left corner; fWidth/fHeight are the dimensions.
-    // All values are normalized to the decoded frame resolution (0.001–1.0 range).
-    void targetRectDetected(const QString &ip, const QString &targetType, float fX, float fY, float fWidth, float fHeight, int channel);
     // A motion report with no target type. Some cameras send the type only once per target, so a
     // tile uses these to keep a frame it is already showing alive.
     void motionDetected(const QString &ip, int channel);

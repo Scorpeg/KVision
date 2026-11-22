@@ -444,15 +444,6 @@ void HikvisionEvents::parseIncoming(const QString &ip, const QByteArray &chunk, 
                     continue;
                 qDebug() << "[Events]" << kind << "from" << ip << "channel" << camChannel << ":" << t;
                 emit targetDetected(ip, t, vcaShort(type), camChannel);
-                // Emit normalized target rectangle for VCA overlay positioning on player tiles
-                // Parsed directly from the event body (not gated on picture presence).
-                static const QRegularExpression rectRx(QStringLiteral(
-                    "<TargetRect>\\s*<X>([\\d.]+)</X>\\s*<Y>([\\d.]+)</Y>\\s*<width>([\\d.]+)</width>\\s*<height>([\\d.]+)</height>"));
-                const QRegularExpressionMatch rm = rectRx.match(body);
-                if (rm.hasMatch()) {
-                    emit targetRectDetected(ip, t, rm.captured(1).toFloat(), rm.captured(2).toFloat(),
-                                           rm.captured(3).toFloat(), rm.captured(4).toFloat(), camChannel);
-                }
             }
             continue;
         }
