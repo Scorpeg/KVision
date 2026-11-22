@@ -1906,6 +1906,36 @@ FocusScope {
             }
         }
 
+        // Live target boxes (right-click > VCA > Target Boxes): every target the camera tracks, green, red while it
+        // sets off a rule, read from the camera's smart data over a light SDK sub-stream connection and drawn over
+        // the live picture, as iVMS-4200 does. It connects only while switched on and the tile shows live video.
+        // The rule lines themselves are the camera's own (VCA > Show VCA Line Rules), drawn into its sub-stream.
+        HikvisionVcaOverlay {
+            id: liveVcaOverlay
+            z: 8
+            anchors.fill: parent
+            readonly property var login: root.savedLoginFor(root.recorderIp)
+            showRules: false
+            showTargets: true
+            active: root.vcaTargetsHere && root.isHikvision && !root.isQuickPlayback
+                    && root.visible && !root.liveSuspended && root.source !== "" && login !== null
+                    && !root.isOneToOne && !root.isZoomed
+            recorderIp: root.recorderIp
+            port: root.sdkPort || root.recorderPort || 8000
+            username: login ? login.user : ""
+            password: login ? login.pass : ""
+            channelId: root.channelId
+            videoRect: root.fittedVideoRect()
+            // Says why the boxes are not shown (in the log), when they are switched on for this tile.
+            readonly property string whyNot: !root.vcaTargetsHere ? "" :
+                (!root.isHikvision ? "not a Hikvision tile" : root.isQuickPlayback ? "quick playback" :
+                 !root.visible ? "tile hidden" : root.liveSuspended ? "playback window open" :
+                 root.source === "" ? "no source" : login === null ? "no saved login for " + root.recorderIp :
+                 root.isOneToOne ? "1:1 view" : root.isZoomed ? "zoomed" : "")
+            onWhyNotChanged: if (whyNot !== "") console.info("[VcaLive] " + root.recorderIp + " target boxes waiting: " + whyNot)
+            onActiveChanged: console.info("[VcaLive] " + root.recorderIp + " ch " + root.channelId + " target boxes " + (active ? "active" : "inactive"))
+        }
+
         Rectangle {
             id: targetFrame
             z: 9
@@ -1939,35 +1969,6 @@ FocusScope {
                     text: root.targetCaption(" \u2013 ")
                 }
             }
-        // Live target boxes (right-click > VCA > Target Boxes): every target the camera tracks, green, red while it
-        // sets off a rule, read from the camera's smart data over a light SDK sub-stream connection and drawn over
-        // the live picture, as iVMS-4200 does. It connects only while switched on and the tile shows live video.
-        // The rule lines themselves are the camera's own (VCA > Show VCA Line Rules), drawn into its sub-stream.
-        HikvisionVcaOverlay {
-            id: liveVcaOverlay
-            z: 8
-            anchors.fill: parent
-            readonly property var login: root.savedLoginFor(root.recorderIp)
-            showRules: false
-            showTargets: true
-            active: root.vcaTargetsHere && root.isHikvision && !root.isQuickPlayback
-                    && root.visible && !root.liveSuspended && root.source !== "" && login !== null
-                    && !root.isOneToOne && !root.isZoomed
-            recorderIp: root.recorderIp
-            port: root.sdkPort || root.recorderPort || 8000
-            username: login ? login.user : ""
-            password: login ? login.pass : ""
-            channelId: root.channelId
-            videoRect: root.fittedVideoRect()
-            // Says why the boxes are not shown (in the log), when they are switched on for this tile.
-            readonly property string whyNot: !root.vcaTargetsHere ? "" :
-                (!root.isHikvision ? "not a Hikvision tile" : root.isQuickPlayback ? "quick playback" :
-                 !root.visible ? "tile hidden" : root.liveSuspended ? "playback window open" :
-                 root.source === "" ? "no source" : login === null ? "no saved login for " + root.recorderIp :
-                 root.isOneToOne ? "1:1 view" : root.isZoomed ? "zoomed" : "")
-            onWhyNotChanged: if (whyNot !== "") console.info("[VcaLive] " + root.recorderIp + " target boxes waiting: " + whyNot)
-            onActiveChanged: console.info("[VcaLive] " + root.recorderIp + " ch " + root.channelId + " target boxes " + (active ? "active" : "inactive"))
-        }
 
         }
 

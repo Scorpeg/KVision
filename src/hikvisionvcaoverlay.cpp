@@ -262,6 +262,15 @@ void HikvisionVcaOverlay::onData()
     if (!m_link)
         return;
     const qint64 newest = m_link->decoder.latestMs();
+    // Diagnostic, every 5 s: what the overlay holds (reports, targets now, visible, window).
+    if (!m_diag.isValid() || m_diag.elapsed() > 5000) {
+        m_diag.restart();
+        const qint64 now = newest;
+        const auto list = m_link->decoder.tracks(now, kLiveHoldMs);
+        qInfo().noquote() << QStringLiteral("[VcaLive] %1 report at %2 ms, %3 target(s), item visible=%4 size=%5x%6 opacity=%7")
+                             .arg(m_ip).arg(newest).arg(list.size()).arg(isVisible())
+                             .arg(width()).arg(height()).arg(opacity());
+    }
     if (newest != m_lastReportMs) {
         if (m_lastReportMs >= 0 && newest > m_lastReportMs)
             m_reportGapMs = qBound<qint64>(60, newest - m_lastReportMs, 1000);
