@@ -27,6 +27,96 @@ constexpr int kVcaHoldMs = 400;        // a box with no newer report is dropped 
 constexpr int kVcaLineAlarmMs = 2000;
 // A target that steps out of its alarm zone turns green after this long outside (no flicker at the edge).
 constexpr int kVcaZoneLeaveMs = 500;
+
+// One rule from a kind-3 list. [begin, end) is the rule body; the parser wants the scale from the
+// packet and five trailing zero bytes (the on-wire separator is not part of the body).
+bool parseOneRule(const unsigned char *packet, const unsigned char *begin, const unsigned char *end, HikVcaDecoder::Rule *rule)
+{
+    if (end <= begin)
+        return false;
+    QByteArray in;
+    in.append('\xff').append('\xff').append(static_cast<char>(packet[14])).append(static_cast<char>(packet[15]));
+    in.append('\x01').append('\x00');
+    in.append(reinterpret_cast<const char *>(begin), int(end - begin));
+    in.append(QByteArray(5, '\0'));
+    const int inLen = in.size();
+    in.append(QByteArray(64, '\0'));
+    alignas(16) unsigned char out[4 + 2 * kIvsRuleRecord + 64];
+    std::memset(out, 0, sizeof(out));
+    IvsBitReader reader;
+    std::memset(&reader, 0, sizeof(reader));
+    reader.data = reinterpret_cast<const unsigned char *>(in.constData());
+    reader.size1 = reader.size2 = static_cast<quint32>(inLen);
+    if (IVS_RULE_DATA_sys_parse(out, &reader) != 1)
+        return false;
+    const unsigned char *rec = out + 4;
+    quint32 points;
+    std::memcpy(&points, rec + 0x64, 4);
+    if (points < 2 || points > 10)
+        return false;
+    HikVcaDecoder::Rule got;
+    got.id = rec[0];
+    got.polygon = rec[2] == 1;
+    for (quint32 q = 0; q < points; ++q) {
+        float x, y;
+        std::memcpy(&x, rec + 0x68 + 8 * q, 4);
+        std::memcpy(&y, rec + 0x6c + 8 * q, 4);
+        if (!(x >= 0.f && x <= 1.001f && y >= 0.f && y <= 1.001f))
+            return false;
+        got.points.append(QPointF(x, y));
+    }
+    *rule = got;
+    return true;
+}
+
+// Split a kind-3 rule list. `gap` is how many zero bytes separate rules (five on older cameras,
+// four on the panoramic above). The byte after the gap belongs to the next rule.
+QVector<HikVcaDecoder::Rule> parseRuleList(const unsigned char *p, int len, int gap)
+{
+    QVector<HikVcaDecoder::Rule> rules;
+    if (len < 24 || gap < 1)
+        return rules;
+    const int ruleCount = p[22];
+    int pos = 24;
+    QByteArray zeros(gap, '\0');
+    for (int k = 0; k < ruleCount && pos < len; ++k) {
+        int end = pos;
+        while (end + gap <= len && std::memcmp(p + end, zeros.constData(), gap) != 0)
+            ++end;
+        if (end + gap > len)
+            break;
+        HikVcaDecoder::Rule rule;
+        if (parseOneRule(p, p + pos, p + end, &rule))
+            rules.append(rule);
+        pos = end + gap;
+    }
+    return rules;
+}
+
+// A G3 rule list (data type 0x30) does not separate rules with a plain run of zero bytes. Each rule
+// starts with 00 10 (a line) or 40 20/30/38 (a zone). Packets leave a rule out from time to time,
+// so the caller keeps rules already seen.
+QVector<HikVcaDecoder::Rule> parseG3RuleList(const unsigned char *p, int len)
+{
+    QVector<HikVcaDecoder::Rule> rules;
+    QVector<int> starts;
+    for (int i = 24; i + 1 < len; ++i) {
+        const bool line = p[i] == 0x00 && p[i + 1] == 0x10;
+        const bool zone = p[i] == 0x40 && (p[i + 1] == 0x20 || p[i + 1] == 0x30 || p[i + 1] == 0x38);
+        if (line || zone)
+            starts.append(i);
+    }
+    for (int k = 0; k < starts.size(); ++k) {
+        int begin = starts[k];
+        int end = (k + 1 < starts.size()) ? starts[k + 1] : len;
+        while (end > begin && p[end - 1] == 0)
+            --end;
+        HikVcaDecoder::Rule rule;
+        if (parseOneRule(p, p + begin, p + end, &rule))
+            rules.append(rule);
+    }
+    return rules;
+}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -38,8 +128,10 @@ constexpr int kVcaZoneLeaveMs = 500;
 // starts at byte 22. PlayCtrl's parsers read it after a 4-byte {0xffff, scale} prefix:
 //  - targets: IVS_META_DATA_sys_parse -> count (byte 0), then 28-byte records from +8:
 //      +0 id, +12 x, +16 y, +20 width, +24 height (floats 0..1 of the picture)
-//  - rules:   IVS_RULE_DATA_sys_parse on one rule at a time (each ends with five zero bytes) ->
-//      +4 record: byte 0 id, byte 2 kind (0 = line, 1 = zone), +0x64 point count, +0x68 x/y floats
+//  - rules:   IVS_RULE_DATA_sys_parse on one rule at a time. Older cameras end each rule with five
+//      zero bytes. A panoramic (DT387G2P) ends each rule with four, and the next rule may start
+//      with 0x00, which looks like a fifth zero. +4 record: byte 0 id, byte 2 kind (0 = line,
+//      1 = zone), +0x64 point count, +0x68 x/y floats
 // A packet's PTS minus the first video PTS is the decoder stamp (FRAME_INFO::nStamp) of its frame.
 // ---------------------------------------------------------------------------------------------
 
@@ -59,6 +151,7 @@ void HikVcaDecoder::reset()
     m_videoBasePts = -1;
     m_samples.clear();
     m_rules.clear();
+    ++m_rulesSerial;
     m_alarms.clear();
 }
 
@@ -256,56 +349,45 @@ void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
         addSample(sample);
         return;
     }
-    if (kind != 3 || newFormat)
-        return; // the G3 rule layout is not decoded (its lines are drawn by the camera itself)
-
-    // Rule list (sent about once a second): split into rules, parse each.
-    const int ruleCount = p[22];
-    int pos = 24;
-    QVector<Rule> rules;
-    for (int k = 0; k < ruleCount && pos < len; ++k) {
-        int end = pos;
-        while (end + 5 <= len && std::memcmp(p + end, "\0\0\0\0\0", 5) != 0)
-            ++end;
-        if (end + 5 > len)
-            break;
-        QByteArray in;
-        in.append('\xff').append('\xff').append(static_cast<char>(p[14])).append(static_cast<char>(p[15]));
-        in.append('\x01').append('\x00');
-        in.append(reinterpret_cast<const char *>(p + pos), end - pos);
-        in.append(QByteArray(5, '\0'));
-        const int inLen = in.size();
-        in.append(QByteArray(64, '\0'));
-        alignas(16) unsigned char out[4 + 2 * kIvsRuleRecord + 64];
-        std::memset(out, 0, sizeof(out));
-        IvsBitReader reader;
-        std::memset(&reader, 0, sizeof(reader));
-        reader.data = reinterpret_cast<const unsigned char *>(in.constData());
-        reader.size1 = reader.size2 = static_cast<quint32>(inLen);
-        if (IVS_RULE_DATA_sys_parse(out, &reader) == 1) {
-            const unsigned char *rec = out + 4;
-            quint32 points;
-            std::memcpy(&points, rec + 0x64, 4);
-            if (points >= 2 && points <= 10) {
-                Rule rule;
-                rule.id = rec[0];
-                rule.polygon = rec[2] == 1;
-                bool ok = true;
-                for (quint32 q = 0; q < points; ++q) {
-                    float x, y;
-                    std::memcpy(&x, rec + 0x68 + 8 * q, 4);
-                    std::memcpy(&y, rec + 0x6c + 8 * q, 4);
-                    if (!(x >= 0.f && x <= 1.001f && y >= 0.f && y <= 1.001f)) { ok = false; break; }
-                    rule.points.append(QPointF(x, y));
+    if (kind != 3)
+        return;
+    if (newFormat) {
+        // A G3 sends the rule list in pieces, so a rule missing from this packet is kept.
+        const QVector<Rule> got = parseG3RuleList(p, len);
+        bool changed = false;
+        for (const Rule &n : got) {
+            bool found = false;
+            for (Rule &old : m_rules) {
+                if (old.id != n.id)
+                    continue;
+                if (old.polygon != n.polygon || old.points != n.points) {
+                    old = n;
+                    changed = true;
                 }
-                if (ok)
-                    rules.append(rule);
+                found = true;
+                break;
+            }
+            if (!found) {
+                m_rules.append(n);
+                changed = true;
             }
         }
-        pos = end + 5;
+        if (changed)
+            ++m_rulesSerial;
+        return;
     }
-    if (!rules.isEmpty())
+
+    // Rule list (sent about once a second). Older cameras separate rules with five zero bytes.
+    // These panoramics separate them with four, and the next rule may itself start with 0x00, so a
+    // five-zero split keeps only the first rule. Keep whichever reading produces more rules.
+    QVector<Rule> rules = parseRuleList(p, len, 5);
+    const QVector<Rule> four = parseRuleList(p, len, 4);
+    if (four.size() > rules.size())
+        rules = four;
+    if (!rules.isEmpty()) {
         m_rules = rules;
+        ++m_rulesSerial;
+    }
 }
 
 
@@ -349,6 +431,12 @@ qint64 HikVcaDecoder::latestMs() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_samples.empty() ? -1 : m_samples.back().ms;
+}
+
+quint64 HikVcaDecoder::rulesSerial() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_rulesSerial;
 }
 
 QVector<HikVcaDecoder::Rule> HikVcaDecoder::rules() const

@@ -1056,6 +1056,35 @@ FocusScope {
         generalSettings.vcaTargetsOnCameras = JSON.stringify(l);
     }
 
+    // Right-click > VCA > Show VCA Line Rules. KVision draws the lines from the same smart data as the
+    // target boxes. The camera's own "draw lines into the stream" switch is not changed.
+    readonly property bool vcaRulesHere: {
+        if (typeof generalSettings === "undefined" || root.recorderIp === "")
+            return false;
+        try {
+            var l = JSON.parse(generalSettings.vcaRuleLinesOnCameras || "[]");
+            return Array.isArray(l) && l.indexOf(root.nvrKey()) >= 0;
+        } catch (e) {
+            return false;
+        }
+    }
+    function toggleVcaRulesHere() {
+        if (root.recorderIp === "" || typeof generalSettings === "undefined")
+            return;
+        var l = [];
+        try {
+            l = JSON.parse(generalSettings.vcaRuleLinesOnCameras || "[]");
+            if (!Array.isArray(l))
+                l = [];
+        } catch (e) {}
+        var i = l.indexOf(root.nvrKey());
+        if (i >= 0)
+            l.splice(i, 1);
+        else
+            l.push(root.nvrKey());
+        generalSettings.vcaRuleLinesOnCameras = JSON.stringify(l);
+    }
+
     // The login for a camera, read from the saved recorder list. A tile's own username and
     // password properties are not always filled in when this runs, and a blank password sent to a
     // camera counts as a failed login and can lock the camera.
@@ -1906,18 +1935,17 @@ FocusScope {
             }
         }
 
-        // Live target boxes (right-click > VCA > Target Boxes): every target the camera tracks, green, red while it
-        // sets off a rule, read from the camera's smart data over a light SDK sub-stream connection and drawn over
-        // the live picture, as iVMS-4200 does. It connects only while switched on and the tile shows live video.
-        // The rule lines themselves are the camera's own (VCA > Show VCA Line Rules), drawn into its sub-stream.
+        // Live smart overlay (right-click > VCA): rule lines and target boxes, read from the camera's smart
+        // data over a light SDK sub-stream connection and drawn over the live picture, as iVMS-4200 does.
+        // It connects only while one of the two is switched on and the tile shows live video. The camera is not changed.
         HikvisionVcaOverlay {
             id: liveVcaOverlay
             z: 8
             anchors.fill: parent
             readonly property var login: root.savedLoginFor(root.recorderIp)
-            showRules: false
-            showTargets: true
-            active: root.vcaTargetsHere && root.isHikvision && !root.isQuickPlayback
+            showRules: root.vcaRulesHere
+            showTargets: root.vcaTargetsHere
+            active: (root.vcaTargetsHere || root.vcaRulesHere) && root.isHikvision && !root.isQuickPlayback
                     && root.visible && !root.liveSuspended && root.source !== "" && login !== null
                     && !root.isOneToOne && !root.isZoomed
             recorderIp: root.recorderIp
@@ -1927,13 +1955,13 @@ FocusScope {
             channelId: root.channelId
             videoRect: root.fittedVideoRect()
             // Says why the boxes are not shown (in the log), when they are switched on for this tile.
-            readonly property string whyNot: !root.vcaTargetsHere ? "" :
+            readonly property string whyNot: !(root.vcaTargetsHere || root.vcaRulesHere) ? "" :
                 (!root.isHikvision ? "not a Hikvision tile" : root.isQuickPlayback ? "quick playback" :
                  !root.visible ? "tile hidden" : root.liveSuspended ? "playback window open" :
                  root.source === "" ? "no source" : login === null ? "no saved login for " + root.recorderIp :
                  root.isOneToOne ? "1:1 view" : root.isZoomed ? "zoomed" : "")
-            onWhyNotChanged: if (whyNot !== "") console.info("[VcaLive] " + root.recorderIp + " target boxes waiting: " + whyNot)
-            onActiveChanged: console.info("[VcaLive] " + root.recorderIp + " ch " + root.channelId + " target boxes " + (active ? "active" : "inactive"))
+            onWhyNotChanged: if (whyNot !== "") console.info("[VcaLive] " + root.recorderIp + " smart overlay waiting: " + whyNot)
+            onActiveChanged: console.info("[VcaLive] " + root.recorderIp + " ch " + root.channelId + " smart overlay " + (active ? "active" : "inactive"))
         }
 
         Rectangle {

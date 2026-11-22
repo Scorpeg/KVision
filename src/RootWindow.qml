@@ -329,6 +329,9 @@ ApplicationWindow {
         // Right-click > VCA > Target Boxes on a live Hikvision tile: KVision draws the camera's tracked targets
         // (read from its smart data, as iVMS-4200 does). JSON list of "recorderIp#channel".
         property string vcaTargetsOnCameras: "[]"
+        // Right-click > VCA > Show VCA Line Rules: KVision draws the rule lines from the same smart data.
+        // JSON list of "recorderIp#channel". The camera's own stream switch is left alone.
+        property string vcaRuleLinesOnCameras: "[]"
         onTargetNvrOnCamerasChanged: rootWindow.noteNvrList()
         Component.onCompleted: rootWindow.nvrListReady = true
         property string talkMicrophone: ""

@@ -29,6 +29,9 @@ public:
 
     // Stream time (ms from the first video frame) of the newest target report; -1 if none yet.
     qint64 latestMs() const;
+    // Bumps each time the rule list is replaced. A rule packet does not move latestMs(), so a live
+    // overlay that is drawing lines and not boxes watches this to know it should paint.
+    quint64 rulesSerial() const;
     QVector<Rule> rules() const;
     // The newest report at or before stampMs, if no older than holdMs. False when there is none.
     bool sampleAt(qint64 stampMs, int holdMs, Sample *out) const;
@@ -58,6 +61,7 @@ private:
     qint64 m_videoBasePts = -1;     // PTS of the first video frame: stream time 0
     std::deque<Sample> m_samples;
     QVector<Rule> m_rules;
+    quint64 m_rulesSerial = 0;
     QHash<quint32, Alarm> m_alarms; // target id -> the rule it set off
 };
 

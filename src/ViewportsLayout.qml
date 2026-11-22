@@ -2316,14 +2316,14 @@ FocusScope {
 
                     Menu {
                         id: vcaSubMenu
-                        property string ruleIp: ""
                         // Read when the menu opens: the tile's player is kept in a plain map, which bindings do not follow.
+                        // Both ticks are local. This menu does not ask the camera anything.
                         property bool targetsOn: false
+                        property bool rulesOn: false
                         onAboutToShow: {
                             var p = playerPool.activePlayersMap[model.index];
                             targetsOn = !!p && p.vcaTargetsHere;
-                            ruleIp = (p && p.isHikvision && !p.isQuickPlayback) ? p.detectionLogIp() : "";
-                            root.refreshRuleState(ruleIp);
+                            rulesOn = !!p && p.vcaRulesHere;
                         }
                         margins: 6 // keeps the menu inside the window, even for a small cell near an edge
 
@@ -2349,9 +2349,9 @@ FocusScope {
 
                         MenuItem {
                             id: ruleLinesMenuItem
-                            text: (root.ruleIsOn(vcaSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Show VCA Line Rules")
+                            text: (vcaSubMenu.rulesOn ? "\u2713 " : "    ") + qsTr("Show VCA Line Rules")
                             visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible && !HikvisionBackup.ruleBusy
+                            enabled: visible
                             height: visible ? implicitHeight : 0
                             leftPadding: 12
 
@@ -2373,14 +2373,18 @@ FocusScope {
 
                             ToolTip.visible: hovered
                             ToolTip.delay: 600
-                            ToolTip.text: qsTr("Switch the camera's own drawing of its rule lines and boxes on the video stream (what Hik-Connect and other viewers show). It is drawn on the sub-stream only, so a tile playing the main stream does not show it. The camera is read first and then set the other way. Only this camera is changed.")
+                            ToolTip.text: qsTr("Draw this camera's rule lines and zones on the picture, as iVMS-4200 does, in blue (red while that rule is in alarm). KVision reads them from the camera's smart data over its own light connection, so they show on the main stream and the sub-stream, including a panoramic camera that cannot draw them into the video. The camera is not changed. The tick is remembered for this camera.")
 
                             onTriggered: {
                                 vcaSubMenu.close();
                                 contextMenu.close();
                                 var player = playerPool.activePlayersMap[model.index];
-                                if (player)
-                                    root.toggleRuleLines(player.detectionLogIp(), player.cameraNameInfo);
+                                if (player) {
+                                    player.toggleVcaRulesHere();
+                                    rootWindow.showNotice(qsTr("VCA line rules") + "\n" + (player.cameraNameInfo || player.recorderIp) + "\n"
+                                                          + (player.vcaRulesHere ? qsTr("on") : qsTr("off")),
+                                                          "#00f5d4", 2500);
+                                }
                             }
                         }
 

@@ -228,8 +228,11 @@ void CALLBACK HikvisionVcaOverlay::dataCallBack(LONG handle, DWORD type, BYTE *b
     if (type != NET_DVR_STREAMDATA || !buffer || size == 0)
         return;
     const qint64 before = link->decoder.latestMs();
+    const quint64 rulesBefore = link->decoder.rulesSerial();
     link->decoder.feed(buffer, static_cast<int>(size));
-    if (link->decoder.latestMs() == before)
+    // Target reports move latestMs(). Rule lines do not, so a tile with lines on and boxes off
+    // would never paint until something else (a stream change) forced a redraw.
+    if (link->decoder.latestMs() == before && link->decoder.rulesSerial() == rulesBefore)
         return;
     // Only one repaint request is in flight at a time; it is cleared when the GUI thread has handled it,
     // even if it found nothing to do, so a request can never stay "pending" for good.
