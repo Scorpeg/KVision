@@ -374,6 +374,36 @@ bool HikVcaDecoder::latestTwo(Sample *older, Sample *newer) const
     return true;
 }
 
+QVector<HikVcaDecoder::Track> HikVcaDecoder::tracks(qint64 atMs, int holdMs, QVector<quint32> *alarmRules) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    QVector<Track> out;
+    QHash<quint32, int> index;
+    for (auto it = m_samples.rbegin(); it != m_samples.rend(); ++it) {
+        if (it->ms > atMs)
+            continue;
+        if (atMs - it->ms > holdMs)
+            break;
+        for (const Target &t : it->targets) {
+            const auto found = index.constFind(t.id);
+            if (found == index.constEnd()) {
+                index.insert(t.id, out.size());
+                out.append({t, t.rect, it->ms, -1});
+            } else if (out[*found].previousMs < 0) {
+                out[*found].previous = t.rect;
+                out[*found].previousMs = it->ms;
+            }
+        }
+        if (alarmRules) {
+            for (quint32 r : it->alarmRules) {
+                if (!alarmRules->contains(r))
+                    alarmRules->append(r);
+            }
+        }
+    }
+    return out;
+}
+
 void HikVcaDecoder::draw(QPainter *painter, const QRectF &videoRect, const QVector<Rule> &rules, bool drawRules,
                          const QVector<Target> &targets, const QVector<quint32> &alarmRules)
 {

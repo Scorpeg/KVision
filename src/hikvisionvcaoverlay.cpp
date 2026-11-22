@@ -318,24 +318,23 @@ QSGNode *HikvisionVcaOverlay::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
     const QRectF video = m_videoRect.isValid() ? m_videoRect : boundingRect();
     QVector<HikVcaDecoder::Target> targets;
     QVector<quint32> alarmRules;
-    HikVcaDecoder::Sample older, newer;
-    if (m_showTargets && m_link->decoder.latestTwo(&older, &newer) && m_sinceReport.isValid()
-            && m_sinceReport.elapsed() <= kLiveHoldMs) {
-        // Glide each box from where the previous report had it to the newest one, over the time between them.
-        const qreal t = qBound<qreal>(0.0, qreal(m_sinceReport.elapsed()) / qreal(m_reportGapMs), 1.0);
-        for (HikVcaDecoder::Target target : newer.targets) {
-            for (const HikVcaDecoder::Target &prev : older.targets) {
-                if (prev.id == target.id) {
-                    const QRectF a = prev.rect;
-                    const QRectF b = target.rect;
-                    target.rect = QRectF(a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t,
-                                         a.width() + (b.width() - a.width()) * t, a.height() + (b.height() - a.height()) * t);
-                    break;
-                }
+    if (m_showTargets && m_lastReportMs >= 0 && m_sinceReport.isValid()) {
+        // Stream time now: the newest report's time plus the wall time since it arrived.
+        const qint64 now = m_lastReportMs + m_sinceReport.elapsed();
+        const auto list = m_link->decoder.tracks(now, kLiveHoldMs, &alarmRules);
+        for (const HikVcaDecoder::Track &tr : list) {
+            HikVcaDecoder::Target target = tr.target;
+            // Glide from the target's previous box to its newest one over the time between its own reports.
+            if (tr.previousMs >= 0 && tr.lastMs > tr.previousMs) {
+                const qreal gap = qreal(qBound<qint64>(40, tr.lastMs - tr.previousMs, 1000));
+                const qreal t = qBound<qreal>(0.0, qreal(now - tr.lastMs) / gap, 1.0);
+                const QRectF a = tr.previous;
+                const QRectF b = tr.target.rect;
+                target.rect = QRectF(a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t,
+                                     a.width() + (b.width() - a.width()) * t, a.height() + (b.height() - a.height()) * t);
             }
             targets.append(target);
         }
-        alarmRules = newer.alarmRules;
     }
     auto toView = [&video](const QPointF &pt) {
         return QPointF(video.x() + pt.x() * video.width(), video.y() + pt.y() * video.height());

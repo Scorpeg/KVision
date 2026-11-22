@@ -34,6 +34,12 @@ public:
     bool sampleAt(qint64 stampMs, int holdMs, Sample *out) const;
     // The two newest reports (for smoothing a live box between reports). False when there are fewer than one.
     bool latestTwo(Sample *older, Sample *newer) const;
+    // Every target seen in the reports of the last holdMs before atMs, each with its newest box, the box
+    // from its report before that (for smoothing; the same box if there is none) and when it was last seen.
+    // A camera does not list every target in every report (a G3 alternates), so a target is kept until it
+    // has been missing for holdMs.
+    struct Track { Target target; QRectF previous; qint64 lastMs; qint64 previousMs; };
+    QVector<Track> tracks(qint64 atMs, int holdMs, QVector<quint32> *alarmRules = nullptr) const;
 
     // Rule lines and zones in blue (a rule in alarm in red), then each target box green or red (iVMS-4200 colours).
     // Points are fractions of the picture; videoRect is where the picture is drawn.
