@@ -2817,40 +2817,108 @@ FocusScope {
                     rightMargin: 6
                     bottomMargin: root.isQuickPlayback ? (quickPlaybackControlsPanel.height + 12) : 6
                 }
-                height: 24
+                height: toolSize
                 clip: true
                 visible: (root.source !== "") && (root.talkActiveHere || talkVolumePopup.opened || ((!viewSettings.hoverControlIcons || playerHoverArea.isHovered) && !(typeof rootWindow !== "undefined" && rootWindow.cursorHidden)))
+
+                // A full-size row is 24px. A narrow tile cannot hold every tool at that size, so they shrink together until the row fits.
+                readonly property int toolCount: (talkBadge.visible ? 1 : 0) + (snapshotBadge.visible ? 1 : 0)
+                    + (playbackBadge.visible ? 1 : 0) + (quickPlaybackToggleBadge.visible ? 1 : 0)
+                    + (oneToOneBadge.visible ? 1 : 0) + (zoomBadge.visible ? 1 : 0)
+                    + (ptzToggleBadge.visible ? 1 : 0) + (aimBadge.visible ? 1 : 0)
+                readonly property int toolSize: {
+                    var w = Math.max(0, width);
+                    // Mute and full volume sit on the left of the same row, or minus and plus when the slider does not fit.
+                    function fits(size, gap) {
+                        var buttons = toolCount + (root.hasAudio ? 2 : 0);
+                        var gaps = Math.max(0, toolCount - 1) * gap;
+                        if (root.hasAudio) {
+                            gaps += gap;
+                            if (toolCount > 0)
+                                gaps += gap;
+                        }
+                        return buttons * size + gaps <= w;
+                    }
+                    if (fits(24, 4))
+                        return 24;
+                    var s;
+                    for (s = 23; s >= 16; --s) {
+                        if (fits(s, 3))
+                            return s;
+                    }
+                    for (s = 15; s >= 12; --s) {
+                        if (fits(s, 2))
+                            return s;
+                    }
+                    return 12;
+                }
+                readonly property int toolGap: toolSize >= 24 ? 4 : (toolSize >= 16 ? 3 : 2)
+                readonly property int toolPad: Math.max(1, Math.round(toolSize * 5 / 24))
+                readonly property int toolFont: Math.max(6, Math.round(toolSize * 10 / 24))
 
                 Row {
                     id: volumeControl
                     anchors.right: actionButtons.left
-                    anchors.rightMargin: 6
+                    anchors.rightMargin: viewportControls.toolGap
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
+                    spacing: viewportControls.toolGap
                     visible: root.hasAudio
                     clip: true
 
-                    readonly property int availableWidth: Math.max(0, viewportControls.width - actionButtons.width - 6)
-                    property bool showSlider: availableWidth >= 24 + 24 + 4 + 48
+                    readonly property int availableWidth: Math.max(0, viewportControls.width - actionButtons.width - viewportControls.toolGap)
+                    property bool showSlider: availableWidth >= viewportControls.toolSize * 2 + viewportControls.toolGap + 48
+
+                    function setVolume(value) {
+                        var v = Math.max(0, Math.min(1, value));
+                        if (root.layoutModel && root.index !== -1) {
+                            var vItem = root.layoutModel.get(root.index);
+                            if (vItem)
+                                vItem.volume = v;
+                        } else {
+                            root.volume = v;
+                        }
+                    }
+
+                    // No room for the slider, so each click moves one quarter instead of jumping to silence or full.
+                    function stepVolume(dir) {
+                        var q = root.volume * 4;
+                        var next = dir > 0 ? Math.floor(q + 0.001) + 1 : Math.ceil(q - 0.001) - 1;
+                        setVolume(Math.max(0, Math.min(4, next)) / 4);
+                    }
 
                     Control {
                         id: muteButton
-                        implicitWidth: 24
-                        implicitHeight: 24
-                        padding: 5
+                        implicitWidth: viewportControls.toolSize
+                        implicitHeight: viewportControls.toolSize
+                        padding: volumeControl.showSlider ? viewportControls.toolPad : 0
+                        opacity: (!volumeControl.showSlider && root.volume <= 0.001) ? 0.4 : 1
                         focusPolicy: Qt.NoFocus
 
                         background: Rectangle {
-                            radius: 12
+                            radius: viewportControls.toolSize / 2
                             color: muteMouseArea.pressed ? "#4a5560" : (muteMouseArea.containsMouse ? "#3a4550" : "#cc121214")
                             border.color: (muteMouseArea.containsMouse || muteMouseArea.pressed) ? "#cc8898a6" : "#802a3540"
                             border.width: 1
                         }
 
-                        contentItem: Image {
-                            sourceSize: Qt.size(32, 32)
-                            fillMode: Image.PreserveAspectFit
-                            source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff3333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><line x1='23' y1='9' x2='17' y2='15'></line><line x1='17' y1='9' x2='23' y2='15'></line></svg>"
+                        contentItem: Item {
+                            Image {
+                                anchors.fill: parent
+                                visible: volumeControl.showSlider
+                                sourceSize: Qt.size(32, 32)
+                                fillMode: Image.PreserveAspectFit
+                                source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff3333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><line x1='23' y1='9' x2='17' y2='15'></line><line x1='17' y1='9' x2='23' y2='15'></line></svg>"
+                            }
+                            Text {
+                                anchors.fill: parent
+                                visible: !volumeControl.showSlider
+                                text: "-"
+                                color: muteMouseArea.containsMouse ? "#00f5d4" : "#ffffff"
+                                font.pixelSize: Math.max(8, Math.round(viewportControls.toolSize * 0.7))
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                         }
 
                         MouseArea {
@@ -2860,39 +2928,30 @@ FocusScope {
                             cursorShape: Qt.PointingHandCursor
                             onContainsMouseChanged: playerHoverArea.updateHoverState()
                             onClicked: {
-                                if (root.layoutModel && root.index !== -1) {
-                                    var vItem = root.layoutModel.get(root.index);
-                                    if (vItem) vItem.volume = 0.0;
-                                } else {
-                                    root.volume = 0.0;
-                                }
+                                if (volumeControl.showSlider)
+                                    volumeControl.setVolume(0);
+                                else
+                                    volumeControl.stepVolume(-1);
                             }
                         }
 
                         ToolTip.delay: Compact.toolTipDelay
                         ToolTip.timeout: Compact.toolTipTimeout
                         ToolTip.visible: muteMouseArea.containsMouse
-                        ToolTip.text: qsTr("LNG_00106")
+                        ToolTip.text: volumeControl.showSlider ? qsTr("LNG_00106") : qsTr("Lower the volume")
                     }
 
                     Slider {
                         id: volumeSlider
-                        width: volumeControl.showSlider ? Math.min(110, volumeControl.availableWidth - 24 - 24 - 8) : 0
-                        height: 24
+                        width: volumeControl.showSlider ? Math.min(110, volumeControl.availableWidth - viewportControls.toolSize * 2 - viewportControls.toolGap * 2) : 0
+                        height: viewportControls.toolSize
                         visible: volumeControl.showSlider
                         padding: 0
                         from: 0.0
                         to: 1.0
                         value: root.volume
                         focusPolicy: Qt.NoFocus
-                        onMoved: {
-                            if (root.layoutModel && root.index !== -1) {
-                                var vItem = root.layoutModel.get(root.index);
-                                if (vItem) vItem.volume = value;
-                            } else {
-                                root.volume = value;
-                            }
-                        }
+                        onMoved: volumeControl.setVolume(value)
 
                         background: Rectangle {
                             x: volumeSlider.leftPadding
@@ -2946,22 +3005,37 @@ FocusScope {
 
                     Control {
                         id: maxVolButton
-                        implicitWidth: 24
-                        implicitHeight: 24
-                        padding: 5
+                        implicitWidth: viewportControls.toolSize
+                        implicitHeight: viewportControls.toolSize
+                        padding: volumeControl.showSlider ? viewportControls.toolPad : 0
+                        opacity: (!volumeControl.showSlider && root.volume >= 0.999) ? 0.4 : 1
                         focusPolicy: Qt.NoFocus
 
                         background: Rectangle {
-                            radius: 12
+                            radius: viewportControls.toolSize / 2
                             color: maxVolMouseArea.pressed ? "#4a5560" : (maxVolMouseArea.containsMouse ? "#3a4550" : "#cc121214")
                             border.color: (maxVolMouseArea.containsMouse || maxVolMouseArea.pressed) ? "#cc8898a6" : "#802a3540"
                             border.width: 1
                         }
 
-                        contentItem: Image {
-                            sourceSize: Qt.size(32, 32)
-                            fillMode: Image.PreserveAspectFit
-                            source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f5d4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><path d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07'></path></svg>"
+                        contentItem: Item {
+                            Image {
+                                anchors.fill: parent
+                                visible: volumeControl.showSlider
+                                sourceSize: Qt.size(32, 32)
+                                fillMode: Image.PreserveAspectFit
+                                source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f5d4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><path d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07'></path></svg>"
+                            }
+                            Text {
+                                anchors.fill: parent
+                                visible: !volumeControl.showSlider
+                                text: "+"
+                                color: maxVolMouseArea.containsMouse ? "#00f5d4" : "#ffffff"
+                                font.pixelSize: Math.max(8, Math.round(viewportControls.toolSize * 0.7))
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                         }
 
                         MouseArea {
@@ -2971,19 +3045,17 @@ FocusScope {
                             cursorShape: Qt.PointingHandCursor
                             onContainsMouseChanged: playerHoverArea.updateHoverState()
                             onClicked: {
-                                if (root.layoutModel && root.index !== -1) {
-                                    var vItem = root.layoutModel.get(root.index);
-                                    if (vItem) vItem.volume = 1.0;
-                                } else {
-                                    root.volume = 1.0;
-                                }
+                                if (volumeControl.showSlider)
+                                    volumeControl.setVolume(1);
+                                else
+                                    volumeControl.stepVolume(1);
                             }
                         }
 
                         ToolTip.delay: Compact.toolTipDelay
                         ToolTip.timeout: Compact.toolTipTimeout
                         ToolTip.visible: maxVolMouseArea.containsMouse
-                        ToolTip.text: qsTr("LNG_00157")
+                        ToolTip.text: volumeControl.showSlider ? qsTr("LNG_00157") : qsTr("Raise the volume")
                     }
                 }
 
@@ -2991,20 +3063,20 @@ FocusScope {
                     id: actionButtons
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
+                    spacing: viewportControls.toolGap
 
                     Control {
                         id: talkBadge
 
-                        implicitWidth: 24
-                        implicitHeight: 24
-                        padding: 5
+                        implicitWidth: viewportControls.toolSize
+                        implicitHeight: viewportControls.toolSize
+                        padding: viewportControls.toolPad
                         visible: root.source !== "" && root.isHikvision && !root.isQuickPlayback
                                  && !(typeof generalSettings !== "undefined" && generalSettings.disableTalk)
                         onVisibleChanged: playerHoverArea.updateHoverState()
 
                         background: Rectangle {
-                            radius: 12
+                            radius: viewportControls.toolSize / 2
                             color: root.talkActiveHere ?
                                 (HikvisionTalk.live ? "#55e74c3c" : "#44ff7a00") :
                                 (talkMouseArea.pressed ? "#4a5560" : (talkMouseArea.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3125,13 +3197,13 @@ FocusScope {
                         onTriggered: snapshotBadge.isSavingSnapshot = false
                     }
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== ""
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: snapshotBadge.isSavingSnapshot ?
                             (snapshotMouseAreaBtn.pressed ? "#44ff7a00" : (snapshotMouseAreaBtn.containsMouse ? "#33ff7a00" : "#22ff7a00")) :
                             (snapshotMouseAreaBtn.pressed ? "#4a5560" : (snapshotMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3188,14 +3260,14 @@ FocusScope {
                 Control {
                     id: playbackBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== "" && root.isHikvision
                     onVisibleChanged: playerHoverArea.updateHoverState()
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: playbackMouseAreaBtn.pressed ? "#4a5560" : (playbackMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214")
                         border.color: (playbackMouseAreaBtn.containsMouse || playbackMouseAreaBtn.pressed) ? "#cc8898a6" : "#802a3540"
                         border.width: 1
@@ -3240,14 +3312,14 @@ FocusScope {
                 Control {
                     id: quickPlaybackToggleBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== "" && root.isHikvision
                     onVisibleChanged: playerHoverArea.updateHoverState()
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: root.isQuickPlayback ?
                             (quickPlaybackToggleMouseArea.pressed ? "#4400f5d4" : (quickPlaybackToggleMouseArea.containsMouse ? "#3300f5d4" : "#2200f5d4")) :
                             (quickPlaybackToggleMouseArea.pressed ? "#4a5560" : (quickPlaybackToggleMouseArea.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3285,13 +3357,13 @@ FocusScope {
                 Control {
                     id: oneToOneBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== ""
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: root.isOneToOne ?
                             (oneToOneMouseAreaBtn.pressed ? "#4400f5d4" : (oneToOneMouseAreaBtn.containsMouse ? "#3300f5d4" : "#2200f5d4")) :
                             (oneToOneMouseAreaBtn.pressed ? "#4a5560" : (oneToOneMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3329,13 +3401,13 @@ FocusScope {
                 Control {
                     id: zoomBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== ""
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: root.isZoomed ?
                             (zoomMouseAreaBtn.pressed ? "#44ff3333" : (zoomMouseAreaBtn.containsMouse ? "#33ff3333" : "#22121214")) :
                             (root.isZoomSelectionMode ?
@@ -3392,14 +3464,14 @@ FocusScope {
                 Control {
                     id: ptzToggleBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
-                    padding: 5
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
+                    padding: viewportControls.toolPad
                     visible: root.source !== "" && root.isHikvision
                     onVisibleChanged: playerHoverArea.updateHoverState()
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: root.ptzPadVisible ?
                             (ptzToggleMouseArea.pressed ? "#44ff7a00" : (ptzToggleMouseArea.containsMouse ? "#33ff7a00" : "#22ff7a00")) :
                             (ptzToggleMouseArea.pressed ? "#4a5560" : (ptzToggleMouseArea.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3433,8 +3505,8 @@ FocusScope {
                 Control {
                     id: aimBadge
 
-                    implicitWidth: 24
-                    implicitHeight: 24
+                    implicitWidth: viewportControls.toolSize
+                    implicitHeight: viewportControls.toolSize
                     padding: 0
                     // On any PTZ lens that offers 3D positioning (the wide lens and the close-up lens of a two-lens PTZ); not while zoomed in or at 1:1,
                     // where a box would not match the picture.
@@ -3443,7 +3515,7 @@ FocusScope {
                     onVisibleChanged: playerHoverArea.updateHoverState()
 
                     background: Rectangle {
-                        radius: 12
+                        radius: viewportControls.toolSize / 2
                         color: root.isAimMode ?
                             (aimMouseAreaBtn.pressed ? "#44ff7a00" : (aimMouseAreaBtn.containsMouse ? "#33ff7a00" : "#22ff7a00")) :
                             (aimMouseAreaBtn.pressed ? "#4a5560" : (aimMouseAreaBtn.containsMouse ? "#3a4550" : "#cc121214"))
@@ -3454,7 +3526,7 @@ FocusScope {
 
                     contentItem: Text {
                         text: "3D"
-                        font.pixelSize: 10
+                        font.pixelSize: viewportControls.toolFont
                         font.bold: true
                         color: (root.isAimMode || aimMouseAreaBtn.containsMouse) ? "#00f5d4" : "#ffffff"
                         horizontalAlignment: Text.AlignHCenter
