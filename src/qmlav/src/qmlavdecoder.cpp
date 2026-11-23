@@ -139,6 +139,12 @@ QmlAVLoopController QmlAVDecoder::worker(const AVPacketPtr &avPacket)
 
         return QmlAVLoopController::Continue;
     } else {
+        // Joining mid-GOP decodes as gray blocks until the next keyframe. Those frames are not presented.
+        if (!publishFrame(avFrame)) {
+            m_counters.framesDiscarded++;
+            return QmlAVLoopController::Retry;
+        }
+
         if (m_frameQueueLimit.addValue(frameQueueLength())) {
 
             auto f = makeFrame(avFrame, m_context->shared_from_this());
@@ -239,6 +245,63 @@ AVPixelFormat QmlAVVideoDecoder::negotiatePixelFormatCb(AVCodecContext *avCodecC
 
     // NOTE: If we do reach this point, the codec will modify "avCodecPixelFormats[]" until it is satisfied
     return *avCodecPixelFormats;
+}
+
+bool QmlAVVideoDecoder::isCleanKeyframe(const AVFrame *frame) const
+{
+    if (!frame) {
+        return false;
+    }
+
+    bool corrupt = frame->decode_error_flags != 0;
+#ifdef AV_FRAME_FLAG_CORRUPT
+    corrupt = corrupt || (frame->flags & AV_FRAME_FLAG_CORRUPT) != 0;
+#endif
+    if (corrupt) {
+        return false;
+    }
+
+    bool key = frame->pict_type == AV_PICTURE_TYPE_I;
+#ifdef AV_FRAME_FLAG_KEY
+    key = key || (frame->flags & AV_FRAME_FLAG_KEY) != 0;
+#endif
+#if LIBAVUTIL_VERSION_MAJOR < 59
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    key = key || frame->key_frame != 0;
+#pragma GCC diagnostic pop
+#endif
+    return key;
+}
+
+bool QmlAVVideoDecoder::publishFrame(const AVFrame *frame)
+{
+    if (m_pictureAccepted) {
+        return true;
+    }
+
+    if (isCleanKeyframe(frame)) {
+        m_pictureAccepted = true;
+        return true;
+    }
+
+    const int64_t now = Clock::now();
+    if (m_firstHeldUs == 0) {
+        m_firstHeldUs = now;
+    }
+
+    // A camera that never marks keyframes still appears. The wait starts at the first held frame.
+    constexpr int64_t kKeyframeWaitUs = 5 * 1000000;
+    if (now - m_firstHeldUs >= kKeyframeWaitUs) {
+        m_pictureAccepted = true;
+        if (!m_holdTimeoutLogged) {
+            m_holdTimeoutLogged = true;
+            logDebug() << "No keyframe in 5s; showing the stream";
+        }
+        return true;
+    }
+
+    return false;
 }
 
 const std::shared_ptr<QmlAVFrame> QmlAVVideoDecoder::makeFrame(const AVFramePtr &avFrame, const std::shared_ptr<QmlAVMediaContextHolder> &context) const

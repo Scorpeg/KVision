@@ -156,7 +156,8 @@ signals:
     // A PTZ camera leaves its park position (preset) to follow a target the other lens saw, or comes back to it. channel
     // is the camera's own channel of the PTZ lens. tracking is true when it leaves and false when it is back.
     void trackingChanged(const QString &ip, int channel, bool tracking);
-    // The PTZ lens reported where it points (about once a second while it moves).
+    // The PTZ lens reported where it points (about once a second while it moves). A tile treats a
+    // recent one of these, with a fresh target from the other lens, as a follow already under way.
     void ptzMoved(const QString &ip, int channel);
     // The connection failed and will not be retried until a tile watches again.
     void listenFailed(const QString &ip, const QString &message);

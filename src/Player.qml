@@ -170,10 +170,56 @@ FocusScope {
 
     property bool isZoomed: false
     property bool isZoomSelectionMode: false
+    // A single camera filling the view (maximized, or a 1x1 layout) can be boxed again to zoom tighter.
+    property bool tightenOnDrag: false
     property real zoomX: 0
     property real zoomY: 0
     property real zoomWidth: 1
     property real zoomHeight: 1
+
+    // x1,y1,w,h are in this item's coordinates. A box on the full picture sets the view.
+    // A box drawn while already zoomed is a fraction of that view, so it zooms tighter.
+    function zoomToBox(x1, y1, w, h) {
+        var fr = fittedVideoRect();
+        if (fr.width <= 1 || fr.height <= 1)
+            return false;
+        var nx1 = Math.max(0, Math.min(1, (x1 - fr.x) / fr.width));
+        var ny1 = Math.max(0, Math.min(1, (y1 - fr.y) / fr.height));
+        var nx2 = Math.max(0, Math.min(1, (x1 + w - fr.x) / fr.width));
+        var ny2 = Math.max(0, Math.min(1, (y1 + h - fr.y) / fr.height));
+        var nw = nx2 - nx1;
+        var nh = ny2 - ny1;
+        if (nw <= 0.01 || nh <= 0.01)
+            return false;
+        // Equal fractions keep the picture's aspect ratio. The smaller side grows so the whole box stays visible.
+        var view = Math.max(nw, nh);
+        var left = (nx1 + nx2) / 2 - view / 2;
+        var top = (ny1 + ny2) / 2 - view / 2;
+        if (isZoomed) {
+            left = zoomX + left * zoomWidth;
+            top = zoomY + top * zoomHeight;
+            view = view * Math.max(zoomWidth, zoomHeight);
+        }
+        view = Math.max(0.02, Math.min(1, view));
+        zoomX = Math.max(0, Math.min(1 - view, left));
+        zoomY = Math.max(0, Math.min(1 - view, top));
+        zoomWidth = view;
+        zoomHeight = view;
+        isZoomed = true;
+        isZoomSelectionMode = false;
+        return true;
+    }
+
+    // Slide the current box zoom. dx/dy are pixels in this item's coordinates.
+    function panZoomBy(dx, dy) {
+        if (!isZoomed)
+            return;
+        var panRect = fittedVideoRect();
+        var dZoomX = (dx / Math.max(1, panRect.width)) * zoomWidth;
+        var dZoomY = (dy / Math.max(1, panRect.height)) * zoomHeight;
+        zoomX = Math.max(0, Math.min(1 - zoomWidth, zoomX - dZoomX));
+        zoomY = Math.max(0, Math.min(1 - zoomHeight, zoomY - dZoomY));
+    }
 
     // Zoom the ROI (box) zoom in/out with the mouse wheel, keeping the point under the cursor fixed.
     // px/py are in this item's coordinates. Zooming out to the full picture clears the zoom.
@@ -713,7 +759,7 @@ FocusScope {
             return;
         }
         console.log("[Player] checkSeamlessSwitch checking inactive player " + playerIndex + " status: " + player.status + " hasVideo: " + player.hasVideo + " hasAudio: " + player.hasAudio + " framePresented: " + player.framePresented);
-        if (player.playbackState === MediaPlayer.PlayingState && player.status === MediaPlayer.Buffered && player.hasVideo && (player.framePresented || root.streamIndex > 2)) {
+        if (player.playbackState === MediaPlayer.PlayingState && player.status === MediaPlayer.Buffered && player.hasVideo && player.framePresented) {
             if (seamlessSwitchTimer.running) {
                 if (seamlessSwitchTimer.targetPlayerIndex === playerIndex) return;
                 seamlessSwitchTimer.stop();
@@ -733,10 +779,10 @@ FocusScope {
                 && String(statusPlayer.source) === root.activeStreamUrl
                 && root.isHikvision && typeof HikvisionManager !== "undefined") {
             var isSub = statusPlayer.isSubStreamOfPlayer;
-            if (!isSub && root.activeStreamUrl !== "" && root.iFrameForcedUrl !== root.activeStreamUrl) {
+            if (root.activeStreamUrl !== "" && root.iFrameForcedUrl !== root.activeStreamUrl) {
                 root.iFrameForcedUrl = root.activeStreamUrl;
-                console.log("[Player] Stream " + (status === MediaPlayer.LoadedMedia ? "Loaded" : "Buffered") + ". Forcing I-Frame on camera: " + root.channelId);
-                HikvisionManager.forceIFrameAsync(root.recorderIp, root.recorderPort || 8000, root.username, root.password, root.channelId);
+                console.log("[Player] Stream " + (status === MediaPlayer.LoadedMedia ? "Loaded" : "Buffered") + ". Forcing I-Frame on camera: " + root.channelId + (isSub ? " sub" : " main"));
+                HikvisionManager.forceIFrameAsync(root.recorderIp, root.recorderPort || 8000, root.username, root.password, root.channelId, isSub);
             }
         }
 
@@ -1205,34 +1251,65 @@ FocusScope {
                 root.lastTargetReport = Date.now();
                 HikvisionEvents.logFrame(ip, root.targetCaption(" - "), root.index, root.cameraNameInfo);
             } else if (root.targetWatching && ip === root.watchedIp && root.lensChannel > 0 && channel > 0 && channel !== root.lensChannel) {
-                // The other lens of this camera saw something. A PTZ lens is told where to point by it, so keep the
-                // target for the moment the PTZ leaves its park position to follow.
+                // The other lens of this camera saw something. A PTZ lens is told where to point by it.
                 root.siblingType = targetType;
                 root.siblingAt = Date.now();
-                root.showTracking();
+                // Already off park and moving: there is no new "leave", so the position reports are the follow.
+                // A report during the way home is not that. The other lens still sees the target the whole way back.
+                if (!root.returnSlew && !root.trackingFlag && root.ptzMoveIsFresh() && root.ptzMovedAt > root.parkedAt)
+                    root.beginFollow();
+                else
+                    root.showTracking();
             }
         }
     }
 
     // --- A PTZ lens following a target that the other lens saw ---
-    // The camera says when the PTZ leaves its park preset ("leave"), where it points while it follows, and when it is
-    // back. It does not name the target: that comes from the other lens (the wide view), which is what told the PTZ
-    // where to look. While it follows, this tile shows that target with TRACKING.
+    // The camera says when the PTZ leaves its park preset ("leave"), where it points while it moves, and when it is
+    // back. It does not name the target: that comes from the other lens (the wide view). A follow that is already
+    // under way sends positions and no new "leave", so a fresh target plus a recent move is logged the same way.
+    // While it follows, this tile shows that target with TRACKING, unless this lens already has its own report up.
     property bool trackingFlag: false
+    property bool followLogged: false
     property double trackingAt: 0
+    property double ptzMovedAt: 0
+    property double parkedAt: 0
     property string siblingType: ""
     property double siblingAt: 0
+    property bool returnSlew: false // positions on the way back to park, until the lens has been still
     readonly property int trackingStaleMs: 30000 // the camera stopped sending positions: it is not following any more
     readonly property int siblingFreshMs: 15000  // the other lens's report is only used this long
+    readonly property int ptzMoveFreshMs: 5000   // a position report this recent means the PTZ is moving
+
+    function siblingIsFresh() {
+        return root.siblingType !== "" && Date.now() - root.siblingAt <= root.siblingFreshMs;
+    }
+
+    function ptzMoveIsFresh() {
+        return root.ptzMovedAt > 0 && Date.now() - root.ptzMovedAt <= root.ptzMoveFreshMs;
+    }
+
+    function beginFollow() {
+        root.trackingFlag = true;
+        root.returnSlew = false;
+        root.trackingAt = Date.now();
+        root.showTracking();
+    }
 
     function showTracking() {
         var now = Date.now();
         if (!root.trackingFlag || now - root.trackingAt > root.trackingStaleMs)
             return;
-        if (root.siblingType === "" || now - root.siblingAt > root.siblingFreshMs)
-            return; // the PTZ moved with no target seen (someone steering it), so no frame
-        if (root.targetType !== "" && root.targetSource !== "TRACKING")
-            return; // this lens has a report of its own on screen: leave that
+        if (!root.siblingIsFresh())
+            return; // the PTZ moved with no target seen (someone steering it), so no frame and no log line
+        // This lens has a rule of its own on screen. Leave that label, and still record the follow once.
+        if (root.targetType !== "" && root.targetSource !== "TRACKING") {
+            if (!root.followLogged) {
+                root.followLogged = true;
+                HikvisionEvents.logTracking(root.watchedIp, root.siblingType, root.lensChannel);
+            }
+            return;
+        }
         var starting = root.targetSource !== "TRACKING";
         var changed = starting || root.targetType !== root.siblingType;
         root.targetSource = "TRACKING";
@@ -1240,12 +1317,18 @@ FocusScope {
         root.lastTargetReport = now;
         if (changed)
             HikvisionEvents.logFrame(root.watchedIp, root.targetCaption(" - "), root.index, root.cameraNameInfo);
-        if (starting)
-            HikvisionEvents.logTracking(root.watchedIp, root.siblingType, root.lensChannel); // the log line and two snapshots
+        if (starting && !root.followLogged) {
+            root.followLogged = true;
+            HikvisionEvents.logTracking(root.watchedIp, root.siblingType, root.lensChannel); // the log line and four snapshots
+        }
     }
 
     function endTracking() {
         root.trackingFlag = false;
+        root.followLogged = false;
+        root.ptzMovedAt = 0; // the slew back to park is not a new follow
+        root.returnSlew = true;
+        root.parkedAt = Date.now();
         if (root.targetSource === "TRACKING") {
             root.targetType = "";
             root.targetSource = "";
@@ -1257,20 +1340,31 @@ FocusScope {
         onTrackingChanged: {
             if (!(root.targetWatching && ip === root.watchedIp && root.lensChannel > 0 && channel === root.lensChannel))
                 return;
-            root.trackingFlag = tracking;
-            root.trackingAt = Date.now();
             if (tracking)
-                root.showTracking();
+                root.beginFollow();
             else
                 root.endTracking();
         }
         onPtzMoved: {
             if (!(root.targetWatching && ip === root.watchedIp && root.lensChannel > 0 && channel === root.lensChannel))
                 return;
+            var now = Date.now();
             if (root.trackingFlag) {
-                root.trackingAt = Date.now();
+                root.ptzMovedAt = now;
+                root.trackingAt = now;
                 root.showTracking();
+                return;
             }
+            // One continuous slew. The way home keeps sending positions, so a new follow starts only after a pause.
+            if (root.returnSlew && ((root.ptzMovedAt > 0 && now - root.ptzMovedAt <= root.ptzMoveFreshMs) ||
+                                    (root.ptzMovedAt === 0 && now - root.parkedAt <= root.ptzMoveFreshMs))) {
+                root.ptzMovedAt = now;
+                return;
+            }
+            root.returnSlew = false;
+            root.ptzMovedAt = now;
+            if (root.siblingIsFresh() && root.siblingAt > root.parkedAt)
+                root.beginFollow();
         }
     }
 
@@ -1913,11 +2007,17 @@ FocusScope {
             id: messageContainer
             
             property int activeStatus: activePlayerIndex === 1 ? qmlAvPlayer1.status : qmlAvPlayer2.status
+            property bool activeFramePresented: activePlayerIndex === 1 ? qmlAvPlayer1.framePresented : qmlAvPlayer2.framePresented
+            property bool activeHasVideo: activePlayerIndex === 1 ? qmlAvPlayer1.hasVideo : qmlAvPlayer2.hasVideo
             // No picture yet is normal while a stream is opening. The red sign is a failed open or a stream that ended.
             property bool isError: activeStatus === MediaPlayer.InvalidMedia || activeStatus === MediaPlayer.EndOfMedia
+            // Buffered is not a picture. The decoder holds mid-GOP frames until a keyframe, and the badge stays up for that wait.
+            property bool pictureReady: activeFramePresented && (activeStatus === MediaPlayer.Buffered || activeStatus === MediaPlayer.LoadedMedia || (root.streamIndex === 3 && activeHasVideo))
             property string themeColor: isError ? "#e74c3c" : "#00f5d4"
             property string themeIcon: isError ? "\u26A0" : "\u21BB"
             property string statusText: {
+                if (!isError && !activeFramePresented)
+                    return qsTr("LNG_00199");
                 var progress = activePlayerIndex === 1 ? qmlAvPlayer1.bufferProgress : qmlAvPlayer2.bufferProgress;
                 switch (activeStatus) {
                 case MediaPlayer.NoMedia:
@@ -1944,7 +2044,7 @@ FocusScope {
             border.color: themeColor
             border.width: 1
             radius: 8
-            visible: root.activeStreamUrl !== "" && !root.isQuickPlayback && (!root.isHikvision || hikPlayerSettings.useRealStreams) && activeStatus !== MediaPlayer.Buffered && activeStatus !== MediaPlayer.LoadedMedia && !(root.streamIndex === 3 && (activePlayerIndex === 1 ? qmlAvPlayer1.hasVideo : qmlAvPlayer2.hasVideo))
+            visible: root.activeStreamUrl !== "" && !root.isQuickPlayback && (!root.isHikvision || hikPlayerSettings.useRealStreams) && !pictureReady
             z: 3
 
             Row {
@@ -2455,9 +2555,15 @@ FocusScope {
         MouseArea {
             id: zoomMouseArea
             anchors.fill: parent
-            enabled: root.isZoomSelectionMode
+            enabled: root.isZoomSelectionMode || (root.isZoomed && root.tightenOnDrag)
             hoverEnabled: true
             cursorShape: Qt.CrossCursor
+            // The double-click that leaves a maximized camera is on the viewport behind this area.
+            propagateComposedEvents: true
+            onDoubleClicked: {
+                isDragging = false;
+                mouse.accepted = false;
+            }
 
             property real startX: 0
             property real startY: 0
@@ -2526,28 +2632,10 @@ FocusScope {
                     var w = Math.abs(startX - currentX);
                     var h = Math.abs(startY - currentY);
 
-                    // Ignore very small clicks/drags to avoid accidental zoom on clicks
-                    if (w > 10 && h > 10) {
-                        // Convert the selection from tile pixels to fractions of the
-                        // fitted video picture, ignoring any letterbox/pillarbox bars.
-                        var fr = root.fittedVideoRect();
-                        var nx1 = Math.max(0, Math.min(1, (x1 - fr.x) / fr.width));
-                        var ny1 = Math.max(0, Math.min(1, (y1 - fr.y) / fr.height));
-                        var nx2 = Math.max(0, Math.min(1, (x1 + w - fr.x) / fr.width));
-                        var ny2 = Math.max(0, Math.min(1, (y1 + h - fr.y) / fr.height));
-                        var nw = nx2 - nx1;
-                        var nh = ny2 - ny1;
-                        if (nw > 0.01 && nh > 0.01) {
-                            // Equal fractions keep the video aspect ratio, so the picture is
-                            // never stretched. Grow the smaller side so the whole selection stays visible.
-                            var size = Math.max(nw, nh);
-                            root.zoomX = Math.max(0, Math.min(1 - size, (nx1 + nx2) / 2 - size / 2));
-                            root.zoomY = Math.max(0, Math.min(1 - size, (ny1 + ny2) / 2 - size / 2));
-                            root.zoomWidth = size;
-                            root.zoomHeight = size;
-                            root.isZoomed = true;
-                        }
-                    }
+                    // Ignore very small clicks/drags to avoid accidental zoom on clicks.
+                    // A second box, drawn on a view that is already zoomed, tightens that view.
+                    if (w > 10 && h > 10)
+                        root.zoomToBox(x1, y1, w, h);
                     root.isZoomSelectionMode = false;
                 }
             }
@@ -2676,12 +2764,7 @@ FocusScope {
                         root.oneToOneX = Math.min(0, Math.max(parent.width - videoW, root.oneToOneX + dx));
                         root.oneToOneY = Math.min(0, Math.max(parent.height - videoH, root.oneToOneY + dy));
                     } else if (root.isZoomed && parent.width > 0 && parent.height > 0) {
-                        var panRect = root.fittedVideoRect();
-                        var dZoomX = (dx / Math.max(1, panRect.width)) * root.zoomWidth;
-                        var dZoomY = (dy / Math.max(1, panRect.height)) * root.zoomHeight;
-
-                        root.zoomX = Math.max(0, Math.min(1.0 - root.zoomWidth, root.zoomX - dZoomX));
-                        root.zoomY = Math.max(0, Math.min(1.0 - root.zoomHeight, root.zoomY - dZoomY));
+                        root.panZoomBy(dx, dy);
                     }
 
                     lastX = mouse.x;

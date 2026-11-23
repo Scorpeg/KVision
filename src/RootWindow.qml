@@ -520,6 +520,19 @@ ApplicationWindow {
         layoutToastHideTimer.restart();
     }
 
+    // Vertical wheel first. A sideways tilt still counts, so one notch is never dropped.
+    function wheelDeltaY(wheel) {
+        if (!wheel)
+            return 0;
+        if (wheel.angleDelta.y !== 0)
+            return wheel.angleDelta.y;
+        if (wheel.pixelDelta && wheel.pixelDelta.y !== 0)
+            return wheel.pixelDelta.y;
+        if (wheel.angleDelta.x !== 0)
+            return wheel.angleDelta.x;
+        return 0;
+    }
+
     // One notch of the wheel. Shared by layout changes and by stepping cameras while one is maximized.
     function wheelStepAllowed() {
         if (layoutWheelDebounce.running)
@@ -1295,6 +1308,20 @@ ApplicationWindow {
         }
     }
 
+    // Save one camera's stream on one layout. Auto clears Exclude. Main, Sub, and Third mark it.
+    function setLayoutCameraStream(layout, key, mode) {
+        if (!layout || !key)
+            return;
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 3)
+            return;
+        rootWindow.applyStreamToLayout(layout, key, mode);
+        if (mode === 0)
+            rootWindow.releaseCameraOnLayout(layout, key);
+        else
+            rootWindow.excludeCameraOnLayout(layout, key);
+        rootWindow.tileStreamRev++;
+    }
+
     // Remember the choice and write it onto every tile of these cameras that is not excluded.
     // 0 is Auto: the entry is forgotten and every following tile of that camera goes back to Auto.
     function setCameraStream(keys, mode) {
@@ -1323,7 +1350,22 @@ ApplicationWindow {
         rootWindow.tileStreamRev++;
     }
 
-    // A right-click sets one tile, then marks that layout excluded so the camera choice leaves it alone.
+    // True when this layout has a Main, Sub, or Third tile for the camera.
+    // Auto, and a layout that does not show the camera, are not exceptions.
+    function layoutHasNonAuto(layout, key) {
+        if (!layout || !key)
+            return false;
+        for (var v = 0; v < layout.count; ++v) {
+            var item = layout.get(v);
+            if (!item || rootWindow.tileKeyFromUrl(item.url) !== key)
+                continue;
+            if (item.streamMode === 1 || item.streamMode === 2 || item.streamMode === 3)
+                return true;
+        }
+        return false;
+    }
+
+    // A right-click of Main, Sub, or Third marks that layout so the camera-wide choice leaves it alone.
     function excludeCameraOnLayout(layout, key) {
         if (!layout || !key || rootWindow.layoutExcludes(layout, key))
             return;
@@ -1333,10 +1375,49 @@ ApplicationWindow {
         rootWindow.tileStreamRev++;
     }
 
-    // Tick or clear Exclude for one camera on one layout. Clearing writes the camera choice back onto its tiles there.
+    // Auto is the default, so it is not an exception. Drop the flag and leave the saved Auto in place.
+    function releaseCameraOnLayout(layout, key) {
+        if (!layout || !key || !rootWindow.layoutExcludes(layout, key))
+            return;
+        var l = rootWindow.excludeList(layout);
+        var at = l.indexOf(key);
+        if (at < 0)
+            return;
+        l.splice(at, 1);
+        layout.streamExcludes = JSON.stringify(l);
+        rootWindow.tileStreamRev++;
+    }
+
+    // Drop exclude entries whose tiles on that layout are all Auto. Does not change the saved stream.
+    function clearAutoExcludes() {
+        var changed = false;
+        for (var L = 0; L < layoutsCollectionModel.count; ++L) {
+            var layout = layoutsCollectionModel.get(L);
+            if (!layout || layout === rootWindow.scratchLayout)
+                continue;
+            var list = rootWindow.excludeList(layout);
+            var kept = [];
+            for (var i = 0; i < list.length; ++i) {
+                if (rootWindow.layoutHasNonAuto(layout, list[i]))
+                    kept.push(list[i]);
+            }
+            if (kept.length !== list.length) {
+                layout.streamExcludes = JSON.stringify(kept);
+                changed = true;
+            }
+        }
+        if (changed)
+            rootWindow.tileStreamRev++;
+        return changed;
+    }
+
+    // Tick or clear Exclude for one camera on one layout.
+    // Auto cannot be ticked. Clearing a Main, Sub, or Third tile makes it follow the camera-wide choice again.
     function setLayoutExcluded(uid, key, on) {
         var layout = rootWindow.layoutByUid(uid);
         if (!layout || !key)
+            return;
+        if (on && !rootWindow.layoutHasNonAuto(layout, key))
             return;
         var mode = rootWindow.cameraStreamMode(key);
         if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 3)
@@ -1350,7 +1431,7 @@ ApplicationWindow {
         else
             return;
         layout.streamExcludes = JSON.stringify(l);
-        if (!on)
+        if (!on && rootWindow.layoutHasNonAuto(layout, key))
             rootWindow.applyStreamToLayout(layout, key, mode);
         rootWindow.tileStreamRev++;
     }
@@ -1480,6 +1561,8 @@ ApplicationWindow {
             } finally {
                 rootWindow.isSyncing = false;
             }
+            if (!Context.isAuxiliary && rootWindow.clearAutoExcludes())
+                saveTimer.restart();
             rootWindow.lastLoadedModelsJson = initialModels;
             rootWindow.lastSavedModelsJson = initialModels;
 
@@ -2496,7 +2579,15 @@ ApplicationWindow {
             acceptedButtons: Qt.NoButton
             z: 1
             onWheel: {
+                var layout = layoutRepeater.itemAt(stackLayout.currentIndex);
                 if (wheel.modifiers & Qt.ControlModifier) {
+                    if (layout) {
+                        var zp = mapToItem(layout, wheel.x, wheel.y);
+                        if (layout.digitalZoomAt(zp.x, zp.y, rootWindow.wheelDeltaY(wheel))) {
+                            wheel.accepted = true;
+                            return;
+                        }
+                    }
                     wheel.accepted = false;
                     return;
                 }
@@ -2504,7 +2595,6 @@ ApplicationWindow {
                     wheel.accepted = true;
                     return;
                 }
-                var layout = layoutRepeater.itemAt(stackLayout.currentIndex);
                 if (layout) {
                     var lp = mapToItem(layout, wheel.x, wheel.y);
                     if (layout.boxZoomWheelAt(lp.x, lp.y, wheel.angleDelta.y, wheel.modifiers)) {
@@ -2513,8 +2603,7 @@ ApplicationWindow {
                     }
                 }
                 if (layout && layout.fullScreenIndex >= 0) {
-                    var delta = wheel.angleDelta.y;
-                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    var delta = rootWindow.wheelDeltaY(wheel);
                     if (delta !== 0 && rootWindow.wheelStepAllowed())
                         layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
                     wheel.accepted = true;
@@ -2838,8 +2927,7 @@ ApplicationWindow {
             if (!(wheel.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
                 var layout = layoutRepeater.itemAt(stackLayout.currentIndex);
                 if (layout && layout.fullScreenIndex >= 0) {
-                    var delta = wheel.angleDelta.y;
-                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    var delta = wheelDeltaY(wheel);
                     if (delta !== 0 && wheelStepAllowed())
                         layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
                     wheel.accepted = true;

@@ -189,7 +189,15 @@ Window {
             acceptedButtons: Qt.NoButton
             z: 1
             onWheel: {
+                var layout = layoutRepeater.itemAt(auxWindow.layoutIndex);
                 if (wheel.modifiers & Qt.ControlModifier) {
+                    if (layout) {
+                        var zp = mapToItem(layout, wheel.x, wheel.y);
+                        if (layout.digitalZoomAt(zp.x, zp.y, rootWindow.wheelDeltaY(wheel))) {
+                            wheel.accepted = true;
+                            return;
+                        }
+                    }
                     wheel.accepted = false;
                     return;
                 }
@@ -197,7 +205,6 @@ Window {
                     wheel.accepted = true;
                     return;
                 }
-                var layout = layoutRepeater.itemAt(auxWindow.layoutIndex);
                 if (layout) {
                     var lp = mapToItem(layout, wheel.x, wheel.y);
                     if (layout.boxZoomWheelAt(lp.x, lp.y, wheel.angleDelta.y, wheel.modifiers)) {
@@ -206,8 +213,7 @@ Window {
                     }
                 }
                 if (layout && layout.fullScreenIndex >= 0) {
-                    var delta = wheel.angleDelta.y;
-                    if (delta === 0 && wheel.pixelDelta) delta = wheel.pixelDelta.y;
+                    var delta = rootWindow.wheelDeltaY(wheel);
                     if (delta !== 0 && rootWindow.wheelStepAllowed())
                         layout.stepMaximizedCamera(delta > 0 ? 1 : -1);
                     wheel.accepted = true;

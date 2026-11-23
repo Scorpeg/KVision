@@ -326,8 +326,9 @@ void HikvisionArchivePlayer::cleanupPlayback()
     }
 
     if (port >= 0) {
-        PlayM4_StopSoundShare(port); // Port-specific stopping instead of global PlayM4_StopSound()
-        m_soundPlaying = false;
+        // Close either SDK sound mode. PlaySound is process-wide, so StopSoundShare alone leaves it open.
+        PlayM4_StopSoundShare(port);
+        PlayM4_StopSound();
         {
             std::lock_guard<std::mutex> lock(s_portMapMutex);
             s_portMap.erase(port);
@@ -1018,25 +1019,11 @@ void HikvisionArchivePlayer::PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType
                 player->setPlaybackSpeed(player->m_currentSpeedMultiplier);
             }
             
-            // Try to set separate audio callback first (may fail on Linux with Error 16)
+            // Decoded audio is played by QAudioOutput, which follows the tile mute.
+            // PlayM4_PlaySound opens one shared ALSA device for the whole process. SetVolume(0)
+            // does not silence it, and every other port then fails with Error 2. That one device
+            // keeps playing the first stream on every layout, muted tiles included.
             bool audioCallbackRegistered = PlayM4_SetAudioCallBack(activePort, AudioCallBack, reinterpret_cast<long>(player));
-            
-            // Always start sound to enable audio decoding within PlayM4
-            bool soundStarted = PlayM4_PlaySound(activePort);
-            if (!soundStarted) {
-                qDebug() << "[HikArchive] PlayM4_PlaySound failed, trying PlayM4_PlaySoundShare...";
-                soundStarted = PlayM4_PlaySoundShare(activePort);
-            }
-
-            if (soundStarted) {
-                qDebug() << "[HikArchive] Sound playback successfully started on port" << activePort;
-                player->m_soundPlaying = true;
-                // UNCONDITIONALLY mute direct SDK ALSA sound rendering to prevent ALSA/PulseAudio lockups
-                PlayM4_SetVolume(activePort, 0);
-            } else {
-                qWarning() << "[HikArchive] Failed to start sound playback! Error:" << PlayM4_GetLastError(activePort);
-                player->m_soundPlaying = false;
-            }
 
             if (audioCallbackRegistered) {
                 qDebug() << "[HikArchive] PlayM4_SetAudioCallBack registered OK on port" << activePort;

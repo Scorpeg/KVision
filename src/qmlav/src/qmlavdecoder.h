@@ -12,6 +12,7 @@ extern "C" {
 #include "qmlavresampler.h"
 
 struct AVCodecContext;
+struct AVFrame;
 
 class QmlAVMediaContextHolder;
 class QmlAVOptions;
@@ -82,6 +83,8 @@ protected:
     QmlAVLoopController worker(const AVPacketPtr &avPacket);
 
     virtual bool initVideoDecoder([[maybe_unused]] const QmlAVOptions &avOptions) { return true; }
+    // Audio publishes every frame. Video holds the picture until a clean keyframe.
+    virtual bool publishFrame([[maybe_unused]] const AVFrame *frame) { return true; }
     virtual const std::shared_ptr<QmlAVFrame> makeFrame([[maybe_unused]] const AVFramePtr &avFrame,
                                                         [[maybe_unused]] const std::shared_ptr<QmlAVMediaContextHolder> &context) const {
         // NOTE: Cannot be pure virtual!
@@ -116,11 +119,18 @@ public:
 
 protected:
     bool initVideoDecoder(const QmlAVOptions &avOptions) override;
+    bool publishFrame(const AVFrame *frame) override;
     static AVPixelFormat negotiatePixelFormatCb(struct AVCodecContext *avCodecCtx, const AVPixelFormat *avCodecPixelFormats);
     const std::shared_ptr<QmlAVFrame> makeFrame(const AVFramePtr &avFrame, const std::shared_ptr<QmlAVMediaContextHolder> &context) const override;
 
 private:
+    bool isCleanKeyframe(const AVFrame *frame) const;
+
     std::shared_ptr<QmlAVHWOutput> m_hwOutput;
+    // A new decoder starts false. Frames before the first clean keyframe are not presented.
+    bool m_pictureAccepted = false;
+    int64_t m_firstHeldUs = 0;
+    bool m_holdTimeoutLogged = false;
 };
 
 class QmlAVAudioDecoder final : public QmlAVDecoder

@@ -55,8 +55,9 @@ public:
     Q_INVOKABLE void refreshDeviceTime(const QString &ip, int port, const QString &username, const QString &password, bool forSnapshot);
 
     // Queues an I-frame request and returns at once. One call is enough per stream open.
-    Q_INVOKABLE void forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId);
-    bool forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId);
+    // subStream asks for the sub stream. Otherwise the request is for the main stream.
+    Q_INVOKABLE void forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId, bool subStream);
+    bool forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId, bool subStream);
 
     // Blocking HTTP read. The window uses fetchStreamingChannelsAsync.
     QString fetchStreamingChannels(const QString &ip, int httpPort, const QString &username, const QString &password);

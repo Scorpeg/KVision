@@ -539,7 +539,7 @@ ColumnLayout {
         }
     }
 
-    // ── Which picture a camera's tiles use. Written onto every layout. ──
+    // ── The stream saved for each camera on each layout. ──
     Component {
         id: streamSourceComponent
         StreamSourceWindow {}
@@ -559,7 +559,7 @@ ColumnLayout {
             spacing: 8
 
             Text {
-                text: "Video stream"
+                text: "Video Stream per Layout"
                 color: "white"
                 font.pixelSize: 13
                 font.bold: true
@@ -567,7 +567,7 @@ ColumnLayout {
             }
 
             Text {
-                text: "Choose Auto, Main, Sub or Third for each camera. Each layout that shows it is listed under it, and Exclude leaves that layout as it is."
+                text: "Open a layout to set Auto, Main, Sub or Third for each camera on that layout."
                 color: "#8898a6"
                 font.pixelSize: 11
                 wrapMode: Text.Wrap
@@ -599,7 +599,7 @@ ColumnLayout {
                 ToolTip.delay: Compact.toolTipDelay
                 ToolTip.timeout: Compact.toolTipTimeout
                 ToolTip.visible: streamChooseBtn.hovered
-                ToolTip.text: qsTr("Set the picture each camera's tiles use. The same choice in every layout.")
+                ToolTip.text: qsTr("Set the stream each camera uses on one layout.")
             }
         }
     }

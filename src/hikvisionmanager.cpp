@@ -978,18 +978,18 @@ qint64 HikvisionManager::deviceTimeMs(const QString &ip, int port, const QString
     return dt.isValid() ? dt.toMSecsSinceEpoch() : -1;
 }
 
-void HikvisionManager::forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId)
+void HikvisionManager::forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId, bool subStream)
 {
     const QString host = cleanHost(ip);
     if (host.isEmpty() || username.isEmpty() || password.isEmpty() || channelId <= 0)
         return;
     const int sdkPort = port > 0 ? port : 8000;
-    startWorker([this, host, sdkPort, username, password, channelId]() {
-        forceIFrame(host, sdkPort, username, password, channelId);
+    startWorker([this, host, sdkPort, username, password, channelId, subStream]() {
+        forceIFrame(host, sdkPort, username, password, channelId, subStream);
     });
 }
 
-bool HikvisionManager::forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId)
+bool HikvisionManager::forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId, bool subStream)
 {
     std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     LONG lUserID = getSession(ip, port, username, password);
@@ -1014,18 +1014,17 @@ bool HikvisionManager::forceIFrame(const QString &ip, int port, const QString &u
         }
     }
 
-    // Wywołanie API Hikvision wymuszające I-Frame (Main stream)
-    BOOL ret = NET_DVR_MakeKeyFrame(lUserID, static_cast<LONG>(targetChannel));
+    // The channel id is already the SDK channel. Sub and main do not fall back onto each other.
+    const BOOL ret = subStream
+        ? NET_DVR_MakeKeyFrameSub(lUserID, static_cast<LONG>(targetChannel))
+        : NET_DVR_MakeKeyFrame(lUserID, static_cast<LONG>(targetChannel));
+    const char *api = subStream ? "NET_DVR_MakeKeyFrameSub" : "NET_DVR_MakeKeyFrame";
     if (!ret) {
-        DWORD err = NET_DVR_GetLastError();
-        qWarning() << "[Hikvision] NET_DVR_MakeKeyFrame failed for IP:" << ip << "Channel:" << targetChannel << "Error:" << err;
-        
-        // Czasami urządzenia wspierają tylko MakeKeyFrameSub dla sub-streamu, 
-        // ale w KVision problem dotyczy głównie Main streamu.
+        qWarning() << "[Hikvision]" << api << "failed for IP:" << ip << "Channel:" << targetChannel << "Error:" << NET_DVR_GetLastError();
         return false;
     }
-    
-    qDebug() << "[Hikvision] NET_DVR_MakeKeyFrame succeeded for IP:" << ip << "Channel:" << targetChannel;
+
+    qDebug() << "[Hikvision]" << api << "succeeded for IP:" << ip << "Channel:" << targetChannel;
     return true;
 }
 

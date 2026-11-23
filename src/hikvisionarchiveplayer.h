@@ -182,7 +182,6 @@ private:
     int m_lastProposedSampleRate = 0;
     int m_sampleRateConsecutiveCount = 0;
     std::atomic<bool> m_sysHeadReceived{false};
-    std::atomic<bool> m_soundPlaying{false};
     std::atomic<bool> m_stepping{false};
     std::atomic<bool> m_refilling{false};
 

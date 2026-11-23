@@ -448,6 +448,9 @@ FocusScope {
             player.height = Qt.binding(function() { return parentContainer.height; });
             player.loops = MediaPlayer.Infinite;
             player.isFullScreen = Qt.binding(function() { return root.fullScreenIndex === index; });
+            player.tightenOnDrag = Qt.binding(function() {
+                return viewportItem.fullScreen || (root.size.width === 1 && root.size.height === 1);
+            });
             player.layoutModel = root.model;
 
             // Connect mediaError signal
@@ -536,11 +539,16 @@ FocusScope {
                 continue;
             if (String(item.url || "") === "")
                 continue;
-            var cell = repeater.itemAt(idx);
-            if (cell && cell.maximizeCell) {
-                cell.maximizeCell();
-                return true;
-            }
+            var cell = root.get(idx);
+            if (!cell)
+                continue;
+            var previous = root.get(start);
+            if (previous && previous !== cell)
+                previous.fullScreen = false;
+            d.fullScreenIndex = idx;
+            cell.fullScreen = true;
+            cell.forceActiveFocus();
+            return true;
         }
         return false;
     }
@@ -780,6 +788,9 @@ FocusScope {
                 sourceComponent: Component {
                 Item {
                     id: container
+                    // The picture is moved onto the layout while maximized, so it is no longer
+                    // container.children[0]. This reference still finds it.
+                    property var viewportItem: viewport
 
                     implicitWidth: (layout.width / root.size.width) * Math.max(viewport.columnSpan, 0)
                     implicitHeight: (layout.height / root.size.height) * Math.max(viewport.rowSpan, 0)
@@ -835,6 +846,24 @@ FocusScope {
                     property real panY: 0
                     readonly property bool zoomEnabled: fullScreen || (root.size.width === 1 && root.size.height === 1)
 
+                    // Wheel zoom of the picture that already fills this cell. The point stays under the cursor.
+                    function zoomByWheelAt(localX, localY, angleDeltaY) {
+                        if (!zoomEnabled)
+                            return false;
+                        var delta = angleDeltaY / 120;
+                        if (delta === 0)
+                            return false;
+                        var newScale = Number(zoomScale * (1 + delta * 0.1)).clamp(1.0, 10.0);
+                        if (newScale === zoomScale)
+                            return true;
+                        var imageX = (localX - panX) / zoomScale;
+                        var imageY = (localY - panY) / zoomScale;
+                        zoomScale = newScale;
+                        panX = Number(localX - imageX * newScale).clamp(width - width * newScale, 0);
+                        panY = Number(localY - imageY * newScale).clamp(height - height * newScale, 0);
+                        return true;
+                    }
+
                     readonly property alias selected: d2.selected
 
                     readonly property alias url: d2.url
@@ -854,39 +883,27 @@ FocusScope {
 
                     readonly property bool hasAudio: player ? player.hasAudio : false
 
-                    states: [
-                        State {
-                            name: "fullScreen"
-                            when: viewport.fullScreen
-
-                            PropertyChanges {
-                                target: viewport
-                                // HACK: Вводим зависимость от размера container для того,
-                                // чтобы инициировать пересчет позиции viewport при изменении размера GridLayout.
-                                x: container.width ? -container.mapToItem(layout, 0, 0).x : 0
-                                y: container.height ? -container.mapToItem(layout, 0, 0).y : 0
-                                width: layout.width
-                                height: layout.height
-                            }
-                            PropertyChanges {
-                                target: cellLoader
-                                z: 1
-                            }
+                    // The cell stays cell-sized. While maximized, this item is moved onto the layout
+                    // itself so the picture, its buttons, and a drag all belong to this camera.
+                    // A child drawn bigger than its cell never receives those clicks: every ancestor
+                    // has to contain the point.
+                    function placeForFullScreen() {
+                        if (fullScreen) {
+                            parent = root;
+                            z = 100;
+                            x = Qt.binding(function() { return layout.x; });
+                            y = Qt.binding(function() { return layout.y; });
+                            width = Qt.binding(function() { return layout.width; });
+                            height = Qt.binding(function() { return layout.height; });
+                        } else {
+                            z = 0;
+                            parent = container;
+                            x = 0;
+                            y = 0;
+                            width = Qt.binding(function() { return container.width; });
+                            height = Qt.binding(function() { return container.height; });
                         }
-                    ]
-
-                    transitions: [
-                        Transition {
-                            enabled: typeof viewSettings !== "undefined" ? !viewSettings.disableViewportZoomAnimation : true
-                            ParallelAnimation {
-                                PropertyAnimation {
-                                    properties: "x, y, z, width, height"
-                                    easing.type: Easing.Linear
-                                    duration: 250
-                                }
-                            }
-                        }
-                    ]
+                    }
 
                     onVisibleChanged: {
                         fullScreen = false;
@@ -895,6 +912,9 @@ FocusScope {
                     property real preFullScreenVolume: 0.0
 
                     onFullScreenChanged: {
+                        placeForFullScreen();
+                        if (fullScreen)
+                            forceActiveFocus();
                         d2.setCurrentIndex("fullScreenIndex", fullScreen)
                         var vItem = root.model.get(model.index);
                         if (vItem) {
@@ -921,9 +941,9 @@ FocusScope {
                     onFocusChanged: {
                         d2.setCurrentIndex("focusIndex", focus);
                         d2.setCurrentIndex("pressAndHoldIndex", false);
-                        if (!activeFocus) {
-                            fullScreen = false;
-                        }
+                        // Leaving focus must not close this camera. Opening the next one, and moving
+                        // this picture onto the layout, both drop focus for a moment. Double-click
+                        // and Escape still leave the single-camera view.
                     }
                     onActiveFocusChanged: d2.setCurrentIndex("activeFocusIndex", activeFocus)
                     onSelectedChanged: {
@@ -1284,6 +1304,13 @@ FocusScope {
                             if (addCameraDialog.visible && addCameraDialog.layoutModel === root.model) {
                                 addCameraDialog.targetIndex = model.index;
                             }
+                            // This picture covers the layout. A drag on it must not swap in another camera.
+                            if (viewport.fullScreen) {
+                                d.dragSourceIndex = -1;
+                                d.isDragging = false;
+                                viewport.forceActiveFocus();
+                                return;
+                            }
                             // Left button: record potential drag start in root coordinates
                             var pt = viewportMouseArea.mapToItem(root, mouse.x, mouse.y);
                             d.dragSourceIndex = model.index;
@@ -1301,6 +1328,8 @@ FocusScope {
                                 clampPan();
                                 return;
                             }
+                            if (viewport.fullScreen)
+                                return;
                             if (d.dragSourceIndex >= 0 && !d.isDragging) {
                                 var pt = viewportMouseArea.mapToItem(root, mouse.x, mouse.y);
                                 var dx = Math.abs(pt.x - d.dragStartX);
@@ -1319,7 +1348,7 @@ FocusScope {
                             var pt = viewportMouseArea.mapToItem(root, mouse.x, mouse.y);
                             var targetIndex = root.indexAt(pt.x, pt.y);
 
-                            if (targetIndex >= 0 && targetIndex !== d.dragSourceIndex) {
+                            if (d.dragSourceIndex >= 0 && targetIndex >= 0 && targetIndex !== d.dragSourceIndex) {
                                 var dx = Math.abs(pt.x - d.dragStartX);
                                 var dy = Math.abs(pt.y - d.dragStartY);
                                 if ((dx > 15 || dy > 15) && generalSettings.allowSwappingViewports) {
@@ -1358,10 +1387,11 @@ FocusScope {
                         
                         // Handle mousewheel zoom when in fullscreen (requires CTRL modifier)
                         onWheel: {
-                            if (viewport.player && viewport.player.isZoomed &&
+                            // A maximized camera's wheel moves to the next camera. Only a tile that is
+                            // still in the grid uses the wheel to tighten a box zoom.
+                            if (viewport.player && viewport.player.isZoomed && !viewport.fullScreen &&
                                 !(wheel.modifiers & (Qt.AltModifier | Qt.MetaModifier)) &&
                                 !((wheel.modifiers & Qt.ControlModifier) && wheel.angleDelta.y < 0 && viewport.zoomScale > 1.0)) {
-                                // Box (ROI) zoom active: wheel zooms in/out of the selected region
                                 var pp = viewport.player.mapFromItem(viewportMouseArea, wheel.x, wheel.y);
                                 viewport.player.zoomByWheel(wheel.angleDelta.y, pp.x, pp.y);
                                 wheel.accepted = true;
@@ -1402,11 +1432,15 @@ FocusScope {
                                 }
 
                                 wheel.accepted = true;
-                            } else if (viewport.fullScreen &&
+                            } else if (root.fullScreenIndex >= 0 &&
                                        !(wheel.modifiers & (Qt.AltModifier | Qt.MetaModifier))) {
+                                // Covered cells sit under the maximized picture. A wheel there still
+                                // changes that camera, rather than switching to another layout.
                                 var stepDelta = wheel.angleDelta.y;
                                 if (stepDelta === 0 && wheel.pixelDelta)
                                     stepDelta = wheel.pixelDelta.y;
+                                if (stepDelta === 0)
+                                    stepDelta = wheel.angleDelta.x;
                                 if (stepDelta !== 0 && rootWindow.wheelStepAllowed())
                                     root.stepMaximizedCamera(stepDelta > 0 ? 1 : -1);
                                 wheel.accepted = true;
@@ -2682,14 +2716,21 @@ FocusScope {
         }
     }
 
-    // Right-click > stream: set this tile, and keep this layout off the camera-wide choice.
+    // Right-click > stream: save it on this tile. Auto is the default, so it clears Exclude.
+    // Main, Sub, and Third are exceptions, so this layout is left out of the camera-wide choice.
     function pickTileStream(index, mode) {
         var item = root.model.get(index);
         if (!item)
             return;
         item.streamMode = mode;
         var key = rootWindow.tileKeyFromUrl(item.url);
-        if (key !== "")
+        if (key === "")
+            return;
+        // One tile set back to Auto must not clear the flag while another tile of this camera is still Main, Sub, or Third.
+        if (mode === 0) {
+            if (!rootWindow.layoutHasNonAuto(root.model, key))
+                rootWindow.releaseCameraOnLayout(root.model, key);
+        } else
             rootWindow.excludeCameraOnLayout(root.model, key);
     }
 
@@ -2717,7 +2758,12 @@ FocusScope {
         if (index >= 0 && index < repeater.count) {
             var shell = repeater.itemAt(index);
             // Covered cells stay unloaded, so there is no viewport to focus.
-            if (shell === null || !shell.item || !shell.item.children || shell.item.children.length < 1)
+            // A maximized picture is parented to the layout, not to its cell, so follow the reference.
+            if (shell === null || !shell.item)
+                return undefined;
+            if (shell.item.viewportItem)
+                return shell.item.viewportItem;
+            if (!shell.item.children || shell.item.children.length < 1)
                 return undefined;
 
             return shell.item.children[0];
@@ -2727,6 +2773,10 @@ FocusScope {
     }
 
     function indexAt(x, y) {
+        // The maximized camera is drawn over the grid. Points on that picture belong to it,
+        // not to the cells sitting underneath.
+        if (d.fullScreenIndex >= 0 && x >= 0 && y >= 0 && x < width && y < height)
+            return d.fullScreenIndex;
         for (var i = 0; i < repeater.count; ++i) {
             var itemTo = repeater.itemAt(i);
             if (!itemTo || !itemTo.active)
@@ -2741,9 +2791,34 @@ FocusScope {
         return -1;
     }
 
+    // Ctrl+wheel digital zoom. x and y are in this layout's coordinates, which include the
+    // letterbox around the grid. A camera that fills the layout is the target. Otherwise it is
+    // the cell under the pointer, and that cell is opened first.
+    function digitalZoomAt(x, y, angleDeltaY) {
+        if (!angleDeltaY)
+            return false;
+        var idx = d.fullScreenIndex;
+        if (idx < 0)
+            idx = indexAt(x, y);
+        var cell = (idx >= 0) ? root.get(idx) : null;
+        if (!cell)
+            return false;
+        if (!cell.fullScreen && (root.size.width > 1 || root.size.height > 1)) {
+            cell.fullScreen = true;
+            cell.forceActiveFocus();
+            d.selectionReset();
+        }
+        var local = cell.mapFromItem(root, x, y);
+        cell.zoomByWheelAt(local.x, local.y, angleDeltaY);
+        return true;
+    }
+
     // If the tile under (x, y) (in this layout's coordinates) is box-zoomed, zoom it with the wheel.
     // Returns true when the wheel event was consumed.
+    // A maximized camera ignores this: its wheel moves to the next camera in the layout.
     function boxZoomWheelAt(x, y, angleDeltaY, modifiers) {
+        if (d.fullScreenIndex >= 0)
+            return false;
         if (modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) {
             return false;
         }
