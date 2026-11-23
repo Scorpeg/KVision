@@ -86,18 +86,8 @@ Window {
         sequence: "M"
         onActivated: {
             var activeLayout = Utils.currentLayout();
-            if (selectedLayoutModel && activeLayout && activeLayout.focusIndex >= 0) {
-                var item = selectedLayoutModel.get(activeLayout.focusIndex);
-                var viewport = activeLayout.get(activeLayout.focusIndex);
-
-                if (viewport.hasAudio) {
-                    if (item.volume > 0) {
-                        item.volume = 0;
-                    } else {
-                        item.volume = 1;
-                    }
-                }
-            }
+            if (activeLayout && activeLayout.focusIndex >= 0)
+                activeLayout.toggleTileMute(activeLayout.focusIndex);
         }
     }
 

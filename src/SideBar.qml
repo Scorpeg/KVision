@@ -1557,13 +1557,9 @@ FocusScope {
                                     highlighted: !(rootSideBar.currentViewportIndex >= 0 && Utils.currentModel() && Utils.currentModel().get(rootSideBar.currentViewportIndex).volume > 0 || !viewportSettings.noUnmuteWhenFullScreen && Utils.currentLayout() && Utils.currentLayout().fullScreenIndex >= 0)
                                     Layout.fillWidth: true
                                     onClicked: {
-                                        if (rootSideBar.currentViewportIndex >= 0) {
-                                            if (Utils.currentModel().get(rootSideBar.currentViewportIndex).volume > 0) {
-                                                Utils.currentModel().get(rootSideBar.currentViewportIndex).volume = 0;
-                                            } else {
-                                                Utils.currentModel().get(rootSideBar.currentViewportIndex).volume = 1;
-                                            }
-                                        }
+                                        var layout = Utils.currentLayout();
+                                        if (rootSideBar.currentViewportIndex >= 0 && layout)
+                                            layout.toggleTileMute(rootSideBar.currentViewportIndex);
                                     }
                                 }
 

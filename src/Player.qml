@@ -825,6 +825,15 @@ FocusScope {
     property bool muted: false
     property double volume: 1.0
 
+    // The cell keeps this level so M can restore it after a mute from the tile button.
+    function rememberAudible() {
+        if (!(root.volume > 0))
+            return;
+        var cell = root.parent && root.parent.parent;
+        if (cell)
+            cell.audibleVolume = root.volume;
+    }
+
     onTalkActiveHereChanged: {
         // Silence the camera's own audio on this tile while talking, so its microphone
         // does not pick up the speaker and howl. The previous state is restored afterwards.
@@ -2870,6 +2879,9 @@ FocusScope {
 
                     function setVolume(value) {
                         var v = Math.max(0, Math.min(1, value));
+                        // A mute from this tile has to remember the level, so M can put that level back.
+                        if (v <= 0 && root.volume > 0)
+                            root.rememberAudible();
                         if (root.layoutModel && root.index !== -1) {
                             var vItem = root.layoutModel.get(root.index);
                             if (vItem)
@@ -2879,11 +2891,11 @@ FocusScope {
                         }
                     }
 
-                    // No room for the slider, so each click moves one quarter instead of jumping to silence or full.
+                    // No room for the slider, so each click moves one tenth instead of jumping to silence or full.
                     function stepVolume(dir) {
-                        var q = root.volume * 4;
+                        var q = root.volume * 10;
                         var next = dir > 0 ? Math.floor(q + 0.001) + 1 : Math.ceil(q - 0.001) - 1;
-                        setVolume(Math.max(0, Math.min(4, next)) / 4);
+                        setVolume(Math.max(0, Math.min(10, next)) / 10);
                     }
 
                     Control {

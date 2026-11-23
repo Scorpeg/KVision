@@ -1068,18 +1068,9 @@ ApplicationWindow {
     Shortcut {
         sequence: "M"
         onActivated: {
-            if (Utils.currentLayout().focusIndex >= 0) {
-                var item = Utils.currentModel().get(Utils.currentLayout().focusIndex);
-                var viewport = Utils.currentLayout().get(Utils.currentLayout().focusIndex);
-
-                if (viewport.hasAudio) {
-                    if (item.volume > 0) {
-                        item.volume = 0;
-                    } else {
-                        item.volume = 1;
-                    }
-                }
-            }
+            var layout = Utils.currentLayout();
+            if (layout && layout.focusIndex >= 0)
+                layout.toggleTileMute(layout.focusIndex);
         }
     }
     Shortcut {

@@ -882,6 +882,8 @@ FocusScope {
                     readonly property alias leftIndex: d2.leftIndex
 
                     readonly property bool hasAudio: player ? player.hasAudio : false
+                    // The level M restores. Full volume is only the fallback when this tile has never been turned up.
+                    property real audibleVolume: 1
 
                     // The cell stays cell-sized. While maximized, this item is moved onto the layout
                     // itself so the picture, its buttons, and a drag all belong to this camera.
@@ -2789,6 +2791,21 @@ FocusScope {
         }
 
         return -1;
+    }
+
+    // M mutes the focused tile. The next press puts back the level it had, rather than full volume.
+    function toggleTileMute(index) {
+        var item = root.model ? root.model.get(index) : null;
+        var cell = root.get(index);
+        if (!item || !cell || !cell.hasAudio)
+            return;
+        if (item.volume > 0) {
+            cell.audibleVolume = item.volume;
+            item.volume = 0;
+        } else {
+            var back = cell.audibleVolume;
+            item.volume = back > 0 ? back : 1;
+        }
     }
 
     // Ctrl+wheel digital zoom. x and y are in this layout's coordinates, which include the
