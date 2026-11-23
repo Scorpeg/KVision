@@ -1,4 +1,5 @@
 #include "overlayentry.h"
+#include "loginguard.h"
 
 #include "mqttonce.h"
 
@@ -27,7 +28,7 @@ QSet<QString> g_held;
 QHash<QString, QList<QPair<QPointer<QObject>, std::function<void()>>>> g_waiting;
 }
 
-QSet<QString> OverlayEntry::s_refused;
+
 
 QString OverlayEntry::hostOf() const
 {
@@ -227,7 +228,7 @@ void OverlayEntry::request(const QString &method, const QString &path, const QBy
         QTimer::singleShot(0, this, [done]() { done(-1, QByteArray()); });
         return;
     }
-    if (s_refused.contains(host)) { // refused earlier this session: do not try again
+    if (LoginGuard::instance().isRefused(host, user, pass)) { // refused earlier this session: do not try again
         QTimer::singleShot(0, this, [done]() { done(401, QByteArray()); });
         return;
     }
@@ -244,13 +245,13 @@ void OverlayEntry::request(const QString &method, const QString &path, const QBy
     reply->setProperty("camUser", user);
     reply->setProperty("camPass", pass);
     QTimer::singleShot(kRequestTimeoutMs, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, host, done]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, host, user, pass, done]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool refused = reply->property("refused").toBool() || status == 401 || reply->error() == QNetworkReply::AuthenticationRequiredError;
         const QByteArray data = reply->isOpen() ? reply->readAll() : QByteArray();
         reply->deleteLater();
         if (refused) {
-            s_refused.insert(host);
+            LoginGuard::instance().refuse(host, user, pass);
             done(401, data);
             return;
         }

@@ -162,8 +162,21 @@ ApplicationWindow {
         when: !Context.config.fullScreen
     }
 
-    property alias hikvisionRecordersJson: hikvisionSettings.recordersJson
-    onHikvisionRecordersJsonChanged: rootWindow.applyEventLogger()
+    property bool recordersSealing: false
+    property bool recordersSecretsReady: false
+    // This copy keeps passwords for the running app. The settings file keeps the sealed copy.
+    property string hikvisionRecordersJson: RecorderSecrets.open(hikvisionSettings.recordersJson, Context.config.fileName)
+    onHikvisionRecordersJsonChanged: {
+        rootWindow.applyEventLogger()
+        if (!rootWindow.recordersSecretsReady || rootWindow.recordersSealing)
+            return
+        var sealed = RecorderSecrets.seal(rootWindow.hikvisionRecordersJson, Context.config.fileName)
+        if (sealed !== "" && sealed !== hikvisionSettings.recordersJson) {
+            rootWindow.recordersSealing = true
+            hikvisionSettings.recordersJson = sealed
+            rootWindow.recordersSealing = false
+        }
+    }
     // A recorder was set offline or back online: stop or start its camera connections.
     Connections {
         target: NvrStatusManager
@@ -369,6 +382,23 @@ ApplicationWindow {
         category: "Hikvision"
         property string recordersJson: "[]"
         onRecordersJsonChanged: NvrStatusManager.onRecordersChanged()
+        Component.onCompleted: {
+            var path = Context.config.fileName
+            var disk = Context.readSetting("Hikvision", "recordersJson", "")
+            if (disk === "") {
+                rootWindow.recordersSecretsReady = true
+                return
+            }
+            var opened = RecorderSecrets.open(disk, path)
+            var sealed = RecorderSecrets.seal(opened, path)
+            rootWindow.recordersSealing = true
+            if (rootWindow.hikvisionRecordersJson !== opened)
+                rootWindow.hikvisionRecordersJson = opened
+            if (sealed !== "" && recordersJson !== sealed)
+                recordersJson = sealed
+            rootWindow.recordersSealing = false
+            rootWindow.recordersSecretsReady = true
+        }
     }
 
 
@@ -579,10 +609,20 @@ ApplicationWindow {
         target: Context
         function onConfigFileChanged() {
             // 1. Check and live-reload Hikvision NVR/Cameras recorders list
-            var diskRecorders = Context.readSetting("Hikvision", "recordersJson", "[]");
-            if (diskRecorders !== hikvisionSettings.recordersJson) {
+            var diskRecorders = Context.readSetting("Hikvision", "recordersJson", "");
+            if (diskRecorders === "")
+                diskRecorders = "[]";
+            var openedRecorders = RecorderSecrets.open(diskRecorders, Context.config.fileName);
+            if (openedRecorders !== rootWindow.hikvisionRecordersJson) {
                 console.log("[Sync] Live-reloading NVR Recorders list...");
-                hikvisionSettings.recordersJson = diskRecorders;
+                rootWindow.hikvisionRecordersJson = openedRecorders;
+            } else if (rootWindow.recordersSecretsReady) {
+                var sealedRecorders = RecorderSecrets.seal(openedRecorders, Context.config.fileName);
+                if (sealedRecorders !== "" && sealedRecorders !== hikvisionSettings.recordersJson) {
+                    rootWindow.recordersSealing = true;
+                    hikvisionSettings.recordersJson = sealedRecorders;
+                    rootWindow.recordersSealing = false;
+                }
             }
 
             // 2. Check and live-reload Viewport Layouts definitions

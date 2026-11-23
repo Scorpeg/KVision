@@ -14,6 +14,7 @@
 #include <QWidget>
 #include <QDebug>
 #include "context.h"
+#include "recordersecrets.h"
 
 Context::Context(QObject *parent) : QObject(parent)
 {
@@ -511,28 +512,52 @@ bool Context::exportSettings(const QString &targetFilePath)
     QFileInfo srcInfo(srcPath);
     QFileInfo dstInfo(dstPath);
 
+    const QString recordersKey = QStringLiteral("Hikvision/recordersJson");
     if (srcInfo.exists() && dstInfo.exists() && srcInfo.canonicalFilePath() == dstInfo.canonicalFilePath()) {
-        // Exporting to the active config file itself: just sync it
         QSettings src(srcPath, QSettings::IniFormat);
+        if (src.contains(recordersKey)) {
+            const QString stored = src.value(recordersKey).toString();
+            const QString sealed = RecorderSecrets::sealRecorders(RecorderSecrets::openRecorders(stored, srcPath), srcPath);
+            if (sealed.isEmpty())
+                return false;
+            if (sealed != stored)
+                src.setValue(recordersKey, sealed);
+        }
         src.sync();
         return src.status() == QSettings::NoError;
     }
 
     QDir().mkpath(dstInfo.absolutePath());
-    if (QFile::exists(dstPath)) {
-        QFile::remove(dstPath);
-    }
 
     QSettings src(srcPath, QSettings::IniFormat);
     src.sync();
 
+    // Seal before replacing the destination. A lock failure must leave the previous export in place.
+    const QStringList keys = src.allKeys();
+    QString sealedRecorders;
+    if (src.contains(recordersKey)) {
+        const QString stored = src.value(recordersKey).toString();
+        sealedRecorders = RecorderSecrets::sealRecorders(RecorderSecrets::openRecorders(stored, srcPath), srcPath);
+        if (sealedRecorders.isEmpty())
+            return false;
+        if (sealedRecorders != stored)
+            src.setValue(recordersKey, sealedRecorders);
+    }
+
+    if (QFile::exists(dstPath))
+        QFile::remove(dstPath);
+
     QSettings dst(dstPath, QSettings::IniFormat);
     dst.clear();
 
-    const QStringList keys = src.allKeys();
     for (const QString &key : keys) {
+        if (key == recordersKey) {
+            dst.setValue(key, sealedRecorders);
+            continue;
+        }
         dst.setValue(key, src.value(key));
     }
+    src.sync();
     dst.sync();
 
     return (dst.status() == QSettings::NoError) && QFileInfo::exists(dstPath);
@@ -581,6 +606,15 @@ bool Context::importSettings(const QString &sourceFilePath)
             val = sanitized;
         }
         dst.setValue(key, val);
+    }
+    const QString recordersKey = QStringLiteral("Hikvision/recordersJson");
+    if (dst.contains(recordersKey)) {
+        const QString stored = dst.value(recordersKey).toString();
+        const QString sealed = RecorderSecrets::sealRecorders(RecorderSecrets::openRecorders(stored, dstPath), dstPath);
+        if (!sealed.isEmpty() && sealed != stored)
+            dst.setValue(recordersKey, sealed);
+        else if (sealed.isEmpty())
+            qWarning() << "[Settings] Recorder passwords stayed in the imported settings; they will move on the next open";
     }
     dst.sync();
 

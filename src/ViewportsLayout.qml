@@ -343,6 +343,7 @@ FocusScope {
         id: playerPool
 
         property var pool: []
+        property var sharedPlayerComponent: null
         property var activePlayersMap: ({}) // index -> Player
         property var mediaErrorSlotsMap: ({}) // index -> function
 
@@ -355,11 +356,12 @@ FocusScope {
             if (pool.length > 0) {
                 player = pool.pop();
             } else {
-                var component = Qt.createComponent("Player.qml");
-                if (component.status === Component.Ready) {
-                    player = component.createObject(root);
+                if (!sharedPlayerComponent || sharedPlayerComponent.status !== Component.Ready)
+                    sharedPlayerComponent = Qt.createComponent("Player.qml");
+                if (sharedPlayerComponent.status === Component.Ready) {
+                    player = sharedPlayerComponent.createObject(root);
                 } else {
-                    console.error("Failed to create Player: " + component.errorString());
+                    console.error("Failed to create Player: " + sharedPlayerComponent.errorString());
                     return null;
                 }
             }
@@ -751,31 +753,42 @@ FocusScope {
                 }
             }
 
-            delegate: Item {
-                id: container
+            // Covered slots stay unloaded. A Player for every slot of a merged grid stalls the window.
+            delegate: Loader {
+                id: cellLoader
 
-                implicitWidth: (layout.width / root.size.width) * Math.max(viewport.columnSpan, 0)
-                implicitHeight: (layout.height / root.size.height) * Math.max(viewport.rowSpan, 0)
-                visible: root.visible && ((model.visible === ViewportsLayoutItem.Visible) ? true : false)
+                active: root.visible && ((model.visible === ViewportsLayoutItem.Visible) ? true : false)
+                visible: active
+                asynchronous: false
 
                 function maximizeCell() {
-                    viewport.forceActiveFocus();
-                    viewport.fullScreen = true;
-                    d.selectionReset();
+                    if (item)
+                        item.maximizeCell();
                 }
 
-                // Fixed size per cell (grid share x span). Letting GridLayout distribute space
-                // with fillWidth/fillHeight resizes already merged cells once several spans exist.
                 Layout.fillHeight: false
                 Layout.fillWidth: false
-                Layout.preferredWidth: (layout.width / root.size.width) * Math.max(viewport.columnSpan, 1)
-                Layout.preferredHeight: (layout.height / root.size.height) * Math.max(viewport.rowSpan, 1)
+                Layout.preferredWidth: (layout.width / root.size.width) * Math.max(model.columnSpan, 1)
+                Layout.preferredHeight: (layout.height / root.size.height) * Math.max(model.rowSpan, 1)
                 Layout.minimumWidth: Layout.preferredWidth
                 Layout.minimumHeight: Layout.preferredHeight
                 Layout.maximumWidth: Layout.preferredWidth
                 Layout.maximumHeight: Layout.preferredHeight
-                Layout.columnSpan: Math.max(viewport.columnSpan, 1);
-                Layout.rowSpan: Math.max(viewport.rowSpan, 1);
+                Layout.columnSpan: Math.max(model.columnSpan, 1)
+                Layout.rowSpan: Math.max(model.rowSpan, 1)
+
+                sourceComponent: Component {
+                Item {
+                    id: container
+
+                    implicitWidth: (layout.width / root.size.width) * Math.max(viewport.columnSpan, 0)
+                    implicitHeight: (layout.height / root.size.height) * Math.max(viewport.rowSpan, 0)
+
+                    function maximizeCell() {
+                        viewport.forceActiveFocus();
+                        viewport.fullScreen = true;
+                        d.selectionReset();
+                    }
 
                 Item {
                     id: viewport
@@ -793,9 +806,24 @@ FocusScope {
 
                     property var player: null
                     property alias d2SecondaryUrlFailed: d2.secondaryUrlFailed
+                    property string cellUrl: model && model.url ? model.url : ""
+                    property bool cellReady: false
 
+                    function ensurePlayer() {
+                        if (!cellReady)
+                            return;
+                        if (cellUrl !== "" && !player)
+                            player = playerPool.acquirePlayer(model.index, playerContainer, viewport);
+                        else if (cellUrl === "" && player) {
+                            playerPool.releasePlayer(model.index);
+                            player = null;
+                        }
+                    }
+
+                    onCellUrlChanged: ensurePlayer()
                     Component.onCompleted: {
-                        player = playerPool.acquirePlayer(model.index, playerContainer, viewport);
+                        cellReady = true;
+                        ensurePlayer();
                     }
                     Component.onDestruction: {
                         playerPool.releasePlayer(model.index);
@@ -841,7 +869,7 @@ FocusScope {
                                 height: layout.height
                             }
                             PropertyChanges {
-                                target: viewport.parent
+                                target: cellLoader
                                 z: 1
                             }
                         }
@@ -924,7 +952,9 @@ FocusScope {
                                 if (d.activeFocusIndex >= 0 && d.keyModifiers & Qt.ShiftModifier) {
                                     d.selectionIndex2 = keyNavigationCallback(d.selectionIndex2);
                                 } else {
-                                    root.get(keyNavigationCallback(model.index)).forceActiveFocus();
+                                    var nextCell = root.get(keyNavigationCallback(model.index));
+                                    if (nextCell)
+                                        nextCell.forceActiveFocus();
                                 }
                             }
                         }
@@ -936,13 +966,18 @@ FocusScope {
                             break;
                         case Qt.Key_Up:
                             function keyUpCallback(index) {
-                                var topIndex = root.get(index).topIndex;
+                                var origin = root.get(index);
+                                if (!origin)
+                                    return index;
+                                var topIndex = origin.topIndex;
 
                                 if (topIndex !== index) {
-                                    root.get(topIndex).cursorColumnOffset =
-                                            d.columnFromIndex(index) + root.get(index).cursorColumnOffset - d.columnFromIndex(topIndex);
+                                    var dest = root.get(topIndex);
+                                    if (dest)
+                                        dest.cursorColumnOffset =
+                                            d.columnFromIndex(index) + origin.cursorColumnOffset - d.columnFromIndex(topIndex);
                                 } else {
-                                    root.get(index).cursorRowOffset = Math.max(root.get(index).cursorRowOffset - 1, 0);
+                                    origin.cursorRowOffset = Math.max(origin.cursorRowOffset - 1, 0);
                                 }
 
                                 return topIndex;
@@ -952,13 +987,18 @@ FocusScope {
                             break;
                         case Qt.Key_Down:
                             function keyDownCallback(index) {
-                                var bottomIndex = root.get(index).bottomIndex;
+                                var origin = root.get(index);
+                                if (!origin)
+                                    return index;
+                                var bottomIndex = origin.bottomIndex;
 
                                 if (bottomIndex !== index) {
-                                    root.get(bottomIndex).cursorColumnOffset =
-                                            d.columnFromIndex(index) + root.get(index).cursorColumnOffset - d.columnFromIndex(bottomIndex);
+                                    var dest = root.get(bottomIndex);
+                                    if (dest)
+                                        dest.cursorColumnOffset =
+                                            d.columnFromIndex(index) + origin.cursorColumnOffset - d.columnFromIndex(bottomIndex);
                                 } else {
-                                    root.get(index).cursorRowOffset = Math.min(root.get(index).cursorRowOffset + 1, root.get(index).rowSpan - 1);
+                                    origin.cursorRowOffset = Math.min(origin.cursorRowOffset + 1, origin.rowSpan - 1);
                                 }
 
                                 return bottomIndex;
@@ -968,13 +1008,18 @@ FocusScope {
                             break;
                         case Qt.Key_Right:
                             function keyRightCallback(index) {
-                                var rightIndex = root.get(index).rightIndex;
+                                var origin = root.get(index);
+                                if (!origin)
+                                    return index;
+                                var rightIndex = origin.rightIndex;
 
                                 if (rightIndex !== index) {
-                                    root.get(rightIndex).cursorRowOffset =
-                                            d.rowFromIndex(index) + root.get(index).cursorRowOffset - d.rowFromIndex(rightIndex);
+                                    var dest = root.get(rightIndex);
+                                    if (dest)
+                                        dest.cursorRowOffset =
+                                            d.rowFromIndex(index) + origin.cursorRowOffset - d.rowFromIndex(rightIndex);
                                 } else {
-                                    root.get(index).cursorColumnOffset = Math.min(root.get(index).cursorColumnOffset + 1, root.get(index).columnSpan - 1);
+                                    origin.cursorColumnOffset = Math.min(origin.cursorColumnOffset + 1, origin.columnSpan - 1);
                                 }
 
                                 return rightIndex;
@@ -984,13 +1029,18 @@ FocusScope {
                             break;
                         case Qt.Key_Left:
                             function keyLeftCallback(index) {
-                                var leftIndex = root.get(index).leftIndex;
+                                var origin = root.get(index);
+                                if (!origin)
+                                    return index;
+                                var leftIndex = origin.leftIndex;
 
                                 if (leftIndex !== index) {
-                                    root.get(leftIndex).cursorRowOffset =
-                                            d.rowFromIndex(index) + root.get(index).cursorRowOffset - d.rowFromIndex(leftIndex);
+                                    var dest = root.get(leftIndex);
+                                    if (dest)
+                                        dest.cursorRowOffset =
+                                            d.rowFromIndex(index) + origin.cursorRowOffset - d.rowFromIndex(leftIndex);
                                 } else {
-                                    root.get(index).cursorColumnOffset = Math.max(root.get(index).cursorColumnOffset - 1, 0);
+                                    origin.cursorColumnOffset = Math.max(origin.cursorColumnOffset - 1, 0);
                                 }
 
                                 return leftIndex;
@@ -1082,18 +1132,19 @@ FocusScope {
                         }
 
                         function spanningIndex(column, row) {
-                            var spanningIndex = d.indexFromAddress(column, row);
+                            var idx = d.indexFromAddress(column, row);
 
-                            if (spanningIndex !== model.index) {
-                                var spanningItem = root.get(spanningIndex);
-
-                                if (spanningItem !== undefined && !spanningItem.visible) {
-                                    spanningIndex = d.indexFromAddress(d.columnFromIndex(spanningIndex) + spanningItem.columnSpan,
-                                                                       d.rowFromIndex(spanningIndex) + spanningItem.rowSpan);
+                            if (idx !== model.index) {
+                                // Covered cells are not built. Their columnSpan/rowSpan are the
+                                // negative offset back to the anchor cell that covers them.
+                                var cell = root.model.get(idx);
+                                if (cell && cell.visible !== ViewportsLayoutItem.Visible) {
+                                    idx = d.indexFromAddress(d.columnFromIndex(idx) + cell.columnSpan,
+                                                             d.rowFromIndex(idx) + cell.rowSpan);
                                 }
                             }
 
-                            return spanningIndex;
+                            return idx;
                         }
                     }
 
@@ -2606,6 +2657,8 @@ FocusScope {
                     function indexAt(x, y) {
                         for (var i = 0; i < repeater.count; ++i) {
                             var itemTo = repeater.itemAt(i);
+                            if (!itemTo || !itemTo.active)
+                                continue;
 
                             if (i === model.index) {
                                 if (contains(Qt.point(x, y))) {
@@ -2622,6 +2675,8 @@ FocusScope {
 
                         return -1;
                     }
+                }
+            }
                 }
             }
         }
@@ -2644,7 +2699,8 @@ FocusScope {
         switch (event.key) {
         case Qt.Key_Delete:
             for (var i = 0; i < root.size.width * root.size.height; ++i) {
-                if (root.get(i).selected) {
+                var selectedCell = root.get(i);
+                if (selectedCell && selectedCell.selected) {
                     model.get(i).url = "";
                     model.get(i).secondaryUrl = "";
                     model.get(i).volume = 0;
@@ -2659,20 +2715,22 @@ FocusScope {
 
     function get(index) {
         if (index >= 0 && index < repeater.count) {
-            var item = repeater.itemAt(index);
-            if (item === null) {
+            var shell = repeater.itemAt(index);
+            // Covered cells stay unloaded, so there is no viewport to focus.
+            if (shell === null || !shell.item || !shell.item.children || shell.item.children.length < 1)
                 return undefined;
-            }
 
-            return item.children[0];
+            return shell.item.children[0];
         }
 
-        return;
+        return undefined;
     }
 
     function indexAt(x, y) {
         for (var i = 0; i < repeater.count; ++i) {
             var itemTo = repeater.itemAt(i);
+            if (!itemTo || !itemTo.active)
+                continue;
             var mappedPoint = mapToItem(itemTo, x, y);
 
             if (itemTo.contains(mappedPoint)) {

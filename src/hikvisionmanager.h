@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QList>
 #include <QThread>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <condition_variable>
@@ -25,8 +26,9 @@ public:
     // Singleton provider
     static HikvisionManager* instance();
 
-    // Login and discover channels for a specific recorder
-    Q_INVOKABLE QVariantList discoverCameras(const QString &ip, int port, int httpPort, const QString &username, const QString &password);
+    // Login and discover channels for a specific recorder.
+    // Blocking. Only the background worker calls this. QML uses discoverCamerasAsync.
+    QVariantList discoverCameras(const QString &ip, int port, int httpPort, const QString &username, const QString &password);
     Q_INVOKABLE void discoverCamerasAsync(const QString &ip, int port, int httpPort, const QString &username, const QString &password);
 
     // Logout from a recorder session
@@ -42,11 +44,26 @@ public:
     // command: SET_PRESET=8 (save current position), GOTO_PRESET=39 (recall), CLE_PRESET=9 (clear)
     Q_INVOKABLE bool ptzPreset(const QString &ip, int port, const QString &username, const QString &password, int channelId, int command, int presetIndex);
 
-    // Force I-Frame for seamless switching
     // Current clock of the recorder/camera (local wall clock, epoch ms), or -1 on failure.
-    Q_INVOKABLE qint64 deviceTimeMs(const QString &ip, int port, const QString &username, const QString &password);
-    Q_INVOKABLE bool forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId);
-    Q_INVOKABLE QString fetchStreamingChannels(const QString &ip, int httpPort, const QString &username, const QString &password);
+    // Blocking SDK call. The window uses cachedDeviceTimeMs and refreshDeviceTime.
+    qint64 deviceTimeMs(const QString &ip, int port, const QString &username, const QString &password);
+    // The last clock read for this address, moved forward by the time since that read, or -1
+    // when no read has succeeded yet. Returns at once.
+    Q_INVOKABLE qint64 cachedDeviceTimeMs(const QString &ip);
+    // Reads the clock on a background thread when the cache is empty or older than a few
+    // minutes. forSnapshot uses a shorter age, so a snapshot asks again without waiting on the call.
+    Q_INVOKABLE void refreshDeviceTime(const QString &ip, int port, const QString &username, const QString &password, bool forSnapshot);
+
+    // Queues an I-frame request and returns at once. One call is enough per stream open.
+    Q_INVOKABLE void forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId);
+    bool forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId);
+
+    // Blocking HTTP read. The window uses fetchStreamingChannelsAsync.
+    QString fetchStreamingChannels(const QString &ip, int httpPort, const QString &username, const QString &password);
+    // Reads /ISAPI/Streaming/channels on a background thread. A second call for the same
+    // address while one is running, or within 15 seconds of a failure, does nothing.
+    // streamingChannelsReady follows. An address that already answered is delivered from memory.
+    Q_INVOKABLE void fetchStreamingChannelsAsync(const QString &ip, int httpPort, const QString &username, const QString &password);
     // The camera behind a recorder channel (ip, channel, sdkPort) from the list already in memory.
     // A list that is not known yet is read on a background thread and this returns empty at once, so the window never waits.
     Q_INVOKABLE QVariantMap proxyCameraCached(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId);
@@ -84,11 +101,18 @@ public:
         LONG lUserID = -1;
         NET_DVR_DEVICEINFO_V40 deviceInfo;
         int refCount = 0;
+        int port = 0;
+        QString username;
+        QString password;
     };
 
     LONG loginShared(const QString &ip, int port, const QString &username, const QString &password, NET_DVR_DEVICEINFO_V40 &deviceInfo);
     void logoutShared(const QString &ip);
     void forceLogoutShared(const QString &ip);
+
+    // Other workers (NVR status) call NET_DVR themselves. They take this first so
+    // those calls cannot overlap this class's login and I-frame work.
+    void withSdkLock(const std::function<void()> &fn);
 
     LONG getSession(const QString &ip, int port, const QString &username, const QString &password);
     bool getDeviceInfo(const QString &ip, NET_DVR_DEVICEINFO_V40 &deviceInfo);
@@ -99,11 +123,21 @@ signals:
     void unstickProgress(const QString &label, const QString &text);
     void unstickFinished(const QString &label, const QString &result);
     void proxyChannelsReady(const QString &nvrIp, bool ok);
+    void streamingChannelsReady(const QString &ip, const QString &xml);
+    void deviceTimeReady(const QString &ip, qint64 deviceMs);
 
 private:
     struct SessionInfo {
         LONG lUserID = -1;
         NET_DVR_DEVICEINFO_V40 deviceInfo;
+        int port = 0;
+        QString username;
+        QString password;
+    };
+
+    struct ClockSample {
+        qint64 deviceMs = -1;
+        qint64 localMs = 0;
     };
 
     bool isLoggedInternal(const QString &ip) const;
@@ -137,6 +171,13 @@ private:
 
     void ptzWorkerLoop();
     void ensureInitialized() const;
+    void startWorker(const std::function<void()> &fn);
+    void logoutBlocking(const QString &ip);
+    static QString cleanHost(const QString &ip);
+
+    // Serializes this class's NET_DVR calls. Archive, download and talk keep their own threads.
+    // Recursive because a clock or I-frame call takes the lock and then logs in.
+    std::recursive_mutex m_sdkMutex;
 
     mutable std::mutex m_initMutex;
     mutable std::condition_variable m_initCond;
@@ -144,6 +185,15 @@ private:
 
     QList<QThread*> m_discoveryThreads;
     std::mutex m_discoveryMutex;
+
+    QHash<QString, QString> m_streamXml;
+    QSet<QString> m_streamFetching;
+    QHash<QString, qint64> m_streamFailedAt;
+    std::mutex m_streamMutex;
+
+    QHash<QString, ClockSample> m_clock;
+    QSet<QString> m_clockFetching;
+    std::mutex m_clockMutex;
 };
 
 #endif // HIKVISIONMANAGER_H

@@ -3,7 +3,6 @@
 
 #include <QByteArray>
 #include <QObject>
-#include <QSet>
 #include <QString>
 #include <functional>
 
@@ -42,8 +41,6 @@ private:
     using Done = std::function<void(int code, const QByteArray &body)>;
     void request(const QString &method, const QString &url, const QString &user, const QString &pass,
                  const QByteArray &body, const Done &done);
-
-    QSet<QString> m_refused; // addresses whose login was refused once
 };
 
 #endif // HIKVISIONPTZAIM_H

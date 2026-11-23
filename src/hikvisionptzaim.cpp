@@ -1,4 +1,5 @@
 #include "hikvisionptzaim.h"
+#include "loginguard.h"
 
 #include <QPointer>
 #include <QProcess>
@@ -68,17 +69,17 @@ void HikvisionPtzAim::checkWideLens(const QString &ip, int httpPort, const QStri
         emit lensChecked(ip, channel, false, false, QStringLiteral("no login saved for this camera"));
         return;
     }
-    if (m_refused.contains(ip)) {
+    if (LoginGuard::instance().isRefused(ip, user, pass)) {
         emit lensChecked(ip, channel, false, false, QStringLiteral("the camera refused the login earlier (not tried again)"));
         return;
     }
     const QString url = QStringLiteral("http://%1:%2/ISAPI/PTZCtrl/channels/%3/capabilities").arg(ip).arg(httpPort > 0 ? httpPort : 80).arg(channel);
     QPointer<HikvisionPtzAim> self(this);
-    request(QStringLiteral("GET"), url, user, pass, QByteArray(), [self, ip, channel](int code, const QByteArray &body) {
+    request(QStringLiteral("GET"), url, user, pass, QByteArray(), [self, ip, channel, user, pass](int code, const QByteArray &body) {
         if (!self)
             return;
         if (code == 401) {
-            self->m_refused.insert(ip);
+            LoginGuard::instance().refuse(ip, user, pass);
             emit self->lensChecked(ip, channel, false, false, QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"));
             return;
         }
@@ -101,7 +102,7 @@ void HikvisionPtzAim::aimAt(const QString &ip, int httpPort, const QString &user
         emit aimResult(ip, false, QStringLiteral("no login saved for this camera"));
         return;
     }
-    if (m_refused.contains(ip)) {
+    if (LoginGuard::instance().isRefused(ip, user, pass)) {
         emit aimResult(ip, false, QStringLiteral("the camera refused the login earlier (not tried again)"));
         return;
     }
@@ -119,13 +120,13 @@ void HikvisionPtzAim::aimAt(const QString &ip, int httpPort, const QString &user
         "<EndPoint><positionX>%3</positionX><positionY>%4</positionY></EndPoint></Position3D>").arg(sx).arg(sy).arg(ex).arg(ey).toUtf8();
     const QString url = QStringLiteral("http://%1:%2/ISAPI/PTZCtrl/channels/%3/position3D").arg(ip).arg(httpPort > 0 ? httpPort : 80).arg(channel);
     QPointer<HikvisionPtzAim> self(this);
-    request(QStringLiteral("PUT"), url, user, pass, xml, [self, ip](int code, const QByteArray &) {
+    request(QStringLiteral("PUT"), url, user, pass, xml, [self, ip, user, pass](int code, const QByteArray &) {
         if (!self)
             return;
         if (code == 200) {
             emit self->aimResult(ip, true, QString());
         } else if (code == 401) {
-            self->m_refused.insert(ip);
+            LoginGuard::instance().refuse(ip, user, pass);
             emit self->aimResult(ip, false, QStringLiteral("the camera refused the login (not tried again, so it cannot lock the camera)"));
         } else {
             emit self->aimResult(ip, false, code == 0 ? QStringLiteral("could not connect") : QStringLiteral("the camera answered HTTP %1").arg(code));

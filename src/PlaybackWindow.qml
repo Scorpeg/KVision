@@ -23,12 +23,16 @@ Window {
 
     property date currentDate: new Date()
     property real playheadTimeMs: 0
+    // Set when the user jumps. The lead tile keeps showing the old frame until
+    // the seek finishes, and that clock must not drag the playhead back.
+    property real playheadHoldMs: 0
     readonly property real currentPlayheadMs: playheadTimeMs - currentDate.getTime()
     property real zoomHours: (typeof rootWindow !== "undefined" && rootWindow.generalSettings) ? rootWindow.generalSettings.playbackTimelineHours : 2
     property real panOffsetMs: 0
     property bool isPlaying: false
     property bool autoFollowEnabled: true
     property int playbackSpeed: 1
+    property var tileSyncAt: ({})
     property bool playbackStoppedForDownload: false
     property bool rangeMarkMode: false
     property var rangeStartMs: null
@@ -805,41 +809,62 @@ Window {
     }
 
     Timer {
+        id: frameStepTimer
+        interval: 300
+        repeat: false
+        onTriggered: {
+            var sel = getSelectedPlayer()
+            var ms = (sel && sel.currentFrameTimeMs) ? sel.currentFrameTimeMs() : -1
+            if (!(ms > 0)) {
+                var lead = leadPlayback()
+                ms = lead ? lead.ms : -1
+            }
+            if (ms > 0)
+                notePlayhead(ms)
+            timeline.requestPaint()
+        }
+    }
+
+    Timer {
         id: playbackTimer
         interval: 1000
         running: playbackWindow.isPlaying
         repeat: true
         onTriggered: {
-            if (playbackSpeed > 0) {
-                playheadTimeMs += (1000 * playbackSpeed)
-            } else {
-                playheadTimeMs -= (1000 * Math.abs(playbackSpeed))
+            var lead = mouseArea.isDraggingPlayhead ? null : leadPlayback()
+            var leadIsStale = lead && playheadHoldMs > 0 && Math.abs(lead.ms - playheadHoldMs) > 2500
+            if (lead && lead.ms > 0 && !leadIsStale) {
+                notePlayhead(lead.ms)
+                alignTilesToPlayhead(lead.ms, lead.index)
+            } else if (!mouseArea.isDraggingPlayhead && !(playheadHoldMs > 0)) {
+                if (playbackSpeed > 0)
+                    playheadTimeMs += (1000 * playbackSpeed)
+                else
+                    playheadTimeMs -= (1000 * Math.abs(playbackSpeed))
+                if (currentPlayheadMs >= 86400000) {
+                    var dNext = new Date(currentDate.getTime() + 86400000)
+                    dNext.setHours(0, 0, 0, 0)
+                    currentDate = dNext
+                    panOffsetMs -= 86400000
+                    searchRecordingsForDate(currentDate)
+                    playAtTime(currentDate, playheadTimeMs - currentDate.getTime())
+                } else if (currentPlayheadMs < 0) {
+                    var dPrev = new Date(currentDate.getTime() - 86400000)
+                    dPrev.setHours(0, 0, 0, 0)
+                    currentDate = dPrev
+                    panOffsetMs += 86400000
+                    searchRecordingsForDate(currentDate)
+                    playAtTime(currentDate, playheadTimeMs - currentDate.getTime())
+                }
             }
-            if (currentPlayheadMs >= 86400000) {
-                // Next day!
-                var dNext = new Date(currentDate.getTime() + 86400000)
-                dNext.setHours(0, 0, 0, 0)
-                currentDate = dNext
-                panOffsetMs -= 86400000
-                searchRecordingsForDate(currentDate)
-                playAtTime(currentDate, playheadTimeMs - currentDate.getTime())
-            } else if (currentPlayheadMs < 0) {
-                // Previous day!
-                var dPrev = new Date(currentDate.getTime() - 86400000)
-                dPrev.setHours(0, 0, 0, 0)
-                currentDate = dPrev
-                panOffsetMs += 86400000
-                searchRecordingsForDate(currentDate)
-                playAtTime(currentDate, playheadTimeMs - currentDate.getTime())
-            }
-            
+
             // Auto-center timeline on the playhead if it goes out of view during playback (and autoFollow is enabled)
             var viewDurationMs = zoomHours * 3600000
             if (autoFollowEnabled && !mouseArea.isDraggingPlayhead && (currentPlayheadMs < panOffsetMs || currentPlayheadMs > panOffsetMs + viewDurationMs)) {
                 panOffsetMs = currentPlayheadMs - viewDurationMs / 2
                 searchRecordingsForDate(currentDate)
             }
-            
+
             timeline.requestPaint()
         }
     }
@@ -1185,6 +1210,91 @@ Window {
         }
     }
 
+    function markTilesSynced() {
+        var now = Date.now()
+        var stamps = {}
+        for (var i = 0; i < gridRepeater.count; ++i)
+            stamps[i] = now
+        tileSyncAt = stamps
+    }
+
+    // The selected tile's frame clock, or any tile that already has a frame.
+    function leadPlayback() {
+        var sel = getSelectedPlayer()
+        if (sel && sel.hasActiveStream && sel.hasActiveStream() && sel.currentFrameTimeMs) {
+            var ms = sel.currentFrameTimeMs()
+            if (ms > 0)
+                return { ms: ms, index: selectedPlayerIndex }
+        }
+        for (var i = 0; i < gridRepeater.count; ++i) {
+            var item = gridRepeater.itemAt(i)
+            if (!item || !item.playerInstance || !item.playerInstance.hasActiveStream || !item.playerInstance.hasActiveStream())
+                continue
+            if (!item.playerInstance.currentFrameTimeMs)
+                continue
+            var t = item.playerInstance.currentFrameTimeMs()
+            if (t > 0)
+                return { ms: t, index: i }
+        }
+        return null
+    }
+
+    function notePlayhead(ms) {
+        if (!(ms > 0))
+            return
+        if (playheadHoldMs > 0 && Math.abs(ms - playheadHoldMs) > 2500)
+            return
+        playheadHoldMs = 0
+        var frameDay = new Date(ms)
+        frameDay.setHours(0, 0, 0, 0)
+        var shown = new Date(currentDate)
+        shown.setHours(0, 0, 0, 0)
+        if (frameDay.getTime() !== shown.getTime()) {
+            panOffsetMs -= (frameDay.getTime() - shown.getTime())
+            currentDate = frameDay
+            searchRecordingsForDate(currentDate)
+        }
+        playheadTimeMs = ms
+    }
+
+    // Pull a tile that has drifted back to the lead clock. A user seek stamps
+    // every tile so this does not immediately undo it. One frame step does not
+    // come through here: playAtTime restarts the stream at whole seconds.
+    function alignTilesToPlayhead(leadMs, leadIndex) {
+        if (!(leadMs > 0) || mouseArea.isDraggingPlayhead)
+            return
+        var now = Date.now()
+        var stamps = tileSyncAt || {}
+        var changed = false
+        for (var i = 0; i < gridRepeater.count; ++i) {
+            if (i === leadIndex)
+                continue
+            var item = gridRepeater.itemAt(i)
+            if (!item || !item.playerInstance)
+                continue
+            var p = item.playerInstance
+            if (!p.hasActiveStream || !p.hasActiveStream() || !p.currentFrameTimeMs)
+                continue
+            var frame = p.currentFrameTimeMs()
+            if (!(frame > 0) || Math.abs(frame - leadMs) <= 2500)
+                continue
+            if (stamps[i] && (now - stamps[i]) < 5000)
+                continue
+            var target = new Date(leadMs)
+            if (p.forcePlayAtTime)
+                p.forcePlayAtTime(target)
+            else if (p.playAtTime) {
+                p.playAtTime(target)
+                if (p.setPlaybackSpeed)
+                    p.setPlaybackSpeed(playbackSpeed)
+            }
+            stamps[i] = now
+            changed = true
+        }
+        if (changed)
+            tileSyncAt = stamps
+    }
+
     function playAtTime(date, msSinceMidnight) {
         var d = new Date(date)
         d.setHours(0, 0, 0, 0)
@@ -1199,6 +1309,8 @@ Window {
         });
         isPlaying = true
         playheadTimeMs = targetTime.getTime()
+        playheadHoldMs = playheadTimeMs
+        markTilesSynced()
         timeline.requestPaint()
     }
 
@@ -1323,11 +1435,16 @@ Window {
     }
 
     function stepFrame() {
-        var player = getSelectedPlayer();
-        if (!player || !player.stepFrame)
-            return;
-        isPlaying = false;
-        player.stepFrame();
+        isPlaying = false
+        var stepped = false
+        forEachPlayer(function(p) {
+            if (p.hasActiveStream && p.hasActiveStream() && p.stepFrame) {
+                p.stepFrame()
+                stepped = true
+            }
+        })
+        if (stepped)
+            frameStepTimer.restart()
     }
 
     function togglePlayPause() {

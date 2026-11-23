@@ -21,6 +21,8 @@ class QmlAVPlayer : public QObject, public QQmlParserStatus
 
     Q_PROPERTY(QAbstractVideoSurface *videoSurface READ videoSurface WRITE setVideoSurface)
     Q_PROPERTY(int fps READ fps NOTIFY fpsChanged)
+    // Milliseconds since epoch of the last picture presented. 0 until the first one, and after the source changes.
+    Q_PROPERTY(qint64 lastFrameAtMs READ lastFrameAtMs NOTIFY lastFrameAtMsChanged)
     // One stop only. Set before clearing the source to leave the last picture up.
     Q_PROPERTY(bool holdLastFrame READ holdLastFrame WRITE setHoldLastFrame)
 
@@ -47,6 +49,7 @@ public:
 
     QAbstractVideoSurface *videoSurface() const { return m_videoSurface; }
     int fps() const { return m_fps; }
+    qint64 lastFrameAtMs() const { return m_lastFrameAtMs; }
     bool holdLastFrame() const { return m_holdLastFrame; }
     void setHoldLastFrame(bool hold) { m_holdLastFrame = hold; }
     virtual void classBegin() override {}
@@ -54,6 +57,7 @@ public:
 
 signals:
     void fpsChanged();
+    void lastFrameAtMsChanged();
 
 public slots:
     void play();
@@ -72,6 +76,7 @@ protected:
     void setVideoCodec(const QString &codec);
     void setHasAudio(bool hasAudio);
     void setFramePresented(bool framePresented);
+    void noteFramePresented();
     void releaseAudioOutput();
 
 private:
@@ -87,6 +92,7 @@ private:
     int m_fps = 0;
     int m_fpsCounter = 0;
     qint64 m_lastFpsTime = 0;
+    qint64 m_lastFrameAtMs = 0;
 };
 
 #endif // QMLAVPLAYER_H

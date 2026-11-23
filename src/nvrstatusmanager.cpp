@@ -2,6 +2,7 @@
 #include "hikvisionmanager.h"
 #include "context.h"
 #include "offlinerecorders.h"
+#include "recordersecrets.h"
 #include <QSettings>
 #include <QDebug>
 #include <QCoreApplication>
@@ -183,10 +184,10 @@ void NvrStatusManager::startCheck()
     m_isChecking = true;
     emit isCheckingChanged();
 
-    // Read latest recorders Json from local config
+    // Read latest recorders Json from local config. Passwords live beside the ini.
     QString path = Context::config() ? Context::config()->fileName() : QSettings().fileName();
     QSettings settings(path, QSettings::IniFormat);
-    QString jsonStr = settings.value("Hikvision/recordersJson", "[]").toString();
+    QString jsonStr = RecorderSecrets::openRecorders(settings.value("Hikvision/recordersJson", "[]").toString(), path);
     QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
     QJsonArray recorders = doc.array();
 
@@ -560,8 +561,18 @@ void NvrStatusWorker::run()
             continue;
         }
 
-        // Try to fetch existing connection session, or open a new cached session
-        LONG lUserID = HikvisionManager::instance()->getSession(ip, port, username, password);
+        // Try to fetch existing connection session, or open a new cached session.
+        // Hold the SDK lock across the work-state read too: getSession locks on
+        // its own, and releasing it before GetDVRWorkState lets another login in between.
+        LONG lUserID = -1;
+        NET_DVR_WORKSTATE_V30 workState;
+        std::memset(&workState, 0, sizeof(NET_DVR_WORKSTATE_V30));
+        bool gotWorkState = false;
+        HikvisionManager::instance()->withSdkLock([&]() {
+            lUserID = HikvisionManager::instance()->getSession(ip, port, username, password);
+            if (lUserID >= 0)
+                gotWorkState = NET_DVR_GetDVRWorkState_V30(lUserID, &workState);
+        });
         if (lUserID < 0) {
             if (checkOffline) {
                 QVariantMap err;
@@ -583,11 +594,7 @@ void NvrStatusWorker::run()
             continue;
         }
 
-        // Query status
-        NET_DVR_WORKSTATE_V30 workState;
-        std::memset(&workState, 0, sizeof(NET_DVR_WORKSTATE_V30));
-        BOOL ret = NET_DVR_GetDVRWorkState_V30(lUserID, &workState);
-        if (!ret) {
+        if (!gotWorkState) {
             if (checkOffline) {
                 QVariantMap err;
                 err["recorderName"] = name;

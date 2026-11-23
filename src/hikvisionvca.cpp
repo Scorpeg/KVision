@@ -1,4 +1,5 @@
 #include "hikvisionvca.h"
+#include "vcaparse.h"
 
 #include <QPainter>
 #include <QPolygonF>
@@ -74,21 +75,11 @@ bool parseOneRule(const unsigned char *packet, const unsigned char *begin, const
 QVector<HikVcaDecoder::Rule> parseRuleList(const unsigned char *p, int len, int gap)
 {
     QVector<HikVcaDecoder::Rule> rules;
-    if (len < 24 || gap < 1)
-        return rules;
-    const int ruleCount = p[22];
-    int pos = 24;
-    QByteArray zeros(gap, '\0');
-    for (int k = 0; k < ruleCount && pos < len; ++k) {
-        int end = pos;
-        while (end + gap <= len && std::memcmp(p + end, zeros.constData(), gap) != 0)
-            ++end;
-        if (end + gap > len)
-            break;
+    const QVector<VcaSpan> spans = ruleBodySpans(p, len, gap);
+    for (const VcaSpan &span : spans) {
         HikVcaDecoder::Rule rule;
-        if (parseOneRule(p, p + pos, p + end, &rule))
+        if (parseOneRule(p, p + span.begin, p + span.end, &rule))
             rules.append(rule);
-        pos = end + gap;
     }
     return rules;
 }
@@ -99,13 +90,7 @@ QVector<HikVcaDecoder::Rule> parseRuleList(const unsigned char *p, int len, int 
 QVector<HikVcaDecoder::Rule> parseG3RuleList(const unsigned char *p, int len)
 {
     QVector<HikVcaDecoder::Rule> rules;
-    QVector<int> starts;
-    for (int i = 24; i + 1 < len; ++i) {
-        const bool line = p[i] == 0x00 && p[i + 1] == 0x10;
-        const bool zone = p[i] == 0x40 && (p[i + 1] == 0x20 || p[i + 1] == 0x30 || p[i + 1] == 0x38);
-        if (line || zone)
-            starts.append(i);
-    }
+    const QVector<int> starts = g3RuleStarts(p, len);
     for (int k = 0; k < starts.size(); ++k) {
         int begin = starts[k];
         int end = (k + 1 < starts.size()) ? starts[k + 1] : len;
@@ -219,30 +204,20 @@ void HikVcaDecoder::feed(const unsigned char *data, int size)
 // with a 4-byte gap between records.
 void HikVcaDecoder::handleTargetList(const unsigned char *p, int len, qint64 ms)
 {
-    if (len < 36 + 28)
+    QVector<VcaTargetBox> boxes;
+    if (!decodeG3Targets(p, len, &boxes))
         return;
-    const int count = std::min<int>(p[26], 30);
     Sample sample;
     sample.ms = ms;
-    int pos = 36;
-    for (int k = 0; k < count && pos + 28 <= len; ++k, pos += 32) {
-        quint32 tid;
-        float x, y, w, h;
-        std::memcpy(&tid, p + pos, 4);
-        std::memcpy(&x, p + pos + 8, 4);
-        std::memcpy(&y, p + pos + 12, 4);
-        std::memcpy(&w, p + pos + 16, 4);
-        std::memcpy(&h, p + pos + 20, 4);
-        if (tid == 0 || !(w > 0.002f && h > 0.002f && x >= 0.f && y >= 0.f && x + w <= 1.01f && y + h <= 1.01f))
-            continue;
-        const QRectF box(x, y, w, h);
-        const bool alarm = targetInAlarm(tid, box, ms);
+    for (const VcaTargetBox &box : boxes) {
+        const QRectF rect(box.x, box.y, box.w, box.h);
+        const bool alarm = targetInAlarm(box.id, rect, ms);
         if (alarm) {
-            const auto a = m_alarms.constFind(tid);
+            const auto a = m_alarms.constFind(box.id);
             if (a != m_alarms.constEnd() && a->rule != 0 && !sample.alarmRules.contains(a->rule))
                 sample.alarmRules.append(a->rule);
         }
-        sample.targets.append({tid, box, alarm});
+        sample.targets.append({box.id, rect, alarm});
     }
     addSample(sample);
 }
@@ -274,33 +249,17 @@ void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
         return;
     const int kind = p[5];
     const bool newFormat = p[14] == 0x30; // G3 series: data type 0x30xx
-    if (kind == 2 && newFormat) {
-        // Alarm event, G3 layout: the 15-bit target id starts 4 bits into the byte 16 from the end,
-        // after six zero bytes. Which rule fired is not decoded for this layout (rule 0).
-        if (len < 40)
-            return;
-        const unsigned char *t = p + len - 16;
-        if (!std::all_of(t - 6, t, [](unsigned char b) { return b == 0; }))
-            return;
-        const quint32 tid = (((t[0] & 0x0f) << 11) | (t[1] << 3) | (t[2] >> 5)) & 0x7fff;
-        if (tid != 0)
-            m_alarms.insert(tid, {0, (pts - m_videoBasePts) / 90, -1});
-        return;
-    }
     if (kind == 2) {
-        // Alarm event, sent (three times) when a rule fires. It ends with the rule id, seven zero
-        // bytes, the 15-bit target id (top bit set) and nine more bytes.
-        if (len < 40)
-            return;
-        const unsigned char *tail = p + len;
-        const bool zeros = std::all_of(tail - 20, tail - 13, [](unsigned char b) { return b == 0; });
-        if (!zeros || !(tail[-13] & 0x80))
-            return;
-        const quint32 rule = tail[-21];
-        const quint32 tid = ((tail[-13] << 8) | tail[-12]) & 0x7fff;
+        // Alarm event. A G3 names the target and not the rule. An older camera names both.
+        const VcaAlarmIds alarm = readVcaAlarm(p, len);
         const qint64 ms = (pts - m_videoBasePts) / 90;
-        if (tid != 0 && rule != 0)
-            m_alarms.insert(tid, {rule, ms, -1});
+        if (alarm.layout == VcaAlarmIds::G3) {
+            if (alarm.target != 0)
+                m_alarms.insert(alarm.target, {0, ms, -1});
+        } else if (alarm.layout == VcaAlarmIds::Legacy) {
+            if (alarm.target != 0 && alarm.rule != 0)
+                m_alarms.insert(alarm.target, {alarm.rule, ms, -1});
+        }
         return;
     }
     if (kind == 1 && newFormat)
@@ -353,27 +312,31 @@ void HikVcaDecoder::handlePacket(const unsigned char *p, int len, qint64 pts)
         return;
     if (newFormat) {
         // A G3 sends the rule list in pieces, so a rule missing from this packet is kept.
-        const QVector<Rule> got = parseG3RuleList(p, len);
-        bool changed = false;
-        for (const Rule &n : got) {
-            bool found = false;
-            for (Rule &old : m_rules) {
-                if (old.id != n.id)
-                    continue;
-                if (old.polygon != n.polygon || old.points != n.points) {
-                    old = n;
-                    changed = true;
-                }
-                found = true;
-                break;
-            }
-            if (!found) {
-                m_rules.append(n);
-                changed = true;
-            }
+        const QVector<Rule> gotRules = parseG3RuleList(p, len);
+        QVector<VcaRule> got;
+        got.reserve(gotRules.size());
+        for (const Rule &n : gotRules) {
+            VcaRule rule;
+            rule.id = n.id;
+            rule.polygon = n.polygon;
+            rule.points = n.points;
+            got.append(rule);
         }
-        if (changed)
+        QVector<VcaRule> kept;
+        kept.reserve(m_rules.size());
+        for (const Rule &old : m_rules) {
+            VcaRule rule;
+            rule.id = old.id;
+            rule.polygon = old.polygon;
+            rule.points = old.points;
+            kept.append(rule);
+        }
+        if (mergeKeptRules(&kept, got)) {
+            m_rules.clear();
+            for (const VcaRule &rule : kept)
+                m_rules.append(Rule{rule.id, rule.polygon, rule.points});
             ++m_rulesSerial;
+        }
         return;
     }
 

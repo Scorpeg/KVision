@@ -1,5 +1,6 @@
 #include "hikvisionmanager.h"
 #include "context.h"
+#include "loginguard.h"
 #include <QDebug>
 #include <QDateTime>
 #include <QTemporaryFile>
@@ -8,6 +9,7 @@
 #include <QRegularExpression>
 #include <QRegularExpressionMatchIterator>
 #include <QThread>
+#include <QSet>
 #include <algorithm>
 
 HikvisionManager* HikvisionManager::m_instance = nullptr;
@@ -64,6 +66,8 @@ HikvisionManager::~HikvisionManager()
 
     ensureInitialized();
 
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
+
     // Logout all active sessions
     for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it) {
         NET_DVR_Logout(it.value().lUserID);
@@ -87,30 +91,77 @@ HikvisionManager* HikvisionManager::instance()
     return m_instance;
 }
 
-static QByteArray fetchUrl(const QString &ip, int port, const QString &username, const QString &password, const QString &path) {
-    QProcess process;
-    QStringList args;
-    args << "-s" << "-k" << "--anyauth" << "-u" << QString("%1:%2").arg(username, password)
-         << "--max-time" << "4"
-         << QString("http://%1:%2%3").arg(ip).arg(port).arg(path);
-    
-    qDebug() << "[Hikvision ISAPI] Querying:" << args.last();
-    process.start("curl", args);
-    if (process.waitForFinished(5000)) {
-        QByteArray res = process.readAllStandardOutput();
-        if (!res.isEmpty()) return res;
-    }
+struct CurlAnswer {
+    QByteArray body;
+    int status = 0;
+};
 
-    // Fallback to HTTPS if HTTP failed (e.g. port 443, 8443 or SSL-only NVR)
-    QStringList httpsArgs;
-    httpsArgs << "-s" << "-k" << "--anyauth" << "-u" << QString("%1:%2").arg(username, password)
-              << "--max-time" << "4"
-              << QString("https://%1:%2%3").arg(ip).arg(port).arg(path);
-    process.start("curl", httpsArgs);
-    if (process.waitForFinished(5000)) {
-        return process.readAllStandardOutput();
+QString curlQuoted(QString s)
+{
+    s.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    s.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    return s;
+}
+
+// The password goes to curl on stdin, so it does not appear in the process list.
+// status 0 means curl did not get an HTTP answer.
+CurlAnswer curlExchange(const QString &url, const QString &username, const QString &password,
+                        const QString &method, const QString &bodyFile)
+{
+    CurlAnswer answer;
+    QString cfg = QStringLiteral("user = \"%1\"\n").arg(curlQuoted(username + QLatin1Char(':') + password));
+    if (!bodyFile.isEmpty()) {
+        cfg += QStringLiteral("data-binary = \"@%1\"\n").arg(curlQuoted(bodyFile));
+        cfg += QStringLiteral("header = \"Content-Type: application/xml\"\n");
     }
-    return QByteArray();
+    QStringList args = { QStringLiteral("-s"), QStringLiteral("-k"), QStringLiteral("--anyauth"),
+                         QStringLiteral("-K"), QStringLiteral("-"), QStringLiteral("--max-time"), QStringLiteral("4"),
+                         QStringLiteral("-w"), QStringLiteral("\n__HTTP__%{http_code}") };
+    if (!method.isEmpty() && method != QLatin1String("GET")) {
+        args << QStringLiteral("-X") << method;
+    }
+    args << url;
+    QProcess process;
+    process.start(QStringLiteral("curl"), args);
+    if (!process.waitForStarted(2000))
+        return answer;
+    process.write(cfg.toUtf8());
+    process.closeWriteChannel();
+    if (!process.waitForFinished(5000))
+        return answer;
+    const QByteArray out = process.readAllStandardOutput();
+    const int at = out.lastIndexOf("\n__HTTP__");
+    if (at < 0)
+        return answer;
+    answer.body = out.left(at);
+    answer.status = out.mid(at + 9).trimmed().toInt();
+    return answer;
+}
+
+void noteHttpRefusal(const QString &ip, const QString &username, const QString &password, int status)
+{
+    if (LoginGuard::isHttpAuthRefusal(status))
+        LoginGuard::instance().refuse(ip, username, password);
+}
+
+static QByteArray fetchUrl(const QString &ip, int port, const QString &username, const QString &password, const QString &path) {
+    if (LoginGuard::instance().isRefused(ip, username, password))
+        return QByteArray();
+    const QString httpUrl = QStringLiteral("http://%1:%2%3").arg(ip).arg(port).arg(path);
+    qDebug() << "[Hikvision ISAPI] Querying:" << httpUrl;
+    const CurlAnswer http = curlExchange(httpUrl, username, password, QStringLiteral("GET"), QString());
+    // A refused login is final. Trying HTTPS as well would send the password a second time.
+    if (http.status == 401 || http.status == 403) {
+        noteHttpRefusal(ip, username, password, http.status);
+        return QByteArray();
+    }
+    if (!http.body.isEmpty())
+        return http.body;
+
+    const QString httpsUrl = QStringLiteral("https://%1:%2%3").arg(ip).arg(port).arg(path);
+    const CurlAnswer https = curlExchange(httpsUrl, username, password, QStringLiteral("GET"), QString());
+    noteHttpRefusal(ip, username, password, https.status);
+    return https.body;
 }
 
 // PUT an XML body to an ISAPI endpoint on the camera. Same auth/timeout/fallback
@@ -128,31 +179,24 @@ static QByteArray putUrl(const QString &ip, int port, const QString &username, c
     tf.close();
     const QString tfPath = tf.fileName();
 
-    QStringList args;
-    args << "-s" << "-k" << "--anyauth" << "-u" << QString("%1:%2").arg(username, password)
-         << "--max-time" << "4" << "-X" << "PUT"
-         << "--data-binary" << QString("@%1").arg(tfPath)
-         << "-H" << "Content-Type: application/xml"
-         << QString("http://%1:%2%3").arg(ip).arg(port).arg(path);
-
-    qDebug() << "[Hikvision ISAPI] PUT:" << args.last();
-    QProcess process;
-    process.start("curl", args);
-    QByteArray res;
-    if (process.waitForFinished(5000))
-        res = process.readAllStandardOutput();
-
-    // Fallback to HTTPS if HTTP failed
+    const QString httpUrl = QStringLiteral("http://%1:%2%3").arg(ip).arg(port).arg(path);
+    qDebug() << "[Hikvision ISAPI] PUT:" << httpUrl;
+    if (LoginGuard::instance().isRefused(ip, username, password)) {
+        tf.remove();
+        return QByteArray();
+    }
+    const CurlAnswer http = curlExchange(httpUrl, username, password, QStringLiteral("PUT"), tfPath);
+    if (http.status == 401 || http.status == 403) {
+        noteHttpRefusal(ip, username, password, http.status);
+        tf.remove();
+        return QByteArray();
+    }
+    QByteArray res = http.body;
     if (res.isEmpty()) {
-        QStringList httpsArgs;
-        httpsArgs << "-s" << "-k" << "--anyauth" << "-u" << QString("%1:%2").arg(username, password)
-                  << "--max-time" << "4" << "-X" << "PUT"
-                  << "--data-binary" << QString("@%1").arg(tfPath)
-                  << "-H" << "Content-Type: application/xml"
-                  << QString("https://%1:%2%3").arg(ip).arg(port).arg(path);
-        process.start("curl", httpsArgs);
-        if (process.waitForFinished(5000))
-            res = process.readAllStandardOutput();
+        const QString httpsUrl = QStringLiteral("https://%1:%2%3").arg(ip).arg(port).arg(path);
+        const CurlAnswer https = curlExchange(httpsUrl, username, password, QStringLiteral("PUT"), tfPath);
+        noteHttpRefusal(ip, username, password, https.status);
+        res = https.body;
     }
 
     tf.remove();
@@ -273,16 +317,59 @@ void HikvisionManager::unstickEventDetectionAsync(const QString &ip, int httpPor
 
 QString HikvisionManager::fetchStreamingChannels(const QString &ip, int httpPort, const QString &username, const QString &password)
 {
-    QString cleanIp = ip.trimmed();
-    if (cleanIp.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)) cleanIp = cleanIp.mid(7);
-    if (cleanIp.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)) cleanIp = cleanIp.mid(8);
-    if (cleanIp.contains(QLatin1Char(':'))) cleanIp = cleanIp.section(QLatin1Char(':'), 0, 0);
-    if (httpPort <= 0) httpPort = 80;
+    const QString cleanIp = cleanHost(ip);
+    if (cleanIp.isEmpty())
+        return QString();
+    if (httpPort <= 0)
+        httpPort = 80;
     QByteArray xml = fetchUrl(cleanIp, httpPort, username, password, QStringLiteral("/ISAPI/Streaming/channels"));
-    if (xml.isEmpty() && httpPort != 80) {
+    if (xml.isEmpty() && httpPort != 80)
         xml = fetchUrl(cleanIp, 80, username, password, QStringLiteral("/ISAPI/Streaming/channels"));
-    }
     return QString::fromUtf8(xml);
+}
+
+void HikvisionManager::fetchStreamingChannelsAsync(const QString &ip, int httpPort, const QString &username, const QString &password)
+{
+    const QString host = cleanHost(ip);
+    if (host.isEmpty() || username.isEmpty() || password.isEmpty())
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QString cached;
+    bool haveCached = false;
+    {
+        std::lock_guard<std::mutex> lock(m_streamMutex);
+        if (m_streamXml.contains(host)) {
+            cached = m_streamXml.value(host);
+            haveCached = true;
+        } else if (m_streamFetching.contains(host)) {
+            return;
+        } else if (m_streamFailedAt.contains(host) && now - m_streamFailedAt.value(host) < 15000) {
+            return;
+        } else {
+            m_streamFetching.insert(host);
+        }
+    }
+    if (haveCached) {
+        QMetaObject::invokeMethod(this, [this, host, cached]() {
+            emit streamingChannelsReady(host, cached);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    const int port = httpPort > 0 ? httpPort : 80;
+    startWorker([this, host, port, username, password]() {
+        const QString xml = fetchStreamingChannels(host, port, username, password);
+        {
+            std::lock_guard<std::mutex> lock(m_streamMutex);
+            m_streamFetching.remove(host);
+            if (xml.isEmpty())
+                m_streamFailedAt.insert(host, QDateTime::currentMSecsSinceEpoch());
+            else {
+                m_streamXml.insert(host, xml);
+                m_streamFailedAt.remove(host);
+            }
+        }
+        emit streamingChannelsReady(host, xml);
+    });
 }
 
 QVariantMap HikvisionManager::proxyCameraCached(const QString &nvrIp, int httpPort, const QString &username, const QString &password, int channelId)
@@ -558,45 +645,15 @@ QVariantList HikvisionManager::discoverCameras(const QString &ip, int port, int 
 
     qDebug() << "[Hikvision] Real NVR HTTP ISAPI discovery returned no channels. Falling back to SDK/Mock...";
 
-    if (!m_initialized) {
-        qWarning() << "[Hikvision] Cannot login: SDK not initialized.";
-        return cameraList;
-    }
-
-    // Logout from previous session on same IP if any
-    logout(ip);
-
-    NET_DVR_USER_LOGIN_INFO loginInfo;
-    std::memset(&loginInfo, 0, sizeof(NET_DVR_USER_LOGIN_INFO));
-    
-    std::strncpy(loginInfo.sDeviceAddress, ip.toUtf8().constData(), sizeof(loginInfo.sDeviceAddress) - 1);
-    loginInfo.wPort = static_cast<WORD>(port);
-    std::strncpy(loginInfo.sUserName, username.toUtf8().constData(), sizeof(loginInfo.sUserName) - 1);
-    std::strncpy(loginInfo.sPassword, password.toUtf8().constData(), sizeof(loginInfo.sPassword) - 1);
-    loginInfo.bUseAsynLogin = FALSE;
-    loginInfo.byLoginMode = 0; // Private mode
-
-    NET_DVR_DEVICEINFO_V40 deviceInfo;
-    std::memset(&deviceInfo, 0, sizeof(NET_DVR_DEVICEINFO_V40));
-
-    LONG lUserID = NET_DVR_Login_V40(&loginInfo, &deviceInfo);
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
+    const LONG lUserID = getSession(cleanIp, port, username, password);
     if (lUserID < 0) {
-        qWarning() << "[Hikvision] Login failed for IP:" << ip;
+        qWarning() << "[Hikvision] Login failed for IP:" << cleanIp;
         return cameraList;
     }
-
-    bool wasLogged = false;
-    bool isLoggedNow = false;
-    {
-        std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        wasLogged = isLoggedInternal(ip);
-        m_sessions.insert(ip, {lUserID, deviceInfo});
-        isLoggedNow = isLoggedInternal(ip);
-    }
-    qDebug() << "[Hikvision] Logged in successfully to IP:" << ip << "with UserID:" << lUserID;
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
-    }
+    NET_DVR_DEVICEINFO_V40 deviceInfo;
+    if (!getDeviceInfo(cleanIp, deviceInfo))
+        return cameraList;
 
     // Discover real cameras via NET_DVR_GET_IPPARACFG_V40
     NET_DVR_IPPARACFG_V40 ipParaCfg;
@@ -616,7 +673,7 @@ QVariantList HikvisionManager::discoverCameras(const QString &ip, int port, int 
                 QVariantMap cam;
                 cam.insert("channelId", chanId);
                 cam.insert("name", QString("Camera %1").arg(i + 1));
-                cam.insert("recorderIp", ip);
+                cam.insert("recorderIp", cleanIp);
                 cameraList.append(cam);
                 qDebug() << "[Hikvision] Discovered active IP camera on channel:" << chanId;
             }
@@ -643,7 +700,7 @@ QVariantList HikvisionManager::discoverCameras(const QString &ip, int port, int 
             QVariantMap cam;
             cam.insert("channelId", chanId);
             cam.insert("name", QString("Camera %1").arg(i + 1));
-            cam.insert("recorderIp", ip);
+            cam.insert("recorderIp", cleanIp);
             cameraList.append(cam);
         }
     }
@@ -674,33 +731,71 @@ void HikvisionManager::discoverCamerasAsync(const QString &ip, int port, int htt
     thread->start();
 }
 
-void HikvisionManager::logout(const QString &ip)
+QString HikvisionManager::cleanHost(const QString &ip)
 {
+    QString cleanIp = ip.trimmed();
+    if (cleanIp.startsWith(QLatin1String("http://"), Qt::CaseInsensitive))
+        cleanIp = cleanIp.mid(7);
+    if (cleanIp.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+        cleanIp = cleanIp.mid(8);
+    if (cleanIp.contains(QLatin1Char(':')))
+        cleanIp = cleanIp.section(QLatin1Char(':'), 0, 0);
+    return cleanIp;
+}
+
+void HikvisionManager::startWorker(const std::function<void()> &fn)
+{
+    QThread *thread = QThread::create(fn);
+    {
+        std::lock_guard<std::mutex> lock(m_discoveryMutex);
+        m_discoveryThreads.append(thread);
+    }
+    connect(thread, &QThread::finished, this, [this, thread]() {
+        std::lock_guard<std::mutex> lock(m_discoveryMutex);
+        m_discoveryThreads.removeOne(thread);
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
+}
+
+void HikvisionManager::logoutBlocking(const QString &ip)
+{
+    const QString host = cleanHost(ip);
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     LONG lUserID = -1;
     bool wasLogged = false;
     bool isLoggedNow = false;
     {
         std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        wasLogged = isLoggedInternal(ip);
-        if (m_sessions.contains(ip)) {
-            lUserID = m_sessions.take(ip).lUserID;
-        }
-        isLoggedNow = isLoggedInternal(ip);
+        wasLogged = isLoggedInternal(host);
+        if (m_sessions.contains(host))
+            lUserID = m_sessions.take(host).lUserID;
+        isLoggedNow = isLoggedInternal(host);
     }
     if (lUserID >= 0) {
         ensureInitialized();
         NET_DVR_Logout(lUserID);
-        qDebug() << "[Hikvision] Logged out from IP:" << ip << "UserID:" << lUserID;
+        qDebug() << "[Hikvision] Logged out from IP:" << host << "UserID:" << lUserID;
     }
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
+    if (wasLogged != isLoggedNow)
+        emit sessionStatusChanged(host, isLoggedNow);
+}
+
+void HikvisionManager::logout(const QString &ip)
+{
+    // The window calls this. The SDK logout can wait on the device, so it runs in the background.
+    // A caller that is already off the window thread (camera discovery) logs out directly.
+    if (QThread::currentThread() == thread()) {
+        startWorker([this, ip]() { logoutBlocking(ip); });
+        return;
     }
+    logoutBlocking(ip);
 }
 
 bool HikvisionManager::isLogged(const QString &ip)
 {
     std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-    return isLoggedInternal(ip);
+    return isLoggedInternal(cleanHost(ip));
 }
 
 bool HikvisionManager::isLoggedInternal(const QString &ip) const
@@ -710,38 +805,74 @@ bool HikvisionManager::isLoggedInternal(const QString &ip) const
 
 bool HikvisionManager::getDeviceInfo(const QString &ip, NET_DVR_DEVICEINFO_V40 &deviceInfo)
 {
+    const QString host = cleanHost(ip);
     std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-    if (m_sessions.contains(ip)) {
-        deviceInfo = m_sessions.value(ip).deviceInfo;
+    if (m_sessions.contains(host)) {
+        deviceInfo = m_sessions.value(host).deviceInfo;
         return true;
     }
-    if (m_sharedSessions.contains(ip)) {
-        deviceInfo = m_sharedSessions.value(ip).deviceInfo;
+    if (m_sharedSessions.contains(host)) {
+        deviceInfo = m_sharedSessions.value(host).deviceInfo;
         return true;
     }
     return false;
 }
 
+void HikvisionManager::withSdkLock(const std::function<void()> &fn)
+{
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
+    fn();
+}
+
 LONG HikvisionManager::getSession(const QString &ip, int port, const QString &username, const QString &password)
 {
-    bool wasLogged = false;
-    bool isLoggedNow = false;
-
-    // 1. Check if already logged in
-    {
-        std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        if (m_sessions.contains(ip)) {
-            return m_sessions.value(ip).lUserID;
+    const QString host = cleanHost(ip);
+    if (host.isEmpty() || username.isEmpty() || password.isEmpty())
+        return -1;
+    if (LoginGuard::instance().isRefused(host, username, password)) {
+        static QSet<QString> logged;
+        static std::mutex loggedMutex;
+        bool first = false;
+        {
+            std::lock_guard<std::mutex> lock(loggedMutex);
+            first = !logged.contains(host);
+            if (first)
+                logged.insert(host);
         }
-        if (m_sharedSessions.contains(ip)) {
-            return m_sharedSessions.value(ip).lUserID;
-        }
-        wasLogged = isLoggedInternal(ip);
+        if (first)
+            qWarning() << "[Hikvision] getSession skipped, login already refused for" << host;
+        return -1;
     }
 
-    // 2. Not logged in, log in
-    ensureInitialized();
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
 
+    bool wasLogged = false;
+    bool isLoggedNow = false;
+    LONG stale = -1;
+
+    {
+        std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
+        wasLogged = isLoggedInternal(host);
+        if (m_sessions.contains(host)) {
+            const SessionInfo session = m_sessions.value(host);
+            if (session.port == port && session.username == username && session.password == password)
+                return session.lUserID;
+            stale = m_sessions.take(host).lUserID;
+        } else if (m_sharedSessions.contains(host)) {
+            const SharedSession session = m_sharedSessions.value(host);
+            if (session.port == port && session.username == username && session.password == password)
+                return session.lUserID;
+            // The saved password changed. Drop the old login, including one playback is holding,
+            // so the next call uses the new password.
+            stale = m_sharedSessions.take(host).lUserID;
+        }
+    }
+
+    ensureInitialized();
+    if (stale >= 0) {
+        NET_DVR_Logout(stale);
+        qDebug() << "[Hikvision] getSession dropped a login for" << host << "because the password changed";
+    }
     if (!m_initialized) {
         qWarning() << "[Hikvision] Cannot get session: SDK not initialized.";
         return -1;
@@ -749,39 +880,86 @@ LONG HikvisionManager::getSession(const QString &ip, int port, const QString &us
 
     NET_DVR_USER_LOGIN_INFO loginInfo;
     std::memset(&loginInfo, 0, sizeof(NET_DVR_USER_LOGIN_INFO));
-    std::strncpy(loginInfo.sDeviceAddress, ip.toUtf8().constData(), sizeof(loginInfo.sDeviceAddress) - 1);
+    std::strncpy(loginInfo.sDeviceAddress, host.toUtf8().constData(), sizeof(loginInfo.sDeviceAddress) - 1);
     loginInfo.wPort = static_cast<WORD>(port);
     std::strncpy(loginInfo.sUserName, username.toUtf8().constData(), sizeof(loginInfo.sUserName) - 1);
     std::strncpy(loginInfo.sPassword, password.toUtf8().constData(), sizeof(loginInfo.sPassword) - 1);
     loginInfo.bUseAsynLogin = FALSE;
-    loginInfo.byLoginMode = 0; // Private mode
+    loginInfo.byLoginMode = 0;
 
     NET_DVR_DEVICEINFO_V40 deviceInfo;
     std::memset(&deviceInfo, 0, sizeof(NET_DVR_DEVICEINFO_V40));
 
-    LONG lUserID = NET_DVR_Login_V40(&loginInfo, &deviceInfo);
+    const LONG lUserID = NET_DVR_Login_V40(&loginInfo, &deviceInfo);
     if (lUserID < 0) {
-        DWORD err = NET_DVR_GetLastError();
-        qWarning() << "[Hikvision] getSession login FAILED for IP:" << ip << "Error:" << err;
+        const DWORD err = NET_DVR_GetLastError();
+        if (LoginGuard::isSdkAuthFailure(err))
+            LoginGuard::instance().refuse(host, username, password);
+        qWarning() << "[Hikvision] getSession login FAILED for IP:" << host << "Error:" << err;
         return -1;
     }
 
     {
         std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        m_sessions.insert(ip, {lUserID, deviceInfo});
-        isLoggedNow = isLoggedInternal(ip);
+        SessionInfo session;
+        session.lUserID = lUserID;
+        session.deviceInfo = deviceInfo;
+        session.port = port;
+        session.username = username;
+        session.password = password;
+        m_sessions.insert(host, session);
+        isLoggedNow = isLoggedInternal(host);
     }
 
-    qDebug() << "[Hikvision] getSession login SUCCESS for IP:" << ip << "UserID:" << lUserID;
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
-    }
-
+    qDebug() << "[Hikvision] getSession login SUCCESS for IP:" << host << "UserID:" << lUserID;
+    if (wasLogged != isLoggedNow)
+        emit sessionStatusChanged(host, isLoggedNow);
     return lUserID;
+}
+
+qint64 HikvisionManager::cachedDeviceTimeMs(const QString &ip)
+{
+    const QString host = cleanHost(ip);
+    std::lock_guard<std::mutex> lock(m_clockMutex);
+    const auto it = m_clock.constFind(host);
+    if (it == m_clock.cend() || it->deviceMs <= 0)
+        return -1;
+    return it->deviceMs + (QDateTime::currentMSecsSinceEpoch() - it->localMs);
+}
+
+void HikvisionManager::refreshDeviceTime(const QString &ip, int port, const QString &username, const QString &password, bool forSnapshot)
+{
+    const QString host = cleanHost(ip);
+    if (host.isEmpty() || username.isEmpty() || password.isEmpty())
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 freshFor = forSnapshot ? 30 * 1000 : 3 * 60 * 1000;
+    {
+        std::lock_guard<std::mutex> lock(m_clockMutex);
+        if (m_clockFetching.contains(host))
+            return;
+        const auto it = m_clock.constFind(host);
+        if (it != m_clock.cend() && now - it->localMs < freshFor)
+            return;
+        m_clockFetching.insert(host);
+    }
+    const int sdkPort = port > 0 ? port : 8000;
+    startWorker([this, host, sdkPort, username, password]() {
+        const qint64 ms = deviceTimeMs(host, sdkPort, username, password);
+        {
+            std::lock_guard<std::mutex> lock(m_clockMutex);
+            m_clockFetching.remove(host);
+            if (ms > 0)
+                m_clock.insert(host, ClockSample{ms, QDateTime::currentMSecsSinceEpoch()});
+        }
+        if (ms > 0)
+            emit deviceTimeReady(host, ms);
+    });
 }
 
 qint64 HikvisionManager::deviceTimeMs(const QString &ip, int port, const QString &username, const QString &password)
 {
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     LONG lUserID = getSession(ip, port, username, password);
     if (lUserID < 0) {
         qWarning() << "[Hikvision] deviceTimeMs failed to get session for IP:" << ip;
@@ -800,11 +978,23 @@ qint64 HikvisionManager::deviceTimeMs(const QString &ip, int port, const QString
     return dt.isValid() ? dt.toMSecsSinceEpoch() : -1;
 }
 
+void HikvisionManager::forceIFrameAsync(const QString &ip, int port, const QString &username, const QString &password, int channelId)
+{
+    const QString host = cleanHost(ip);
+    if (host.isEmpty() || username.isEmpty() || password.isEmpty() || channelId <= 0)
+        return;
+    const int sdkPort = port > 0 ? port : 8000;
+    startWorker([this, host, sdkPort, username, password, channelId]() {
+        forceIFrame(host, sdkPort, username, password, channelId);
+    });
+}
+
 bool HikvisionManager::forceIFrame(const QString &ip, int port, const QString &username, const QString &password, int channelId)
 {
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     LONG lUserID = getSession(ip, port, username, password);
     if (lUserID < 0) {
-        qWarning() << "[Hikvision] forceIFrame failed to get session for IP:" << ip;
+        qDebug() << "[Hikvision] forceIFrame skipped, no session for" << ip;
         return false;
     }
 
@@ -873,7 +1063,8 @@ void HikvisionManager::ptzWorkerLoop()
             m_ptzQueue.pop();
         }
 
-        // Process the command asynchronously
+        // Process the command asynchronously. The lock covers the SDK call that follows getSession.
+        std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
         LONG lUserID = getSession(cmd.ip, cmd.port, cmd.username, cmd.password);
         if (lUserID < 0) {
             qWarning() << "[Hikvision PTZ Worker] Failed to get session for IP:" << cmd.ip;
@@ -917,21 +1108,37 @@ void HikvisionManager::ptzWorkerLoop()
 
 LONG HikvisionManager::loginShared(const QString &ip, int port, const QString &username, const QString &password, NET_DVR_DEVICEINFO_V40 &deviceInfo)
 {
+    const QString host = cleanHost(ip);
+    if (host.isEmpty() || username.isEmpty() || password.isEmpty())
+        return -1;
+    if (LoginGuard::instance().isRefused(host, username, password)) {
+        qWarning() << "[Hikvision Shared] Login skipped, already refused for" << host;
+        return -1;
+    }
+
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     bool wasLogged = false;
     bool isLoggedNow = false;
     LONG lUserID = -1;
+    LONG stale = -1;
 
     {
         std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        if (m_sharedSessions.contains(ip)) {
-            auto &session = m_sharedSessions[ip];
-            session.refCount++;
-            deviceInfo = session.deviceInfo;
-            qDebug() << "[Hikvision Shared] Reusing session for IP:" << ip << "UserID:" << session.lUserID << "RefCount:" << session.refCount;
-            return session.lUserID;
+        if (m_sharedSessions.contains(host)) {
+            SharedSession &session = m_sharedSessions[host];
+            if (session.port == port && session.username == username && session.password == password) {
+                session.refCount++;
+                deviceInfo = session.deviceInfo;
+                qDebug() << "[Hikvision Shared] Reusing session for IP:" << host << "UserID:" << session.lUserID << "RefCount:" << session.refCount;
+                return session.lUserID;
+            }
+            stale = session.lUserID;
+            m_sharedSessions.remove(host);
         }
-        wasLogged = isLoggedInternal(ip);
+        wasLogged = isLoggedInternal(host);
     }
+    if (stale >= 0)
+        NET_DVR_Logout(stale);
 
     qDebug() << "[Hikvision Shared] Creating NEW session for IP:" << ip << ":" << port;
 
@@ -944,7 +1151,7 @@ LONG HikvisionManager::loginShared(const QString &ip, int port, const QString &u
 
     NET_DVR_USER_LOGIN_INFO loginInfo;
     std::memset(&loginInfo, 0, sizeof(NET_DVR_USER_LOGIN_INFO));
-    std::strncpy(loginInfo.sDeviceAddress, ip.toUtf8().constData(), sizeof(loginInfo.sDeviceAddress) - 1);
+    std::strncpy(loginInfo.sDeviceAddress, host.toUtf8().constData(), sizeof(loginInfo.sDeviceAddress) - 1);
     loginInfo.wPort = static_cast<WORD>(port);
     std::strncpy(loginInfo.sUserName, username.toUtf8().constData(), sizeof(loginInfo.sUserName) - 1);
     std::strncpy(loginInfo.sPassword, password.toUtf8().constData(), sizeof(loginInfo.sPassword) - 1);
@@ -956,8 +1163,10 @@ LONG HikvisionManager::loginShared(const QString &ip, int port, const QString &u
 
     lUserID = NET_DVR_Login_V40(&loginInfo, &devInfo);
     if (lUserID < 0) {
-        DWORD err = NET_DVR_GetLastError();
-        qWarning() << "[Hikvision Shared] Login FAILED for IP:" << ip << "Error:" << err;
+        const DWORD err = NET_DVR_GetLastError();
+        if (LoginGuard::isSdkAuthFailure(err))
+            LoginGuard::instance().refuse(host, username, password);
+        qWarning() << "[Hikvision Shared] Login FAILED for IP:" << host << "Error:" << err;
         return -1;
     }
 
@@ -967,78 +1176,82 @@ LONG HikvisionManager::loginShared(const QString &ip, int port, const QString &u
         session.lUserID = lUserID;
         session.deviceInfo = devInfo;
         session.refCount = 1;
+        session.port = port;
+        session.username = username;
+        session.password = password;
 
-        m_sharedSessions.insert(ip, session);
+        m_sharedSessions.insert(host, session);
         deviceInfo = devInfo;
-        isLoggedNow = isLoggedInternal(ip);
+        isLoggedNow = isLoggedInternal(host);
     }
 
-    qDebug() << "[Hikvision Shared] Login SUCCESS for IP:" << ip << "UserID:" << lUserID;
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
-    }
+    qDebug() << "[Hikvision Shared] Login SUCCESS for IP:" << host << "UserID:" << lUserID;
+    if (wasLogged != isLoggedNow)
+        emit sessionStatusChanged(host, isLoggedNow);
     return lUserID;
 }
 
 void HikvisionManager::logoutShared(const QString &ip)
 {
+    const QString host = cleanHost(ip);
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     bool wasLogged = false;
     bool isLoggedNow = false;
     LONG lUserIDToLogout = -1;
 
     {
         std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        wasLogged = isLoggedInternal(ip);
-        if (m_sharedSessions.contains(ip)) {
-            auto &session = m_sharedSessions[ip];
+        wasLogged = isLoggedInternal(host);
+        if (m_sharedSessions.contains(host)) {
+            auto &session = m_sharedSessions[host];
             session.refCount--;
-            qDebug() << "[Hikvision Shared] Decremented refCount for IP:" << ip << "New RefCount:" << session.refCount;
+            qDebug() << "[Hikvision Shared] Decremented refCount for IP:" << host << "New RefCount:" << session.refCount;
             if (session.refCount <= 0) {
                 lUserIDToLogout = session.lUserID;
-                m_sharedSessions.remove(ip);
+                m_sharedSessions.remove(host);
             }
         }
-        isLoggedNow = isLoggedInternal(ip);
+        isLoggedNow = isLoggedInternal(host);
     }
 
     if (lUserIDToLogout >= 0) {
         ensureInitialized();
         NET_DVR_Logout(lUserIDToLogout);
-        qDebug() << "[Hikvision Shared] Logged out session for IP:" << ip << "UserID:" << lUserIDToLogout;
+        qDebug() << "[Hikvision Shared] Logged out session for IP:" << host << "UserID:" << lUserIDToLogout;
     }
 
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
-    }
+    if (wasLogged != isLoggedNow)
+        emit sessionStatusChanged(host, isLoggedNow);
 }
 
 void HikvisionManager::forceLogoutShared(const QString &ip)
 {
+    const QString host = cleanHost(ip);
+    std::lock_guard<std::recursive_mutex> sdkLock(m_sdkMutex);
     bool wasLogged = false;
     bool isLoggedNow = false;
     LONG lUserIDToLogout = -1;
 
     {
         std::lock_guard<std::mutex> lock(m_sharedSessionsMutex);
-        wasLogged = isLoggedInternal(ip);
-        if (m_sharedSessions.contains(ip)) {
-            auto &session = m_sharedSessions[ip];
+        wasLogged = isLoggedInternal(host);
+        if (m_sharedSessions.contains(host)) {
+            auto &session = m_sharedSessions[host];
             lUserIDToLogout = session.lUserID;
-            m_sharedSessions.remove(ip);
-            qDebug() << "[Hikvision Shared] Force logout requested. Removing session for IP:" << ip << "UserID:" << lUserIDToLogout;
+            m_sharedSessions.remove(host);
+            qDebug() << "[Hikvision Shared] Force logout requested. Removing session for IP:" << host << "UserID:" << lUserIDToLogout;
         }
-        isLoggedNow = isLoggedInternal(ip);
+        isLoggedNow = isLoggedInternal(host);
     }
 
     if (lUserIDToLogout >= 0) {
         ensureInitialized();
         NET_DVR_Logout(lUserIDToLogout);
-        qDebug() << "[Hikvision Shared] Logged out session for IP (force):" << ip << "UserID:" << lUserIDToLogout;
+        qDebug() << "[Hikvision Shared] Logged out session for IP (force):" << host << "UserID:" << lUserIDToLogout;
     }
 
-    if (wasLogged != isLoggedNow) {
-        emit sessionStatusChanged(ip, isLoggedNow);
-    }
+    if (wasLogged != isLoggedNow)
+        emit sessionStatusChanged(host, isLoggedNow);
 }
 
 void HikvisionManager::ensureInitialized() const

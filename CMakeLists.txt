@@ -16,6 +16,8 @@ set(VERSION "${VER_MAJ}.${VER_MIN}.${VER_PAT}")
 
 project(kvision VERSION ${VERSION} HOMEPAGE_URL "https://github.com/optio50/KVision" LANGUAGES C CXX)
 
+enable_testing()
+
 include(GNUInstallDirs)
 
 if(DEFINED VER_REL AND ${VER_REL} GREATER 0)
@@ -176,6 +178,11 @@ set(PROJ_FILES
     src/viewportslayoutmodel.cpp src/viewportslayoutmodel.h
     src/viewportslayoutscollectionmodel.cpp src/viewportslayoutscollectionmodel.h
     src/hikvisionmanager.cpp src/hikvisionmanager.h
+    src/loginguard.cpp src/loginguard.h
+    src/stallwatch.cpp src/stallwatch.h
+    src/eventalert.cpp src/eventalert.h
+    src/vcaparse.cpp src/vcaparse.h
+    src/recordersecrets.cpp src/recordersecrets.h
     src/hikvisionprobe.cpp src/hikvisionprobe.h
     src/hikvisionptzaim.cpp src/hikvisionptzaim.h
     src/camerastatustext.h
@@ -293,6 +300,24 @@ if (NOT ANDROID)
     set_target_properties(diagnose_compression PROPERTIES
         BUILD_RPATH "\$ORIGIN/../src/hikvision_sdk/lib"
     )
+endif()
+
+if(NOT ANDROID)
+    find_package(GTest QUIET)
+    if(GTest_FOUND)
+        add_executable(kvision_tests
+            src/tests/parser_tests.cpp
+            src/loginguard.cpp
+            src/stallwatch.cpp
+            src/eventalert.cpp
+            src/vcaparse.cpp
+            src/recordersecrets.cpp
+            src/tests/recordersecrets_tests.cpp
+        )
+        target_include_directories(kvision_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+        target_link_libraries(kvision_tests PRIVATE GTest::GTest GTest::Main Qt${QT_VERSION_MAJOR}::Core)
+        add_test(NAME kvision_tests COMMAND kvision_tests)
+    endif()
 endif()
 
 set_directory_properties(PROPERTIES CLEAN_NO_CUSTOM true)

@@ -69,9 +69,6 @@ private:
     QVariantMap m_s;
     QString m_status;
     QString m_lastText;      // what was last written, so an unchanged value is not written again
-    // Cameras that refused the login this session. Shared by all entries, so a wrong password is tried once per camera, not
-    // once per entry.
-    static QSet<QString> s_refused;
     bool m_busy = false;
     QString m_holdHost;
     bool m_holding = false; // this entry has the camera's address "locked" (see acquireHost)

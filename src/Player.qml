@@ -49,6 +49,10 @@ FocusScope {
     property int streamIndex: 1
     property string directCameraIp: ""
     property var streamIdCache: ({})
+    property int stallBackoffMs: 0
+    property double stallLastAttemptMs: 0
+    property double streamAssignedAtMs: 0
+    property string iFrameForcedUrl: ""
     property bool isOneToOne: false
     property real oneToOneX: 0
     property real oneToOneY: 0
@@ -248,23 +252,17 @@ FocusScope {
     }
 
     Timer {
-        id: autoReconnectTimer
-        interval: 5000
+        id: stallWatchTimer
+        interval: 1000
         repeat: true
-        onTriggered: {
-            if (activeStreamUrl !== "" && !root.isQuickPlayback) {
-                var activePlayer = activePlayerIndex === 1 ? qmlAvPlayer1 : qmlAvPlayer2;
-                if (activePlayer.status === MediaPlayer.LoadingMedia || activePlayer.status === MediaPlayer.LoadedMedia) {
-                    console.log("[Player] Stream is still loading/loaded, skipping reconnect.");
-                    return;
-                }
-                console.log("[Player] Auto-reconnecting stream: " + activeCameraId);
-                activePlayer.source = "";
-                activePlayer.source = activeStreamUrl;
-                activePlayer.play();
-            } else {
-                stop();
-            }
+        running: root.activeStreamUrl !== "" && !root.isQuickPlayback && !root.recorderOffline && !root.liveSuspended
+        onTriggered: root.checkStall()
+    }
+
+    Connections {
+        target: HikvisionManager
+        function onStreamingChannelsReady(ip, xml) {
+            root.applyStreamXml(ip, xml);
         }
     }
 
@@ -500,7 +498,6 @@ FocusScope {
 
     onRecorderOfflineChanged: {
         if (recorderOffline) {
-            autoReconnectTimer.stop();
             console.log("[Offline] tile " + root.index + ": recorder " + root.recorderIp + " is offline, stream stopped");
         }
         Qt.callLater(updateSource);
@@ -527,35 +524,74 @@ FocusScope {
         }
     }
 
-    function hikvisionStreamId(channel, index) {
+    function hikvisionStreamId(host, channel, index, streamHttpPort) {
         var wanted = Math.max(1, index);
-        var fallback = channel * 100 + (wanted === 3 ? 4 : wanted);
-        var cacheKey = recorderIp + ":" + channel;
-        if (!streamIdCache[cacheKey]) {
-            var ids = [];
-            var xml = "";
-            try {
-                xml = HikvisionManager.fetchStreamingChannels(recorderIp, httpPort || 80, username, password);
-            } catch (e) {
-                xml = "";
-            }
-            if (xml && xml.length > 0) {
-                var matches = String(xml).match(/<id>(\d+)<\/id>/g) || [];
-                for (var i = 0; i < matches.length; ++i) {
-                    var id = parseInt(matches[i].replace(/[^0-9]/g, ""));
-                    if (Math.floor(id / 100) === channel && ids.indexOf(id) < 0) {
-                        ids.push(id);
-                    }
-                }
-                ids.sort(function(a, b) { return a - b; });
-            }
-            if (ids.length === 0) {
-                ids = [channel * 100 + 1, channel * 100 + 2, fallback];
-            }
-            streamIdCache[cacheKey] = ids;
-            console.log("[Player] Stream IDs for channel " + channel + ": " + ids.join(","));
+        var fallback = channel * 100 + wanted;
+        if (!host)
+            return fallback;
+        var cacheKey = host + ":" + channel;
+        var ids = streamIdCache[cacheKey];
+        if (!ids) {
+            if (username)
+                HikvisionManager.fetchStreamingChannelsAsync(host, streamHttpPort || 80, username, password);
+            return fallback;
         }
-        return streamIdCache[cacheKey][wanted - 1] || fallback;
+        return ids[wanted - 1] || fallback;
+    }
+
+    function applyStreamXml(ip, xml) {
+        if (!ip || !xml || xml.length === 0)
+            return;
+        if (ip !== recorderIp && ip !== directCameraIp)
+            return;
+        var matches = String(xml).match(/<id>(\d+)<\/id>/g) || [];
+        var byChan = {};
+        for (var i = 0; i < matches.length; ++i) {
+            var id = parseInt(matches[i].replace(/[^0-9]/g, ""));
+            if (!(id > 0))
+                continue;
+            var ch = Math.floor(id / 100);
+            if (!byChan[ch])
+                byChan[ch] = [];
+            if (byChan[ch].indexOf(id) < 0)
+                byChan[ch].push(id);
+        }
+        var next = Object.assign({}, streamIdCache);
+        var changed = false;
+        for (var key in byChan) {
+            byChan[key].sort(function(a, b) { return a - b; });
+            var cacheKey = ip + ":" + key;
+            var prev = next[cacheKey] ? next[cacheKey].join(",") : "";
+            if (prev !== byChan[key].join(","))
+                changed = true;
+            next[cacheKey] = byChan[key];
+        }
+        streamIdCache = next;
+        if (changed)
+            updateSource();
+    }
+
+    function checkStall() {
+        var player = activePlayerIndex === 1 ? qmlAvPlayer1 : qmlAvPlayer2;
+        if (!player)
+            return;
+        if (stallLastAttemptMs > 0 && player.lastFrameAtMs > stallLastAttemptMs) {
+            stallBackoffMs = 0;
+            stallLastAttemptMs = 0;
+        }
+        var enabled = activeStreamUrl !== "" && !root.isQuickPlayback && !root.recorderOffline
+                && !root.liveSuspended && !player.holdLastFrame;
+        var backoff = StallWatch.evaluate(enabled, player.status, player.lastFrameAtMs, streamAssignedAtMs,
+                                           Date.now(), stallBackoffMs, stallLastAttemptMs);
+        if (backoff <= 0)
+            return;
+        stallBackoffMs = backoff;
+        stallLastAttemptMs = Date.now();
+        iFrameForcedUrl = "";
+        console.log("[Player] Stream quiet. Reconnecting " + activeCameraId);
+        player.source = "";
+        player.source = activeStreamUrl;
+        player.play();
     }
 
     function updateSource() {
@@ -564,7 +600,6 @@ FocusScope {
         if (root.visible && !root.liveSuspended && !root.isQuickPlayback)
             parseUri(source);
         if (!root.visible || root.liveSuspended || root.isQuickPlayback || root.recorderOffline) {
-            autoReconnectTimer.stop();
             // Only the archive pause keeps the last picture. Hiding a tile, or a recorder
             // that is offline, still clears to black.
             if (root.liveSuspended) {
@@ -606,7 +641,8 @@ FocusScope {
                     directCameraIp = targetIp;
                 }
             }
-            var streamId = targetChannel * 100 + Math.max(1, streamIndex);
+            var streamHttp = (targetIp === recorderIp) ? (httpPort || 80) : 80;
+            var streamId = hikvisionStreamId(targetIp, targetChannel, streamIndex, streamHttp);
             var creds = "";
             if (username) {
                 creds = encodeURIComponent(username) + (password ? (":" + encodeURIComponent(password)) : "") + "@";
@@ -646,6 +682,9 @@ FocusScope {
             inactivePlayer.source = newUrl;
             inactivePlayer.play();
             activeStreamUrl = newUrl;
+            streamAssignedAtMs = Date.now();
+            stallBackoffMs = 0;
+            stallLastAttemptMs = 0;
         } else {
             console.log("[Player] Different camera: switching immediately to URL: " + newUrl);
             seamlessSwitchTimer.stop();
@@ -657,6 +696,9 @@ FocusScope {
             qmlAvPlayer1.play();
             activeStreamUrl = newUrl;
             activeCameraId = newCameraId;
+            streamAssignedAtMs = Date.now();
+            stallBackoffMs = 0;
+            stallLastAttemptMs = 0;
         }
     }
 
@@ -683,24 +725,18 @@ FocusScope {
     }
 
     function handlePlayerStatus(playerIndex, status) {
-        if (status === MediaPlayer.InvalidMedia || status === MediaPlayer.EndOfMedia) {
-            if (playerIndex === activePlayerIndex && activeStreamUrl !== "" && !root.isQuickPlayback) {
-                if (!autoReconnectTimer.running) {
-                    console.log("[Player] Stream lost connection. Starting auto-reconnect timer.");
-                    autoReconnectTimer.start();
-                }
-            }
-        } else if (status === MediaPlayer.LoadedMedia || status === MediaPlayer.Buffered || status === MediaPlayer.PlayingState) {
-            if (playerIndex === activePlayerIndex) {
-                autoReconnectTimer.stop();
-            }
-
-            if ((status === MediaPlayer.LoadedMedia || status === MediaPlayer.Buffered) && root.isHikvision && typeof HikvisionManager !== "undefined") {
-                var isSub = playerIndex === 1 ? qmlAvPlayer1.isSubStreamOfPlayer : qmlAvPlayer2.isSubStreamOfPlayer;
-                if (!isSub) {
-                    console.log("[Player] Stream " + (status === MediaPlayer.LoadedMedia ? "Loaded" : "Buffered") + ". Forcing I-Frame on camera: " + root.channelId);
-                    HikvisionManager.forceIFrame(root.recorderIp, root.recorderPort || 8000, root.username, root.password, root.channelId);
-                }
+        var statusPlayer = playerIndex === 1 ? qmlAvPlayer1 : qmlAvPlayer2;
+        // The new URL opens on the inactive player during a quality switch, and
+        // that player does not become active until it is buffered. One I-frame
+        // per URL, whichever player opened it.
+        if ((status === MediaPlayer.LoadedMedia || status === MediaPlayer.Buffered)
+                && String(statusPlayer.source) === root.activeStreamUrl
+                && root.isHikvision && typeof HikvisionManager !== "undefined") {
+            var isSub = statusPlayer.isSubStreamOfPlayer;
+            if (!isSub && root.activeStreamUrl !== "" && root.iFrameForcedUrl !== root.activeStreamUrl) {
+                root.iFrameForcedUrl = root.activeStreamUrl;
+                console.log("[Player] Stream " + (status === MediaPlayer.LoadedMedia ? "Loaded" : "Buffered") + ". Forcing I-Frame on camera: " + root.channelId);
+                HikvisionManager.forceIFrameAsync(root.recorderIp, root.recorderPort || 8000, root.username, root.password, root.channelId);
             }
         }
 
@@ -736,34 +772,8 @@ FocusScope {
 
     function updateMessageText() {
         var activePlayer = activePlayerIndex === 1 ? qmlAvPlayer1 : qmlAvPlayer2;
-        switch (activePlayer.status) {
-        case MediaPlayer.NoMedia:
-            message.text = qsTr("LNG_00200");
-            break;
-        case MediaPlayer.Loading:
-            message.text = qsTr("LNG_00199");
-            break;
-        case MediaPlayer.Loaded:
-            message.text = qsTr("LNG_00198");
-            break;
-        case MediaPlayer.Stalled:
-            message.text = qsTr("LNG_00197");
-            break;
-        case MediaPlayer.Buffering:
-            message.text = qsTr("LNG_00196").arg(Math.round(activePlayer.bufferProgress * 100));
-            break;
-        case MediaPlayer.Buffered:
-            message.text = "";
+        if (activePlayer.status === MediaPlayer.Buffered)
             root.isRestoringLiveView = false;
-            break;
-        case MediaPlayer.EndOfMedia:
-        case MediaPlayer.InvalidMedia:
-            message.text = qsTr("LNG_00195");
-            break;
-        default:
-            message.text = "";
-            break;
-        }
     }
 
     property bool muted: false
@@ -1577,7 +1587,8 @@ FocusScope {
             if (root.quickPlaybackActivationTime)
                 return new Date(root.quickPlaybackActivationTime.getTime() - (1800 - root.quickPlaybackOffset) * 1000);
         } else if (root.isHikvision && root.recorderIp !== "" && typeof HikvisionManager !== "undefined") {
-            var devMs = HikvisionManager.deviceTimeMs(root.recorderIp, root.recorderPort || 8000, root.username, root.password);
+            var devMs = HikvisionManager.cachedDeviceTimeMs(root.recorderIp);
+            HikvisionManager.refreshDeviceTime(root.recorderIp, root.recorderPort || 8000, root.username, root.password, true);
             if (devMs > 0)
                 return new Date(devMs);
             console.log("Snapshot: recorder clock unavailable for", root.recorderIp);
@@ -1676,7 +1687,8 @@ FocusScope {
     }
 
     function prepareForSwap() {
-        autoReconnectTimer.stop();
+        stallBackoffMs = 0;
+        stallLastAttemptMs = 0;
         seamlessSwitchTimer.stop();
         qmlAvPlayer1.stop();
         qmlAvPlayer2.stop();
@@ -1901,9 +1913,29 @@ FocusScope {
             id: messageContainer
             
             property int activeStatus: activePlayerIndex === 1 ? qmlAvPlayer1.status : qmlAvPlayer2.status
-            property bool isError: activeStatus === MediaPlayer.InvalidMedia || activeStatus === MediaPlayer.EndOfMedia || activeStatus === MediaPlayer.NoMedia
+            // No picture yet is normal while a stream is opening. The red sign is a failed open or a stream that ended.
+            property bool isError: activeStatus === MediaPlayer.InvalidMedia || activeStatus === MediaPlayer.EndOfMedia
             property string themeColor: isError ? "#e74c3c" : "#00f5d4"
             property string themeIcon: isError ? "\u26A0" : "\u21BB"
+            property string statusText: {
+                var progress = activePlayerIndex === 1 ? qmlAvPlayer1.bufferProgress : qmlAvPlayer2.bufferProgress;
+                switch (activeStatus) {
+                case MediaPlayer.NoMedia:
+                case MediaPlayer.Loading:
+                    return qsTr("LNG_00199");
+                case MediaPlayer.Loaded:
+                    return qsTr("LNG_00198");
+                case MediaPlayer.Stalled:
+                    return qsTr("LNG_00197");
+                case MediaPlayer.Buffering:
+                    return qsTr("LNG_00196").arg(Math.round(progress * 100));
+                case MediaPlayer.EndOfMedia:
+                case MediaPlayer.InvalidMedia:
+                    return qsTr("LNG_00195");
+                default:
+                    return "";
+                }
+            }
             
             anchors.centerIn: parent
             width: messageRow.width + 30
@@ -1927,6 +1959,7 @@ FocusScope {
                 }
                 Text {
                     id: message
+                    text: messageContainer.statusText
                     color: messageContainer.themeColor
                     font.bold: true
                     font.pixelSize: 14

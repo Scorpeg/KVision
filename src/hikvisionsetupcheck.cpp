@@ -1,4 +1,5 @@
 #include "hikvisionsetupcheck.h"
+#include "loginguard.h"
 
 #include "hikvisionevents.h"
 
@@ -76,7 +77,8 @@ void HikvisionSetupCheck::get(const QString &host, int port, const QString &path
         QTimer::singleShot(0, this, [done]() { done(-1, QString()); });
         return;
     }
-    if (m_refused.contains(host)) { // refused earlier this session: do not try again
+    // 403 is not a refusal here: on these reads it means the device has no such setting.
+    if (LoginGuard::instance().isRefused(host, user, pass)) {
         QTimer::singleShot(0, this, [done]() { done(401, QString()); });
         return;
     }
@@ -92,7 +94,7 @@ void HikvisionSetupCheck::get(const QString &host, int port, const QString &path
         reply->setProperty("scUser", user);
         reply->setProperty("scPass", pass);
         QTimer::singleShot(kTimeoutMs, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-        connect(reply, &QNetworkReply::finished, this, [this, reply, host, done]() {
+        connect(reply, &QNetworkReply::finished, this, [this, reply, host, user, pass, done]() {
             const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QNetworkReply::NetworkError err = reply->error();
             const bool refused = reply->property("scRefused").toBool();
@@ -104,7 +106,7 @@ void HikvisionSetupCheck::get(const QString &host, int port, const QString &path
             else if (err != QNetworkReply::NoError && status == 0)
                 code = 0; // no answer at all
             if (code == 401)
-                m_refused.insert(host);
+                LoginGuard::instance().refuse(host, user, pass);
             done(code, body);
         });
     });

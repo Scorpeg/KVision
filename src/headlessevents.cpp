@@ -4,6 +4,7 @@
 #include "hikvisioneventlogger.h"
 #include "hikvisionevents.h"
 #include "offlinerecorders.h"
+#include "recordersecrets.h"
 #include "overlaytext.h"
 
 #include <QCoreApplication>
@@ -49,21 +50,21 @@ struct Settings {
 
 Settings readSettings(const QString &configPath)
 {
-    QSettings s(configPath, QSettings::IniFormat);
     Settings r;
-    r.enabled = s.value(QStringLiteral("logDetectionEvents"), false).toBool();
-    r.kinds = s.value(QStringLiteral("targetKinds"), r.kinds).toString();
-    r.targets = s.value(QStringLiteral("targetTargets"), r.targets).toString();
-    r.pictures = s.value(QStringLiteral("picturesPerCamera"), 100).toInt();
-    r.logMotion = s.value(QStringLiteral("logUnlabelledMotion"), false).toBool();
-    r.sourceOverrides = s.value(QStringLiteral("targetSourceOverrides"), QStringLiteral("{}")).toString();
-    r.source = s.value(QStringLiteral("targetSource"), QStringLiteral("camera")).toString();
-    if (r.source != QLatin1String("camera") && r.source != QLatin1String("recorder"))
-        r.source = QStringLiteral("camera");
-    s.beginGroup(QStringLiteral("Hikvision"));
-    r.recorders = s.value(QStringLiteral("recordersJson"), QStringLiteral("[]")).toString();
-    s.endGroup();
-    // Recorders the user set offline (their network is not connected) are left alone completely.
+    {
+        QSettings s(configPath, QSettings::IniFormat);
+        r.enabled = s.value(QStringLiteral("logDetectionEvents"), false).toBool();
+        r.kinds = s.value(QStringLiteral("targetKinds"), r.kinds).toString();
+        r.targets = s.value(QStringLiteral("targetTargets"), r.targets).toString();
+        r.pictures = s.value(QStringLiteral("picturesPerCamera"), 100).toInt();
+        r.logMotion = s.value(QStringLiteral("logUnlabelledMotion"), false).toBool();
+        r.sourceOverrides = s.value(QStringLiteral("targetSourceOverrides"), QStringLiteral("{}")).toString();
+        r.source = s.value(QStringLiteral("targetSource"), QStringLiteral("camera")).toString();
+        if (r.source != QLatin1String("camera") && r.source != QLatin1String("recorder"))
+            r.source = QStringLiteral("camera");
+    }
+    // The settings object is gone, so migrating the ini cannot collide with it.
+    r.recorders = RecorderSecrets::recordersFromConfig(configPath);
     r.recorders = OfflineRecorders::withoutOffline(r.recorders, OfflineRecorders::readNames(configPath));
     return r;
 }

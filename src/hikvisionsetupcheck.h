@@ -96,7 +96,6 @@ private:
     QHash<QString, QVariantMap> m_results;
     QString m_activeKey;
     HikvisionEvents *m_events = nullptr;
-    QSet<QString> m_refused; // devices that refused the login this session: never asked again
 };
 
 #endif // HIKVISIONSETUPCHECK_H

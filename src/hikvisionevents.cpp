@@ -1,4 +1,6 @@
 #include "hikvisionevents.h"
+#include "eventalert.h"
+#include "loginguard.h"
 
 #include <QAuthenticator>
 #include <QCoreApplication>
@@ -32,24 +34,6 @@ const int kHealthyMs = 10000;     // a stream that has stayed up this long count
 const int kStallMs = 40000;       // a camera sends a heartbeat about every 10 s: this long with no data means the stream is dead
 const int kMaxBuffer = 1024 * 1024; // pictures can ride along in an event; never keep more than this
 
-// Smart (VCA) event types a camera can stream, and the words used for them in the detection log.
-QString vcaKind(const QString &type)
-{
-    static const QHash<QString, QString> kinds = {
-        { QStringLiteral("linedetection"), QStringLiteral("Line crossing") },
-        { QStringLiteral("fielddetection"), QStringLiteral("Intrusion") },
-        { QStringLiteral("regionEntrance"), QStringLiteral("Region entrance") },
-        { QStringLiteral("regionExiting"), QStringLiteral("Region exit") },
-        { QStringLiteral("loitering"), QStringLiteral("Loitering") },
-        { QStringLiteral("group"), QStringLiteral("People gathering") },
-        { QStringLiteral("rapidMove"), QStringLiteral("Rapid movement") },
-        { QStringLiteral("parking"), QStringLiteral("Parking") },
-        { QStringLiteral("unattendedBaggage"), QStringLiteral("Unattended object") },
-        { QStringLiteral("attendedBaggage"), QStringLiteral("Object removed") },
-    };
-    return kinds.value(type);
-}
-
 // Splits a comma list into its non-empty items (the flag moved from QString to Qt in Qt 5.14).
 QStringList splitList(const QString &list)
 {
@@ -69,44 +53,11 @@ int retryDelayMs(int failures)
     return qMin(ms, kRetryMaxMs);
 }
 
-// The key the filter setting uses for a kind of report.
-QString vcaKey(const QString &type)
-{
-    if (type == QLatin1String("linedetection"))
-        return QStringLiteral("line");
-    if (type == QLatin1String("fielddetection"))
-        return QStringLiteral("intrusion");
-    if (type == QLatin1String("regionEntrance"))
-        return QStringLiteral("enter");
-    if (type == QLatin1String("regionExiting"))
-        return QStringLiteral("exit");
-    return QStringLiteral("other");
-}
-
 // A report this far behind the computer's clock is a replay after a stall or a reconnect, not something happening now.
 // The same gap marks the log line "received HH:mm:ss" and keeps the tile from flashing.
-const int kLateReportSecs = 10;
-
 bool reportIsLate(const QString &cameraTime)
 {
-    const QDateTime eventTime = QDateTime::fromString(cameraTime, Qt::ISODate);
-    if (!eventTime.isValid())
-        return false;
-    return eventTime.toLocalTime().secsTo(QDateTime::currentDateTime()) >= kLateReportSecs;
-}
-
-// The short word shown after the target on a tile, for example "HUMAN - LINE".
-QString vcaShort(const QString &type)
-{
-    if (type == QLatin1String("linedetection"))
-        return QStringLiteral("LINE");
-    if (type == QLatin1String("fielddetection"))
-        return QStringLiteral("INTRUSION");
-    if (type == QLatin1String("regionEntrance"))
-        return QStringLiteral("ENTER");
-    if (type == QLatin1String("regionExiting"))
-        return QStringLiteral("EXIT");
-    return QStringLiteral("SMART");
+    return eventReportIsLate(cameraTime, QDateTime::currentDateTime());
 }
 }
 
@@ -307,6 +258,12 @@ void HikvisionEvents::open(const QString &ip)
         return;
     if (m_noStreamUntil.value(ip, 0) > QDateTime::currentMSecsSinceEpoch())
         return;
+    if (LoginGuard::instance().isRefused(ip, c->user, c->pass)) {
+        c->authFailed = true;
+        qWarning() << "[Events]" << ip << "login was already refused. Not opening the detection stream.";
+        emit listenFailed(ip, tr("The camera refused the login. Check its password."));
+        return;
+    }
     {
         QMutexLocker lock(&m_mu);
         ++c->generation; // chunks already queued belong to the previous stream
@@ -423,65 +380,49 @@ void HikvisionEvents::parseIncoming(const QString &ip, const QByteArray &chunk, 
         c->jsonScanned = 0;
     }
 
-    static const QRegularExpression eventRx(
-        QStringLiteral("<EventNotificationAlert.*?</EventNotificationAlert>"),
-        QRegularExpression::DotMatchesEverythingOption);
-    static const QRegularExpression typeRx(QStringLiteral("<eventType>([^<]*)</eventType>"));
-    static const QRegularExpression targetRx(QStringLiteral("<targetType>([^<]*)</targetType>"));
-    static const QRegularExpression timeRx(QStringLiteral("<dateTime>([^<]*)</dateTime>"));
-    static const QRegularExpression chanRx(QStringLiteral("<channelID>(\\d+)</channelID>"));
-    static const QRegularExpression stateRx(QStringLiteral("<eventState>([^<]*)</eventState>"));
-    static const QRegularExpression vcaTargetRx(QStringLiteral("<detectionTarget>([^<]*)</detectionTarget>"));
-
     int consumed = 0;
     // Pictures ride in the same stream and contain zero bytes. QString::fromLatin1(QByteArray) stops at the first one,
     // which hid every event that came after a picture, so the length is given explicitly.
     const QString text = QString::fromLatin1(c->buffer.constData(), c->buffer.size());
-    QRegularExpressionMatchIterator it = eventRx.globalMatch(text);
-    while (it.hasNext()) {
-        const QRegularExpressionMatch m = it.next();
-        if (c->pendingValid && m.capturedStart() > consumed)
-            judgePicture(c, c->buffer.mid(consumed, m.capturedStart() - consumed)); // a picture that rode in before this event
+    const QVector<EventAlertSpan> spans = splitEventAlerts(text);
+    const QDateTime now = QDateTime::currentDateTime();
+    for (const EventAlertSpan &span : spans) {
+        if (c->pendingValid && span.start > consumed)
+            judgePicture(c, c->buffer.mid(consumed, span.start - consumed)); // a picture that rode in before this event
         c->pendingValid = false; // each event brings its own picture, or none
-        consumed = m.capturedEnd();
-        const QString body = m.captured(0);
-        const QString type = typeRx.match(body).captured(1);
-        const QString camTime = timeRx.match(body).captured(1);
-        const int camChannel = chanRx.match(body).captured(1).toInt();
+        consumed = span.end;
+        const QString body = span.body;
+        const EventAlert alert = classifyEventAlert(body, m_wKinds, m_wTargets, m_wFrameMotion, now);
+        const QString camTime = alert.cameraTime;
+        const int camChannel = alert.channel;
         if (!sourceAllowed(c, camChannel))
             continue; // this camera's reports are taken from the other connection (the camera's own, or the recorder's)
-        if (type == QLatin1String("facedetection")) {
+        if (alert.action == EventAlert::Face) {
             handleFace(c, ip, body, camTime, camChannel);
             continue;
         }
-        if (type != QLatin1String("VMD")) {
+        if (alert.action == EventAlert::Other) {
+            logOtherEvent(c, alert.type, alert.state, camTime, camChannel, body);
+            continue;
+        }
+        if (alert.action == EventAlert::Smart) {
             // A smart event (line crossing, intrusion, region entrance or exit...). The camera names
             // the target inside the rule. All of them go to the detection log and show the tile's
             // detection frame with that target, like a labelled motion report.
-            const QString kind = vcaKind(type);
-            if (kind.isEmpty()) {
-                logOtherEvent(c, type, stateRx.match(body).captured(1), camTime, camChannel, body);
-                continue;
-            }
-            if (!kind.isEmpty() && stateRx.match(body).captured(1) == QLatin1String("active")) {
-                QString t = vcaTargetRx.match(body).captured(1).trimmed().toLower();
-                if (!t.isEmpty() && t != QLatin1String("human") && t != QLatin1String("vehicle") && t != QLatin1String("animal"))
-                    t = QStringLiteral("other");
-                logDetection(c, t, kind, camTime, camChannel, eventWhere(body)); // the log keeps every labelled report
-                notePictureRect(c, body, camChannel, camTime, kind);
-                if (t.isEmpty())
-                    t = QStringLiteral("other");
+            if (alert.active) {
+                const QString t = alert.target.isEmpty() ? QStringLiteral("other") : alert.target;
+                logDetection(c, alert.target, alert.logKind, camTime, camChannel, eventWhere(body)); // the log keeps every labelled report
+                notePictureRect(c, body, camChannel, camTime, alert.logKind);
                 // The settings can switch kinds and targets off for the screen: no frame for those.
                 // A replayed report is still logged and its picture is still kept; it does not flash the tile.
-                if (!m_wKinds.contains(vcaKey(type)) || !m_wTargets.contains(t) || reportIsLate(camTime))
-                    continue;
-                qDebug() << "[Events]" << kind << "from" << ip << "channel" << camChannel << ":" << t;
-                emit targetDetected(ip, t, vcaShort(type), camChannel);
+                if (alert.frame == EventAlert::Flash) {
+                    qDebug() << "[Events]" << alert.logKind << "from" << ip << "channel" << camChannel << ":" << t;
+                    emit targetDetected(ip, t, alert.shortLabel, camChannel);
+                }
             }
             continue;
         }
-        QString target = targetRx.match(body).captured(1).trimmed().toLower();
-        if (target.isEmpty()) {
+        if (alert.action == EventAlert::PlainMotion) {
             // Plain motion: the camera says something moved, not what. A recorder repeats it about once a second while
             // the movement goes on, so one line is written when a movement starts, and the next only after it has been
             // still for kMotionQuietMs.
@@ -491,33 +432,31 @@ void HikvisionEvents::parseIncoming(const QString &ip, const QByteArray &chunk, 
             m_motionSeen.insert(motionKey, nowMs);
             if (m_wLogMotion && nowMs - lastMs >= kMotionQuietMs)
                 logDetection(c, QString(), QStringLiteral("Motion"), camTime, camChannel);
-            if (m_wKinds.contains(QStringLiteral("motion")) && !reportIsLate(camTime)) {
-                if (m_wFrameMotion && m_wTargets.contains(QStringLiteral("other")))
-                    emit targetDetected(ip, QStringLiteral("other"), QStringLiteral("MOTION"), camChannel); // shows "MOTION"
-                else
-                    emit motionDetected(ip, camChannel); // only keeps a frame that is already shown
-            }
+            if (alert.frame == EventAlert::Flash)
+                emit targetDetected(ip, QStringLiteral("other"), QStringLiteral("MOTION"), camChannel); // shows "MOTION"
+            else if (alert.frame == EventAlert::Keep)
+                emit motionDetected(ip, camChannel); // only keeps a frame that is already shown
             continue;
         }
-        if (target != QLatin1String("human") && target != QLatin1String("vehicle") && target != QLatin1String("animal"))
-            target = QStringLiteral("other");
-        logDetection(c, target, QStringLiteral("Motion"), camTime, camChannel); // the log keeps every labelled report
-        {
-            // Motion is not a smart event and brings no picture of its own, so a still is asked for from the camera.
-            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-            const QString picKey = ip + QLatin1Char('|') + QString::number(camChannel);
-            if (nowMs - m_motionPictureAt.value(picKey, 0) >= kMotionPictureGapMs) {
-                m_motionPictureAt.insert(picKey, nowMs);
-                QDateTime when = QDateTime::fromString(camTime, Qt::ISODate);
-                if (!when.isValid())
-                    when = QDateTime::currentDateTime();
-                takeSnapshot(ip, camChannel > 0 ? camChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Motion"));
+        if (alert.action == EventAlert::LabelledMotion) {
+            logDetection(c, alert.target, QStringLiteral("Motion"), camTime, camChannel); // the log keeps every labelled report
+            {
+                // Motion is not a smart event and brings no picture of its own, so a still is asked for from the camera.
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                const QString picKey = ip + QLatin1Char('|') + QString::number(camChannel);
+                if (nowMs - m_motionPictureAt.value(picKey, 0) >= kMotionPictureGapMs) {
+                    m_motionPictureAt.insert(picKey, nowMs);
+                    QDateTime when = QDateTime::fromString(camTime, Qt::ISODate);
+                    if (!when.isValid())
+                        when = QDateTime::currentDateTime();
+                    takeSnapshot(ip, camChannel > 0 ? camChannel : 1, when.toSecsSinceEpoch(), QStringLiteral("Motion"));
+                }
             }
+            if (alert.frame != EventAlert::Flash)
+                continue; // motion or this target is switched off, or the report is a replay: no frame
+            qDebug() << "[Events] report from" << ip << "channel" << camChannel << ":" << alert.target;
+            emit targetDetected(ip, alert.target, QStringLiteral("MOTION"), camChannel);
         }
-        if (!m_wKinds.contains(QStringLiteral("motion")) || !m_wTargets.contains(target) || reportIsLate(camTime))
-            continue; // motion or this target is switched off, or the report is a replay: no frame
-        qDebug() << "[Events] report from" << ip << "channel" << camChannel << ":" << target;
-        emit targetDetected(ip, target, QStringLiteral("MOTION"), camChannel);
     }
     // A PTZ camera also sends JSON messages in the same stream. Two of them say it is following a target: it "leaves"
     // its park preset, then reports where it points about once a second, then is back ("inPointion"). The same message
@@ -748,6 +687,10 @@ void HikvisionEvents::fetchPicture(const QString &ip, const QUrl &url, const QSt
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->pictureRefused || c->pictureFetches >= 2 || address.isEmpty())
         return;
+    if (LoginGuard::instance().isRefused(ip, c->user, c->pass)) {
+        c->pictureRefused = true;
+        return;
+    }
     // Only ever send the login to the device this connection belongs to.
     if (url.scheme() != QLatin1String("http") || url.host() != c->ip.section(QLatin1Char(':'), 0, 0).trimmed())
         return;
@@ -770,10 +713,18 @@ void HikvisionEvents::fetchPicture(const QString &ip, const QUrl &url, const QSt
         if (conn && conn->pictureFetches > 0)
             --conn->pictureFetches;
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (status == 401 || status == 403 || reply->error() == QNetworkReply::AuthenticationRequiredError) {
-            if (conn)
+        if (LoginGuard::isHttpAuthRefusal(status) || reply->error() == QNetworkReply::AuthenticationRequiredError) {
+            if (conn) {
                 conn->pictureRefused = true; // one refused login is enough: a wrong password could lock the recorder
+                LoginGuard::instance().refuse(ip, conn->user, conn->pass);
+            }
             qWarning() << "[Events]" << ip << "refused the login for an event picture. Not asking again.";
+            return;
+        }
+        if (status == 403) {
+            if (conn)
+                conn->pictureRefused = true;
+            qWarning() << "[Events]" << ip << "will not give an event picture (HTTP 403). The login is still valid.";
             return;
         }
         if (reply->error() != QNetworkReply::NoError)
@@ -1045,10 +996,12 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
         return;
     qDebug() << "[Events]" << ip << "stream ended: HTTP" << httpStatus << "error" << int(err) << errText
             << "loginSent" << triedLogin << "gotData" << (c->lastDataMs >= c->openedMs || c->failures == 0 ? "maybe" : "no");
-    // Only a real 401 or 403 means the camera refused our password. Anything else (a dropped
-    // connection, a timeout) is retried a few times, because a wrong guess could lock the camera.
-    if (httpStatus == 401 || httpStatus == 403 || err == QNetworkReply::AuthenticationRequiredError) {
+    // Only HTTP 401 means the camera refused the password. HTTP 403 is one address this
+    // device will not serve (common on a PTZ detection stream) while the live picture
+    // and the SDK login still work, so it must not lock the password.
+    if (LoginGuard::isHttpAuthRefusal(httpStatus) || err == QNetworkReply::AuthenticationRequiredError) {
         c->authFailed = true;
+        LoginGuard::instance().refuse(ip, c->user, c->pass);
         qWarning() << "[Events]" << ip << "refused the login (HTTP" << httpStatus << "). Not trying again.";
         emit listenFailed(ip, tr("The camera refused the login. Check its password."));
         return;
@@ -1057,7 +1010,7 @@ void HikvisionEvents::onFinished(const QString &ip, QNetworkReply *reply)
     // question every 30 minutes: a device that is still starting up can answer like this, and asking more
     // often never helps. The note is kept in the log folder, so a later start stays quiet. The quiet wait
     // is also remembered on the listener, so a connection that is closed and opened again does not ask at once.
-    if (httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
+    if (httpStatus == 403 || httpStatus == 404 || httpStatus == 405 || httpStatus == 501) {
         c->unsupported = true;
         m_noStreamUntil.insert(ip, QDateTime::currentMSecsSinceEpoch() + kUnsupportedRetryMs);
         loadNoStreamNoted();
@@ -1579,6 +1532,10 @@ void HikvisionEvents::takeSnapshot(const QString &ip, int cameraChannel, qint64 
     Conn *c = m_conns.value(ip, nullptr);
     if (!c || c->pictureRefused || c->pictureFetches >= 2 || m_logDir.isEmpty())
         return;
+    if (LoginGuard::instance().isRefused(ip, c->user, c->pass)) {
+        c->pictureRefused = true;
+        return;
+    }
     QUrl url;
     url.setScheme(QStringLiteral("http"));
     url.setHost(ip.section(QLatin1Char(':'), 0, 0).trimmed());
@@ -1600,10 +1557,18 @@ void HikvisionEvents::takeSnapshot(const QString &ip, int cameraChannel, qint64 
         if (conn && conn->pictureFetches > 0)
             --conn->pictureFetches;
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (status == 401 || status == 403 || reply->error() == QNetworkReply::AuthenticationRequiredError) {
+        if (LoginGuard::isHttpAuthRefusal(status) || reply->error() == QNetworkReply::AuthenticationRequiredError) {
+            if (conn) {
+                conn->pictureRefused = true;
+                LoginGuard::instance().refuse(ip, conn->user, conn->pass);
+            }
+            qWarning() << "[Events]" << ip << "refused the login for a snapshot. Not asking again.";
+            return;
+        }
+        if (status == 403) {
             if (conn)
                 conn->pictureRefused = true;
-            qWarning() << "[Events]" << ip << "refused the login for a snapshot. Not asking again.";
+            qWarning() << "[Events]" << ip << "will not give a snapshot (HTTP 403). The login is still valid.";
             return;
         }
         if (!conn || reply->error() != QNetworkReply::NoError)

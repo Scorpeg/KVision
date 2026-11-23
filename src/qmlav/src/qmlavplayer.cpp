@@ -210,9 +210,7 @@ void QmlAVPlayer::frameHandler(const std::shared_ptr<QmlAVFrame> frame)
 
                     if (m_videoSurface->present(qvf)) {
                         m_fpsCounter++;
-                        if (!m_framePresented) {
-                            setFramePresented(true);
-                        }
+                        noteFramePresented();
                     }
 
                     setHasVideo(true);
@@ -221,9 +219,7 @@ void QmlAVPlayer::frameHandler(const std::shared_ptr<QmlAVFrame> frame)
                 if (m_videoSurface->isActive()) {
                     if (m_videoSurface->present(qvf)) {
                         m_fpsCounter++;
-                        if (!m_framePresented) {
-                            setFramePresented(true);
-                        }
+                        noteFramePresented();
                         if (!m_hasVideo) {
                             setHasVideo(true);
                         }
@@ -344,10 +340,25 @@ void QmlAVPlayer::setSource(QmlAVPropertyType<QUrl> source)
     logDebug() << QString("setSource(source=%1)").arg(source.toDisplayString());
 
     m_source = source;
+    if (m_lastFrameAtMs != 0) {
+        m_lastFrameAtMs = 0;
+        emit lastFrameAtMsChanged();
+    }
 
     reset();
 
     emit sourceChanged(source);
+}
+
+void QmlAVPlayer::noteFramePresented()
+{
+    if (!m_framePresented)
+        setFramePresented(true);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastFrameAtMs != nowMs) {
+        m_lastFrameAtMs = nowMs;
+        emit lastFrameAtMsChanged();
+    }
 }
 
 void QmlAVPlayer::setMuted(QmlAVPropertyType<bool> muted)

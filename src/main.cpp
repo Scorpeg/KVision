@@ -27,6 +27,8 @@ extern "C" {
 #include "qmlavplayer.h"
 #include "thumbnailprovider.h"
 #include "context.h"
+#include "stallwatch.h"
+#include "recordersecrets.h"
 #include "eventfilter.h"
 #include "clipboard.h"
 #include "singleapplication.h"
@@ -224,6 +226,16 @@ void registerQmlTypes()
                                       []([[maybe_unused]] QQmlEngine *engine,
                                          [[maybe_unused]] QJSEngine *scriptEngine) -> QObject * {
         return new Context();
+    });
+    qmlRegisterSingletonType<StallWatch>("CCTV_Viewer.Core", 1, 0, "StallWatch",
+                                         []([[maybe_unused]] QQmlEngine *engine,
+                                            [[maybe_unused]] QJSEngine *scriptEngine) -> QObject * {
+        return new StallWatch();
+    });
+    qmlRegisterSingletonType<RecorderSecrets>("CCTV_Viewer.Core", 1, 0, "RecorderSecrets",
+                                              []([[maybe_unused]] QQmlEngine *engine,
+                                                 [[maybe_unused]] QJSEngine *scriptEngine) -> QObject * {
+        return new RecorderSecrets();
     });
     qmlRegisterSingletonType<Clipboard>("CCTV_Viewer.Utils", 1, 0, "Clipboard",
                                                 []([[maybe_unused]] QQmlEngine *engine,
