@@ -61,6 +61,14 @@ FocusScope {
         deletedBackupCount = LayoutBackups.deletedLayouts(live).length;
     }
 
+    function auxiliaryScaleIndex() {
+        var s = String(generalSettings.auxiliaryScale);
+        if (s === "same") return 0;
+        if (s === "1.5") return 2;
+        if (s === "2") return 3;
+        return 1;
+    }
+
     function layoutHasCameras(l) {
         if (!l)
             return false;
@@ -2934,6 +2942,36 @@ FocusScope {
                                     }
                                 }
 
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Text {
+                                        text: qsTr("Auxiliary window size")
+                                        color: "white"
+                                        font.pixelSize: 13
+                                    }
+
+                                    ComboBox {
+                                        id: auxiliaryScaleBox
+                                        Layout.preferredWidth: 220
+                                        Layout.preferredHeight: 30
+                                        model: [qsTr("Same as the main window"), qsTr("Normal (1)"), qsTr("Medium (1.5)"), qsTr("Large (2)")]
+                                        onActivated: generalSettings.auxiliaryScale = ["same", "1", "1.5", "2"][index]
+                                        Component.onCompleted: currentIndex = rootSideBar.auxiliaryScaleIndex()
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("Applies the next time an auxiliary window opens. Normal fits a 1080p or 720p screen. Medium is for 1440p. Large is for a 4K screen.")
+                                    color: "#8898a6"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.Wrap
+                                }
+
                                 Button {
                                     text: qsTr("Overlay text from MQTT...")
                                     ToolTip.visible: hovered
@@ -4149,6 +4187,9 @@ FocusScope {
         }
         function onAuxiliaryLimitChanged() {
             auxiliaryLimitField.text = generalSettings.auxiliaryLimit.toString();
+        }
+        function onAuxiliaryScaleChanged() {
+            auxiliaryScaleBox.currentIndex = rootSideBar.auxiliaryScaleIndex();
         }
     }
 

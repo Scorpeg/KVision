@@ -30,27 +30,62 @@ Window {
         }
     }
 
+    function byName(a, b) {
+        var an = (a.name || "").toLowerCase();
+        var bn = (b.name || "").toLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return 0;
+    }
+
     function reload() {
-        var out = [];
+        var singles = [];
+        var duals = [];
+        var nvrs = [];
         var list = [];
         try { list = JSON.parse(rootWindow.hikvisionRecordersJson || "[]"); } catch (e) {}
         for (var i = 0; i < list.length; ++i) {
             var rec = list[i];
+            if (rec.streamUrl)
+                continue; // a saved RTSP or HTTP address has no detection events
             var ip = (rec.ip || "").trim().split(":")[0];
             if (ip === "")
                 continue;
             var cams = rec.cameras || [];
-            var recName = rec.name || ip;
-            if (cams.length <= 2) {
-                // A camera with its own connection: one box for the camera.
-                out.push({ header: false, standalone: true, key: ip, label: recName, group: ip });
-            } else {
-                out.push({ header: true, label: recName, group: ip });
-                for (var j = 0; j < cams.length; ++j) {
-                    var ch = parseInt(cams[j].channelId);
-                    out.push({ header: false, standalone: false, key: ip + "#" + ch, group: ip,
-                               label: qsTr("Ch. %1  %2").arg(ch).arg(cams[j].customName || cams[j].name || qsTr("Camera %1").arg(ch)) });
-                }
+            var item = { name: rec.name || ip, ip: ip, cams: cams };
+            if (cams.length > 2)
+                nvrs.push(item);
+            else if (cams.length === 2)
+                duals.push(item);
+            else
+                singles.push(item);
+        }
+        singles.sort(win.byName);
+        duals.sort(win.byName);
+        nvrs.sort(win.byName);
+
+        var out = [];
+        // A camera with its own connection is one box. Standalone cameras come first, then dual-lens cameras.
+        function pushOwn(group) {
+            for (var g = 0; g < group.length; ++g)
+                out.push({ header: false, standalone: true, key: group[g].ip, label: group[g].name, group: group[g].ip });
+        }
+        pushOwn(singles);
+        pushOwn(duals);
+        for (var n = 0; n < nvrs.length; ++n) {
+            var nvr = nvrs[n];
+            var channels = nvr.cams.slice().sort(function(a, b) {
+                var ac = parseInt(a.channelId);
+                var bc = parseInt(b.channelId);
+                if (isNaN(ac)) ac = 0;
+                if (isNaN(bc)) bc = 0;
+                return ac - bc;
+            });
+            out.push({ header: true, label: nvr.name, group: nvr.ip });
+            for (var j = 0; j < channels.length; ++j) {
+                var ch = parseInt(channels[j].channelId);
+                out.push({ header: false, standalone: false, key: nvr.ip + "#" + ch, group: nvr.ip,
+                           label: qsTr("Ch. %1  %2").arg(ch).arg(channels[j].customName || channels[j].name || qsTr("Camera %1").arg(ch)) });
             }
         }
         win.rows = out;
@@ -62,26 +97,30 @@ Window {
         return win.parseList(nvrText).indexOf(row.key) >= 0;
     }
 
-    // Switch a set of cameras at once. group "" means every camera.
+    // Switch a set of cameras at once. group "" is the top pair: cameras with their own connection.
+    // A recorder name is that recorder's header pair, and it leaves every other camera as it is.
     function setMany(group, on) {
-        var off = win.parseList(generalSettings.targetOffCameras);
-        var nvr = win.parseList(generalSettings.targetNvrOnCameras);
+        var own = group === "";
+        var list = win.parseList(own ? generalSettings.targetOffCameras : generalSettings.targetNvrOnCameras);
         for (var i = 0; i < win.rows.length; ++i) {
             var r = win.rows[i];
-            if (r.header || (group !== "" && r.group !== group))
+            if (r.header || r.standalone !== own || (!own && r.group !== group))
                 continue;
-            if (r.standalone) {
-                var a = off.indexOf(r.key);
-                if (on && a >= 0) off.splice(a, 1);
-                else if (!on && a < 0) off.push(r.key);
+            var at = list.indexOf(r.key);
+            // A camera with its own connection is listed while its frame is off. A recorder channel is listed while its frame is on.
+            if (own) {
+                if (on && at >= 0) list.splice(at, 1);
+                else if (!on && at < 0) list.push(r.key);
             } else {
-                var b = nvr.indexOf(r.key);
-                if (on && b < 0) nvr.push(r.key);
-                else if (!on && b >= 0) nvr.splice(b, 1);
+                if (on && at < 0) list.push(r.key);
+                else if (!on && at >= 0) list.splice(at, 1);
             }
         }
-        generalSettings.targetOffCameras = JSON.stringify(off);
-        rootWindow.setTargetNvrOnCameras(JSON.stringify(nvr));
+        var saved = JSON.stringify(list);
+        if (own)
+            generalSettings.targetOffCameras = saved;
+        else
+            rootWindow.setTargetNvrOnCameras(saved);
     }
 
     // Where a camera behind a recorder gets its reports from: its own choice, else the general setting.
@@ -183,6 +222,11 @@ Window {
             delegate: Item {
                 width: view.width
                 height: modelData.header ? 34 : 28
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: modelData.header ? "#162028" : (index % 2 === 0 ? "#1a2632" : "#10161c")
+                }
 
                 // Re-read whenever either list changes.
                 readonly property bool on: !modelData.header && win.isOn(modelData, generalSettings.targetOffCameras, generalSettings.targetNvrOnCameras)

@@ -75,6 +75,7 @@ private:
     void stop();
     void setStatus(const QString &s);
     void onData(); // called on the GUI thread when new smart data arrived
+    void syncReportClock(); // follow the newest target report, including after the clock jumped ahead of it
 
     QString m_ip;
     int m_port = 8000;
@@ -90,6 +91,7 @@ private:
     std::shared_ptr<Link> m_link;
     QTimer m_retry;      // reconnects after a failure
     QTimer m_frame;      // repaints while a box is gliding (stops when it has arrived)
+    QTimer m_follow;     // picks up target reports if a repaint request was missed
     // Smoothing: the box moves from the previous report to the newest over the time between them.
     qint64 m_lastReportMs = -1;   // stream time of the newest report seen
     qint64 m_reportGapMs = 250;   // time between the last two reports

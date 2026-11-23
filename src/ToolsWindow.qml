@@ -85,7 +85,6 @@ Window {
 
             GroupBox {
                 title: qsTr("LNG_00297")
-                enabled: toolsUnlockSwitch.checked && !(Utils.currentLayout() && Utils.currentLayout().fullScreenIndex >= 0)
                 Layout.fillWidth: true
 
                 background: Rectangle {
@@ -94,14 +93,22 @@ Window {
                     border.width: 1
                     radius: 8
                 }
-                label: Text {
-                    text: parent.title
-                    color: "#00f5d4"
-                    font.bold: true
-                    font.pixelSize: 12
+                label: Row {
+                    spacing: 6
+                    Text {
+                        text: parent.parent.title
+                        color: "#00f5d4"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+                    HelpMark {
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("Click a square to use that grid. Hold a square down, or focus it and press F2, to type a different size such as 2x3. Enter keeps that size on the square. Escape cancels. The squares wait while this pane is locked, while a tile is full screen, or while grid size is locked on the top bar.")
+                    }
                 }
 
-                GridLayout {
+                    GridLayout {
+                    enabled: toolsUnlockSwitch.checked && !(Utils.currentLayout() && Utils.currentLayout().fullScreenIndex >= 0)
                     columns: 3
                     anchors.fill: parent
                     rowSpacing: 8
@@ -207,7 +214,7 @@ Window {
                                 ToolTip.delay: Compact.toolTipDelay
                                 ToolTip.timeout: Compact.toolTipTimeout
                                 ToolTip.visible: hovered
-                                ToolTip.text: qsTr("LNG_00296")
+                                ToolTip.text: qsTr("Click to use this grid. Hold to type a different size, such as 2x3.")
                             }
 
                             TextField {
@@ -250,7 +257,6 @@ Window {
 
             GroupBox {
                 title: qsTr("LNG_00294")
-                enabled: toolsUnlockSwitch.checked
                 Layout.fillWidth: true
 
                 background: Rectangle {
@@ -259,14 +265,22 @@ Window {
                     border.width: 1
                     radius: 8
                 }
-                label: Text {
-                    text: parent.title
-                    color: "#00f5d4"
-                    font.bold: true
-                    font.pixelSize: 12
+                label: Row {
+                    spacing: 6
+                    Text {
+                        text: parent.parent.title
+                        color: "#00f5d4"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+                    HelpMark {
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("16:9 and 4:3 set the shape of the cells and resize this window to match. Full screen fills the monitor. These wait until this pane is unlocked.")
+                    }
                 }
 
                 ColumnLayout {
+                    enabled: toolsUnlockSwitch.checked
                     anchors.fill: parent
                     spacing: 10
 
@@ -354,7 +368,6 @@ Window {
 
             GroupBox {
                 title: qsTr("LNG_00293")
-                enabled: toolsUnlockSwitch.checked
                 Layout.fillWidth: true
 
                 background: Rectangle {
@@ -363,14 +376,22 @@ Window {
                     border.width: 1
                     radius: 8
                 }
-                label: Text {
-                    text: parent.title
-                    color: "#00f5d4"
-                    font.bold: true
-                    font.pixelSize: 12
+                label: Row {
+                    spacing: 6
+                    Text {
+                        text: parent.parent.title
+                        color: "#00f5d4"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+                    HelpMark {
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("Select neighboring tiles first. Hold Ctrl or Shift and click them, or hold Shift and use the arrow keys. The button joins that block into one tile. Use it again on a joined tile to split it.")
+                    }
                 }
 
                 RowLayout {
+                    enabled: toolsUnlockSwitch.checked
                     anchors.fill: parent
                     spacing: 10
 
@@ -401,7 +422,6 @@ Window {
 
             GroupBox {
                 title: qsTr("Toolbar layouts")
-                enabled: toolsUnlockSwitch.checked
                 Layout.fillWidth: true
 
                 background: Rectangle {
@@ -410,14 +430,22 @@ Window {
                     border.width: 1
                     radius: 8
                 }
-                label: Text {
-                    text: parent.title
-                    color: "#00f5d4"
-                    font.bold: true
-                    font.pixelSize: 12
+                label: Row {
+                    spacing: 6
+                    Text {
+                        text: parent.parent.title
+                        color: "#00f5d4"
+                        font.bold: true
+                        font.pixelSize: 12
+                    }
+                    HelpMark {
+                        anchors.verticalCenter: parent.verticalCenter
+                        tip: qsTr("A ticked layout has a button on the top bar. An unticked layout stays in the list and is left off the bar.")
+                    }
                 }
 
                 ColumnLayout {
+                    enabled: toolsUnlockSwitch.checked
                     anchors.fill: parent
                     spacing: 6
 

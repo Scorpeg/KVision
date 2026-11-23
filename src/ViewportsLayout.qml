@@ -78,54 +78,12 @@ FocusScope {
         root.popupFitted(sub, item, x, y);
     }
 
-    // Quick tools > Rule lines: read the camera's switch and set it the other way, then say what the camera now says.
-    property string ruleMenuIp: ""      // the camera the menu asked about, while the answer is awaited
-    property string ruleMenuName: ""
-    property bool ruleMenuLoading: false // waiting for the camera list before the switch can be read
-    property var ruleKnown: ({})       // camera address -> {on: bool, at: ms}: what the camera last said
-    property int ruleKnownRev: 0       // changes whenever ruleKnown does, so the menu tick follows it
-    property string ruleReadIp: ""     // a read started only to show the tick
-    function ruleIsOn(ip) {
-        var rev = root.ruleKnownRev;
-        return !!ip && !!root.ruleKnown[ip] && root.ruleKnown[ip].on;
-    }
-    // Reads the camera's switch (read only) when the Quick tools menu opens, so the tick is right. Not more than once
-    // every 20 seconds per camera.
-    function refreshRuleState(ip) {
-        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "")
-            return;
-        var k = root.ruleKnown[ip];
-        if (k && Date.now() - k.at < 20000) {
-            root.refreshNoiseState(ip);
-            return;
-        }
-        if (HikvisionBackup.cameraCount() === 0) {
-            root.ruleReadIp = ip;
-            root.ruleMenuLoading = false;
-            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
-            return;
-        }
-        root.ruleReadIp = ip;
-        HikvisionBackup.checkRuleLines(ip);
-    }
-    function toggleRuleLines(ip, name) {
-        if (!ip || HikvisionBackup.ruleBusy)
-            return;
-        root.ruleMenuIp = ip;
-        root.ruleMenuName = name || ip;
-        rootWindow.showNotice(qsTr("Rule lines on the stream") + "\n" + root.ruleMenuName + "\n" + qsTr("asking the camera..."), "#00f5d4", 0);
-        if (HikvisionBackup.cameraCount() === 0) {
-            root.ruleMenuLoading = true;
-            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
-            return;
-        }
-        HikvisionBackup.toggleRuleLines(ip);
-    }
-    // Quick tools > Noise filter: the camera's own "Environmental Noise Filtering" switch. Read when the menu opens
-    // (after the rule lines read, because the two share one worker), set the other way on a click.
+    // Quick tools > Noise filter: the camera's own "Environmental Noise Filtering" switch. Read when the menu opens,
+    // set the other way on a click. The flashing light and warning message reads follow it, on the same worker.
     property string noiseMenuIp: ""
     property string noiseMenuName: ""
     property bool noiseMenuLoading: false
+    property string noiseReadIp: ""    // a read started only to show the tick, and to start the reads that follow it
     property var noiseKnown: ({})      // camera address -> {on: bool, none: bool, at: ms}
     property int noiseKnownRev: 0
     function noiseIsOn(ip) {
@@ -136,16 +94,24 @@ FocusScope {
         var rev = root.noiseKnownRev;
         return !!ip && !(root.noiseKnown[ip] && root.noiseKnown[ip].none);
     }
+    // True only after the camera has answered and it has the switch. Until then the menu row stays gray.
+    function noiseReady(ip) {
+        var rev = root.noiseKnownRev;
+        return !!ip && !!root.noiseKnown[ip] && !root.noiseKnown[ip].none;
+    }
     function refreshNoiseState(ip) {
-        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "")
+        if (!ip || HikvisionBackup.ruleBusy || root.noiseMenuIp !== "")
             return;
         var k = root.noiseKnown[ip];
         if (k && Date.now() - k.at < 20000) {
             root.refreshStrobeState(ip);
             return;
         }
-        if (HikvisionBackup.cameraCount() === 0)
-            return; // the rule lines read loads the list; this one follows it
+        if (HikvisionBackup.cameraCount() === 0) {
+            root.noiseReadIp = ip;
+            HikvisionBackup.loadCameras(rootWindow.hikvisionRecordersJson || "[]", Context.config.fileName);
+            return;
+        }
         HikvisionBackup.checkNoiseFilter(ip);
     }
     function toggleNoiseFilter(ip, name) {
@@ -173,7 +139,7 @@ FocusScope {
         return !!ip && !!root.strobeKnown[ip] && root.strobeKnown[ip].has;
     }
     function refreshStrobeState(ip) {
-        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "" || root.strobeMenuIp !== "")
+        if (!ip || HikvisionBackup.ruleBusy || root.noiseMenuIp !== "" || root.strobeMenuIp !== "")
             return;
         var k = root.strobeKnown[ip];
         if (k && Date.now() - k.at < 600000) {
@@ -209,7 +175,7 @@ FocusScope {
         return !!ip && !!root.warnKnown[ip] && root.warnKnown[ip].has;
     }
     function refreshWarnState(ip) {
-        if (!ip || HikvisionBackup.ruleBusy || root.ruleMenuIp !== "" || root.noiseMenuIp !== "" || root.strobeMenuIp !== "" || root.warnMenuIp !== "")
+        if (!ip || HikvisionBackup.ruleBusy || root.noiseMenuIp !== "" || root.strobeMenuIp !== "" || root.warnMenuIp !== "")
             return;
         var k = root.warnKnown[ip];
         if (k && Date.now() - k.at < 600000)
@@ -297,11 +263,10 @@ FocusScope {
             } else if (root.noiseMenuLoading && root.noiseMenuIp !== "") {
                 root.noiseMenuLoading = false;
                 HikvisionBackup.toggleNoiseFilter(root.noiseMenuIp);
-            } else if (root.ruleMenuLoading && root.ruleMenuIp !== "") {
-                root.ruleMenuLoading = false;
-                HikvisionBackup.toggleRuleLines(root.ruleMenuIp);
-            } else if (root.ruleReadIp !== "" && root.ruleMenuIp === "" && !HikvisionBackup.ruleBusy) {
-                HikvisionBackup.checkRuleLines(root.ruleReadIp);
+            } else if (root.noiseReadIp !== "" && root.noiseMenuIp === "" && !HikvisionBackup.ruleBusy) {
+                var readIp = root.noiseReadIp;
+                root.noiseReadIp = "";
+                HikvisionBackup.checkNoiseFilter(readIp);
             }
         }
         function onNoiseFilterResult(ip, state, message) {
@@ -369,30 +334,6 @@ FocusScope {
             var head = qsTr("Reboot camera") + "\n" + name + "\n";
             if (state === "started" || state === "sent")
                 rootWindow.showNotice(head + message, "#ff9f43", 12000);
-            else
-                rootWindow.showNotice(head + message, "#ff3333", 10000);
-        }
-        function onRuleLinesResult(ip, state, message) {
-            if (state === "on" || state === "off") {
-                var k = root.ruleKnown;
-                k[ip] = { "on": state === "on", "at": Date.now() };
-                root.ruleKnown = k;
-                root.ruleKnownRev++;
-            }
-            var wasRead = (root.ruleReadIp === ip);
-            if (root.ruleReadIp === ip)
-                root.ruleReadIp = "";
-            if (wasRead && root.ruleMenuIp === "")
-                Qt.callLater(function() { root.refreshNoiseState(ip); });
-            if (root.ruleMenuIp === "" || ip !== root.ruleMenuIp)
-                return;
-            var name = root.ruleMenuName;
-            root.ruleMenuIp = "";
-            var head = qsTr("Rule lines on the stream") + "\n" + name + "\n";
-            if (state === "on")
-                rootWindow.showNotice(head + qsTr("ON: ") + message, "#00ff66", 6000);
-            else if (state === "off")
-                rootWindow.showNotice(head + qsTr("OFF: ") + message, "#00f5d4", 6000);
             else
                 rootWindow.showNotice(head + message, "#ff3333", 10000);
         }
@@ -1483,14 +1424,8 @@ FocusScope {
                             keepSubMenuOpen = false;
                         }
                         
-                        enter: Transition {
-                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                        }
-                        exit: Transition {
-                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
-                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
-                        }
+                        // No open or close animation: the menu is shown at once. The rows stay put and turn gray
+                        // when they do not apply, so opening does not have to rebuild the list.
                         
                         background: Rectangle {
                             implicitWidth: 160
@@ -1544,8 +1479,8 @@ FocusScope {
 
                         MenuItem {
                             text: qsTr("LNG_00475")
-                            visible: model.url !== "" && generalSettings.allowSwappingViewports
-                            enabled: model.url !== ""
+                            visible: true
+                            enabled: model.url !== "" && generalSettings.allowSwappingViewports
                             leftPadding: 12
                             
                             contentItem: Text {
@@ -1585,8 +1520,8 @@ FocusScope {
                         MenuItem {
                             id: streamSelectMenuItem
                             text: qsTr("LNG_00474")
-                            visible: model.url !== "" && generalSettings.enableStreamSelection
-                            enabled: model.url !== ""
+                            visible: true
+                            enabled: model.url !== "" && generalSettings.enableStreamSelection
                             leftPadding: 12
                             
                             contentItem: RowLayout {
@@ -1641,8 +1576,8 @@ FocusScope {
                         MenuItem {
                             id: removeCameraMenuItem
                             text: qsTr("LNG_00473")
-                            visible: model.url !== "" && generalSettings.enableRemoveCamera
-                            enabled: model.url !== ""
+                            visible: true
+                            enabled: model.url !== "" && generalSettings.enableRemoveCamera
                             leftPadding: 12
                             
                             contentItem: Text {
@@ -1683,7 +1618,7 @@ FocusScope {
                         MenuItem {
                             id: snapshotMenuItem
                             text: qsTr("LNG_00470")
-                            visible: model.url !== ""
+                            visible: true
                             enabled: model.url !== ""
                             leftPadding: 12
                             
@@ -1723,7 +1658,7 @@ FocusScope {
                         MenuItem {
                             id: playMenuItem
                             text: qsTr("LNG_00469")
-                            visible: model.url !== ""
+                            visible: true
                             enabled: model.url !== ""
                             leftPadding: 12
                             
@@ -1762,9 +1697,8 @@ FocusScope {
                         MenuItem {
                             id: webUiMenuItem
                             text: qsTr("Open camera web UI")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1
                             leftPadding: 12
 
                             contentItem: Text {
@@ -1803,9 +1737,8 @@ FocusScope {
                         MenuItem {
                             id: quickToolsMenuItem
                             text: qsTr("Quick tools")
-                            visible: model.url !== ""
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== ""
                             leftPadding: 12
 
                             contentItem: RowLayout {
@@ -1814,14 +1747,14 @@ FocusScope {
                                     Layout.fillWidth: true
                                     text: quickToolsMenuItem.text
                                     font { pixelSize: 11; bold: true }
-                                    color: quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    color: quickToolsMenuItem.enabled ? (quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                     horizontalAlignment: Text.AlignLeft
                                     verticalAlignment: Text.AlignVCenter
                                 }
                                 Text {
                                     text: "\u25B6"
                                     font { pixelSize: 9; bold: true }
-                                    color: quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    color: quickToolsMenuItem.enabled ? (quickToolsMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                     horizontalAlignment: Text.AlignRight
                                     verticalAlignment: Text.AlignVCenter
                                     rightPadding: 8
@@ -1837,7 +1770,7 @@ FocusScope {
                             }
 
                             onHoveredChanged: {
-                                if (hovered) {
+                                if (hovered && enabled) {
                                     streamSubMenu.close();
                                     vcaSubMenu.close();
                                     root.popupBeside(quickToolsSubMenu, quickToolsMenuItem);
@@ -1853,9 +1786,8 @@ FocusScope {
                         MenuItem {
                             id: vcaMenuItem
                             text: qsTr("VCA")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: RowLayout {
@@ -1864,14 +1796,14 @@ FocusScope {
                                     Layout.fillWidth: true
                                     text: vcaMenuItem.text
                                     font { pixelSize: 11; bold: true }
-                                    color: vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    color: vcaMenuItem.enabled ? (vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                     horizontalAlignment: Text.AlignLeft
                                     verticalAlignment: Text.AlignVCenter
                                 }
                                 Text {
                                     text: "\u25B6"
                                     font { pixelSize: 9; bold: true }
-                                    color: vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                    color: vcaMenuItem.enabled ? (vcaMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                     horizontalAlignment: Text.AlignRight
                                     verticalAlignment: Text.AlignVCenter
                                     rightPadding: 8
@@ -1887,7 +1819,7 @@ FocusScope {
                             }
 
                             onHoveredChanged: {
-                                if (hovered) {
+                                if (hovered && enabled) {
                                     streamSubMenu.close();
                                     quickToolsSubMenu.close();
                                     root.popupBeside(vcaSubMenu, vcaMenuItem);
@@ -1903,9 +1835,8 @@ FocusScope {
                         MenuItem {
                             id: targetMenuItem
                             text: (contextMenu.targetOn ? "\u2713 " : "    ") + qsTr("Detection frame")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible && generalSettings.showTargetIndicator
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable && generalSettings.showTargetIndicator
                             leftPadding: 12
 
                             contentItem: Text {
@@ -1947,14 +1878,14 @@ FocusScope {
                         MenuItem {
                             id: detectionLogMenuItem
                             text: qsTr("Detection events...")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: Text {
                                 text: detectionLogMenuItem.text
                                 font { pixelSize: 11; bold: true }
-                                color: detectionLogMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                color: detectionLogMenuItem.enabled ? (detectionLogMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                 horizontalAlignment: Text.AlignLeft
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -2000,21 +1931,15 @@ FocusScope {
                         onAboutToShow: {
                             var p = playerPool.activePlayersMap[model.index];
                             ruleIp = (p && p.isHikvision && !p.isQuickPlayback) ? p.detectionLogIp() : "";
-                            root.refreshRuleState(ruleIp);
+                            root.refreshNoiseState(ruleIp);
                         }
                         margins: 6 // keeps the menu inside the window, even for a small cell near an edge
 
                         topPadding: 5
                         bottomPadding: 5
 
-                        enter: Transition {
-                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                        }
-                        exit: Transition {
-                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
-                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
-                        }
+                        // No open or close animation: the menu is shown at once. The rows stay put and turn gray
+                        // when they do not apply, so opening does not have to rebuild the list.
 
                         background: Rectangle {
                             implicitWidth: 200
@@ -2027,7 +1952,7 @@ FocusScope {
                         MenuItem {
                             id: reloadMenuItem
                             text: qsTr("LNG_00471")
-                            visible: model.url !== ""
+                            visible: true
                             enabled: model.url !== "" && (playerPool.activePlayersMap[model.index] ? !playerPool.activePlayersMap[model.index].isQuickPlayback : true)
                             leftPadding: 12
                             
@@ -2059,14 +1984,14 @@ FocusScope {
                         MenuItem {
                             id: setupCheckMenuItem
                             text: qsTr("Check detection setup...")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: Text {
                                 text: setupCheckMenuItem.text
                                 font { pixelSize: 11; bold: true }
-                                color: setupCheckMenuItem.hovered ? "#00f5d4" : "#eeeeee"
+                                color: setupCheckMenuItem.enabled ? (setupCheckMenuItem.hovered ? "#00f5d4" : "#eeeeee") : "#555555"
                                 horizontalAlignment: Text.AlignLeft
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -2099,8 +2024,8 @@ FocusScope {
                         MenuItem {
                             id: changeSettingsMenuItem
                             text: qsTr("LNG_00472")
-                            visible: model.url !== "" && generalSettings.enableChangeViewportSettings
-                            enabled: model.url !== ""
+                            visible: true
+                            enabled: model.url !== "" && generalSettings.enableChangeViewportSettings
                             leftPadding: 12
                             
                             contentItem: Text {
@@ -2133,10 +2058,9 @@ FocusScope {
                         MenuItem {
                             id: noiseFilterMenuItem
                             text: (root.noiseIsOn(quickToolsSubMenu.ruleIp) ? "\u2713 " : "    ") + qsTr("Noise filter (camera sound)")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                                     && root.noiseHas(quickToolsSubMenu.ruleIp)
-                            enabled: visible && !HikvisionBackup.ruleBusy
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.noiseReady(quickToolsSubMenu.ruleIp) && !HikvisionBackup.ruleBusy
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2170,10 +2094,9 @@ FocusScope {
                         MenuItem {
                             id: strobeStartMenuItem
                             text: qsTr("Activate Flashing Light")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                                     && root.strobeHas(quickToolsSubMenu.ruleIp)
-                            enabled: visible && !HikvisionBackup.ruleBusy
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.strobeHas(quickToolsSubMenu.ruleIp) && !HikvisionBackup.ruleBusy
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2207,10 +2130,9 @@ FocusScope {
                         MenuItem {
                             id: warnMenuItem
                             text: qsTr("Play Warning Message")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                                     && root.warnHas(quickToolsSubMenu.ruleIp)
-                            enabled: visible && !HikvisionBackup.ruleBusy
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
+                                     && root.warnHas(quickToolsSubMenu.ruleIp) && !HikvisionBackup.ruleBusy
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2244,9 +2166,8 @@ FocusScope {
                         MenuItem {
                             id: cameraSettingsMenuItem
                             text: qsTr("Camera settings")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2280,9 +2201,8 @@ FocusScope {
                         MenuItem {
                             id: rebootMenuItem
                             text: qsTr("Reboot Camera")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible && !HikvisionBackup.ruleBusy
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable && !HikvisionBackup.ruleBusy
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2330,14 +2250,8 @@ FocusScope {
                         topPadding: 5
                         bottomPadding: 5
 
-                        enter: Transition {
-                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                        }
-                        exit: Transition {
-                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
-                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
-                        }
+                        // No open or close animation: the menu is shown at once. The rows stay put and turn gray
+                        // when they do not apply, so opening does not have to rebuild the list.
 
                         background: Rectangle {
                             implicitWidth: 200
@@ -2350,9 +2264,8 @@ FocusScope {
                         MenuItem {
                             id: ruleLinesMenuItem
                             text: (vcaSubMenu.rulesOn ? "\u2713 " : "    ") + qsTr("Show VCA Line Rules")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2391,9 +2304,8 @@ FocusScope {
                         MenuItem {
                             id: vcaTargetsMenuItem
                             text: (vcaSubMenu.targetsOn ? "\u2713 " : "    ") + qsTr("Target Boxes")
-                            visible: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
-                            enabled: visible
-                            height: visible ? implicitHeight : 0
+                            visible: true
+                            enabled: model.url !== "" && String(model.url).indexOf("hikvision://") !== -1 && contextMenu.targetAvailable
                             leftPadding: 12
 
                             contentItem: Text {
@@ -2437,14 +2349,8 @@ FocusScope {
                         topPadding: 5
                         bottomPadding: 5
                         
-                        enter: Transition {
-                            NumberAnimation { property: "opacity"; from: 0.0; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                            NumberAnimation { property: "scale"; from: 0.95; to: 1.0; duration: 150; easing.type: Easing.OutQuad }
-                        }
-                        exit: Transition {
-                            NumberAnimation { property: "opacity"; from: 1.0; to: 0.0; duration: 100; easing.type: Easing.InQuad }
-                            NumberAnimation { property: "scale"; from: 1.0; to: 0.95; duration: 100; easing.type: Easing.InQuad }
-                        }
+                        // No open or close animation: the menu is shown at once. The rows stay put and turn gray
+                        // when they do not apply, so opening does not have to rebuild the list.
                         
                         background: Rectangle {
                             implicitWidth: 160
@@ -2495,12 +2401,7 @@ FocusScope {
                                 radius: 4
                             }
                             
-                            onTriggered: {
-                                var item = root.model.get(model.index);
-                                if (item) {
-                                    item.streamMode = 0;
-                                }
-                            }
+                            onTriggered: root.pickTileStream(model.index, 0)
                         }
                         
                         MenuItem {
@@ -2544,12 +2445,7 @@ FocusScope {
                                 radius: 4
                             }
                             
-                            onTriggered: {
-                                var item = root.model.get(model.index);
-                                if (item) {
-                                    item.streamMode = 1;
-                                }
-                            }
+                            onTriggered: root.pickTileStream(model.index, 1)
                         }
                         
                         MenuItem {
@@ -2593,18 +2489,14 @@ FocusScope {
                                 radius: 4
                             }
                             
-                            onTriggered: {
-                                var item = root.model.get(model.index);
-                                if (item) {
-                                    item.streamMode = 2;
-                                }
-                            }
+                            onTriggered: root.pickTileStream(model.index, 2)
                         }
 
                         MenuItem {
                             id: streamThirdItem
                             text: qsTr("Third")
-                            visible: String(viewport.url).indexOf("hikvision://") === 0
+                            visible: true
+                            enabled: String(viewport.url).indexOf("hikvision://") === 0
                             leftPadding: 12
 
                             contentItem: RowLayout {
@@ -2616,7 +2508,7 @@ FocusScope {
                                         pixelSize: 11
                                         bold: true
                                     }
-                                    color: streamThirdItem.hovered ? "#00f5d4" : (viewport.streamMode === 3 ? "#00f5d4" : "#eeeeee")
+                                    color: streamThirdItem.enabled ? (streamThirdItem.hovered ? "#00f5d4" : (viewport.streamMode === 3 ? "#00f5d4" : "#eeeeee")) : "#555555"
                                     horizontalAlignment: Text.AlignLeft
                                     verticalAlignment: Text.AlignVCenter
                                 }
@@ -2643,12 +2535,7 @@ FocusScope {
                                 radius: 4
                             }
 
-                            onTriggered: {
-                                var item = root.model.get(model.index);
-                                if (item) {
-                                    item.streamMode = 3;
-                                }
-                            }
+                            onTriggered: root.pickTileStream(model.index, 3)
                         }
                     }
 
@@ -2698,7 +2585,8 @@ FocusScope {
                                 if (url && url.indexOf("hikvision://") === 0) {
                                     root.model.get(model.index).url = url;
                                     root.model.get(model.index).secondaryUrl = url;
-                                    root.model.get(model.index).streamMode = 0;
+                                    root.model.get(model.index).streamMode = rootWindow.streamModeForUrl(url);
+                                    rootWindow.noteCameraPlaced(root.model, url);
                                     drop.accept(Qt.CopyAction);
                                     Utils.log_info("Dropped camera on viewport " + (model.index + 1));
                                     return;
@@ -2737,6 +2625,17 @@ FocusScope {
                 }
             }
         }
+    }
+
+    // Right-click > stream: set this tile, and keep this layout off the camera-wide choice.
+    function pickTileStream(index, mode) {
+        var item = root.model.get(index);
+        if (!item)
+            return;
+        item.streamMode = mode;
+        var key = rootWindow.tileKeyFromUrl(item.url);
+        if (key !== "")
+            rootWindow.excludeCameraOnLayout(root.model, key);
     }
 
     Keys.onPressed: {

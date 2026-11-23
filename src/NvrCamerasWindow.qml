@@ -434,7 +434,8 @@ Window {
                                             if (vp) {
                                                 vp.url = tileWrapper.cameraUrl;
                                                 vp.secondaryUrl = tileWrapper.cameraUrl;
-                                                vp.streamMode = 0;
+                                                vp.streamMode = rootWindow.streamModeForUrl(tileWrapper.cameraUrl);
+                                                rootWindow.noteCameraPlaced(activeLayoutModel, tileWrapper.cameraUrl);
                                                 Utils.log_info(qsTr("LNG_00069").arg(recorder.name || recorder.ip).arg(modelData.channelId).arg(focusIdx + 1));
                                             }
                                         }

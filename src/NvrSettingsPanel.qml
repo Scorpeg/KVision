@@ -136,6 +136,7 @@ ColumnLayout {
                 vp.url = "hikvision://" + recorderData.ip + "/" + cams[i].channelId;
                 vp.secondaryUrl = vp.url;
                 vp.volume = 0;
+                vp.streamMode = rootWindow.streamModeForUrl(vp.url);
             }
         }
 
@@ -232,6 +233,7 @@ ColumnLayout {
                         vp.url = "hikvision://" + newRecorder.ip + "/" + cameras[i].channelId;
                         vp.secondaryUrl = vp.url;
                         vp.volume = 0;
+                        vp.streamMode = rootWindow.streamModeForUrl(vp.url);
                     }
                 }
 

@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QFileInfo>
 #include <QCoreApplication>
+#include <QProcessEnvironment>
 #include <QLocale>
 #include <QFileDialog>
 #include <QStandardPaths>
@@ -220,6 +221,12 @@ void Context::startAuxiliaryProcess()
     m_childIds[process] = nextId;
     m_childProcesses.append(process);
     process->setProcessChannelMode(QProcess::ForwardedChannels);
+    // "same" leaves the session scale alone. 1, 1.5 and 2 are for a screen that is not the main window's.
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString scale = readSetting(QString(), QStringLiteral("auxiliaryScale"), QStringLiteral("1")).toString();
+    if (scale == QLatin1String("1") || scale == QLatin1String("1.5") || scale == QLatin1String("2"))
+        env.insert(QStringLiteral("QT_SCALE_FACTOR"), scale);
+    process->setProcessEnvironment(env);
     process->start(exePath, arguments);
 }
 

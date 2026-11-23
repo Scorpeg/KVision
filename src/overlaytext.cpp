@@ -2,10 +2,13 @@
 
 #include "overlayentry.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
+#include <QSettings>
 #include <QTimer>
 
 OverlayText::OverlayText(QObject *parent)
@@ -52,6 +55,35 @@ QString OverlayText::migrate(const QString &json)
 QVariantList OverlayText::entriesOf(const QString &json)
 {
     return QJsonDocument::fromJson(migrate(json).toUtf8()).object().value(QStringLiteral("entries")).toArray().toVariantList();
+}
+
+QString OverlayText::recoverEmptyList(const QString &configFile, const QString &current)
+{
+    if (!entriesOf(current).isEmpty() || configFile.isEmpty())
+        return current;
+    QSettings live(configFile, QSettings::IniFormat);
+    // Set only when the window saves an empty list on purpose. A failed restore must not block the next start.
+    if (live.value(QStringLiteral("overlayTextUserCleared")).toBool())
+        return current;
+    const QFileInfo info(configFile);
+    const QDir dir(info.absolutePath());
+    const QStringList names = dir.entryList(QStringList() << (info.fileName() + QStringLiteral(".*")), QDir::Files, QDir::Time);
+    for (const QString &name : names) {
+        QSettings backup(dir.absoluteFilePath(name), QSettings::IniFormat);
+        const QString raw = backup.value(QStringLiteral("overlayText")).toString();
+        const QString migrated = migrate(raw);
+        const int count = entriesOf(migrated).size();
+        if (count < 1)
+            continue;
+        // Write it here, before the window can save. The settings object still holds the empty value until the caller
+        // stores this same text.
+        live.setValue(QStringLiteral("overlayText"), migrated);
+        live.remove(QStringLiteral("overlayTextRecovered"));
+        live.sync();
+        qWarning().noquote() << QStringLiteral("[Overlay] the saved overlay list was empty; restored %1 entries from %2").arg(count).arg(name);
+        return migrated;
+    }
+    return current;
 }
 
 QString OverlayText::status() const

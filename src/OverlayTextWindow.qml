@@ -28,6 +28,8 @@ Window {
     property var entries: []        // the saved entries (see OverlayText in overlaytext.h)
     property string whenClosed: "keep"
     property int selected: -1       // the entry shown in the form; -1 is a new one
+    property bool listReady: false  // false until the saved list has been read, so the closed-window choice cannot save an empty list over it
+    property bool applyingClosed: false
     readonly property var statuses: OverlayText.statuses
 
     function cameraLabel(ip, channel) {
@@ -67,7 +69,10 @@ Window {
         try { s = JSON.parse(OverlayText.migrate(generalSettings.overlayText || "{}")); } catch (e) {}
         win.entries = s.entries || [];
         win.whenClosed = s.whenClosed || "keep";
+        win.applyingClosed = true;
         closedBox.currentIndex = win.whenClosed === "remove" ? 1 : (win.whenClosed === "stale" ? 2 : 0);
+        win.applyingClosed = false;
+        win.listReady = true;
         if (win.entries.length > 0)
             win.select(0);
         else
@@ -116,8 +121,11 @@ Window {
 
     // Writes the list to the settings and makes the running entries match it.
     function persist() {
+        if (!win.listReady)
+            return;
         var json = JSON.stringify({ "version": 2, "whenClosed": win.whenClosed, "entries": win.entries });
         generalSettings.overlayText = json;
+        generalSettings.overlayTextUserCleared = win.entries.length === 0;
         OverlayText.apply(json);
     }
 
@@ -521,6 +529,8 @@ Window {
                     Layout.preferredWidth: 300
                     model: [qsTr("Keep updating them"), qsTr("Remove them from the cameras"), qsTr("Show \"--\" instead of the number")]
                     onActivated: {
+                        if (!win.listReady || win.applyingClosed)
+                            return;
                         win.whenClosed = ["keep", "remove", "stale"][currentIndex];
                         win.persist();
                     }

@@ -191,7 +191,8 @@ Window {
         var url = (streamUrl && String(streamUrl).length > 0) ? String(streamUrl) : ("hikvision://" + ip + "/" + channelId);
         vp.url = url;
         vp.secondaryUrl = url;
-        vp.streamMode = 0;
+        vp.streamMode = rootWindow.streamModeForUrl(url);
+        rootWindow.noteCameraPlaced(layoutModel, url);
         // Stay open and move on to the next empty cell so several cameras can be added quickly
         var next = nextEmptyCell(targetIndex);
         if (next >= 0)

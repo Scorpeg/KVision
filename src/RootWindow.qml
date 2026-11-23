@@ -27,6 +27,9 @@ ApplicationWindow {
     property string lastSavedModelsJson: ""
     property bool isSyncing: false
     property bool topBarAutoCollapse: !viewSettings.showTopBarByDefault
+    // The auxiliary window is not scaled with the 4K screen, so its toolbar is drawn larger to stay easy to use.
+    readonly property real toolbarScale: Context.isAuxiliary ? 1.5 : 1
+    function toolbarPx(n) { return Math.round(n * rootWindow.toolbarScale) }
     readonly property bool isPlaybackWindowOpen: playbackWindowLoader.active && playbackWindowLoader.item && playbackWindowLoader.item.visible
     // True when the auto-hide timer has blanked the mouse cursor (fullscreen inactivity).
     // Viewport overlays (hover buttons, etc.) use this to fade out together with the cursor.
@@ -312,6 +315,7 @@ ApplicationWindow {
         // targets (human,vehicle,animal,other).
         property string targetKinds: "motion,line,intrusion,enter,exit,face,other"
         property string overlayText: "{}" // JSON: the settings of the MQTT overlay text (Overlay text from MQTT window)
+        property bool overlayTextUserCleared: false // true after the overlay window saves an empty list on purpose
         // Keep logging after the window is closed (the background service). While the window is open every camera is
         // always logged, whether or not a tile shows it; the on-screen frame (showTargetIndicator and the right-click
         // switch) only decides what is drawn.
@@ -332,12 +336,19 @@ ApplicationWindow {
         // Right-click > VCA > Show VCA Line Rules: KVision draws the rule lines from the same smart data.
         // JSON list of "recorderIp#channel". The camera's own stream switch is left alone.
         property string vcaRuleLinesOnCameras: "[]"
+        // Camera Tools > Video stream: the picture a camera's tiles use, remembered per camera.
+        // JSON {"ip#channel": 1 | 2 | 3} for Main, Sub and Third. A camera with no entry stays on
+        // whatever each layout already has (Auto, until a layout says otherwise).
+        property string tileStreamByCamera: "{}"
         onTargetNvrOnCamerasChanged: rootWindow.noteNvrList()
         Component.onCompleted: rootWindow.nvrListReady = true
         property string talkMicrophone: ""
         property real talkGain: 2.0
         property real talkBoostDb: 0.0
         property int auxiliaryLimit: 1
+        // Scale of an auxiliary window: "same" keeps the main window's scale, otherwise "1", "1.5" or "2".
+        // Applied the next time an auxiliary window opens. "1" fits a 1080p screen when the main window is scaled for 4K.
+        property string auxiliaryScale: "1"
         property int playbackOffsetSeconds: 120
         property int playbackTimelineHours: 2
         // Drop this window's live pictures while the archive is open, and connect them again when it closes.
@@ -645,6 +656,12 @@ ApplicationWindow {
             if (generalSettings.auxiliaryLimit !== diskAuxiliaryLimit) {
                 generalSettings.auxiliaryLimit = diskAuxiliaryLimit;
             }
+            var diskAuxiliaryScale = String(Context.readSetting("", "auxiliaryScale", "1"));
+            if (diskAuxiliaryScale !== "same" && diskAuxiliaryScale !== "1" && diskAuxiliaryScale !== "1.5" && diskAuxiliaryScale !== "2")
+                diskAuxiliaryScale = "1";
+            if (generalSettings.auxiliaryScale !== diskAuxiliaryScale) {
+                generalSettings.auxiliaryScale = diskAuxiliaryScale;
+            }
             var diskPlaybackOffsetSeconds = Context.readSetting("", "playbackOffsetSeconds", 120);
             if (generalSettings.playbackOffsetSeconds !== diskPlaybackOffsetSeconds) {
                 generalSettings.playbackOffsetSeconds = diskPlaybackOffsetSeconds;
@@ -688,7 +705,14 @@ ApplicationWindow {
             }
             var diskOverlayText = String(Context.readSetting("", "overlayText", "{}"));
             if (generalSettings.overlayText !== diskOverlayText) {
-                generalSettings.overlayText = diskOverlayText;
+                // A file watch can arrive while a restore is being written and still see the empty list. Do not put
+                // that empty list back over entries that are already in memory.
+                var diskEntries = 0;
+                var memEntries = 0;
+                try { diskEntries = (JSON.parse(diskOverlayText).entries || []).length; } catch (e1) {}
+                try { memEntries = (JSON.parse(generalSettings.overlayText || "{}").entries || []).length; } catch (e2) {}
+                if (!(diskEntries === 0 && memEntries > 0))
+                    generalSettings.overlayText = diskOverlayText;
             }
             var diskTargetKinds = String(Context.readSetting("", "targetKinds", "motion,line,intrusion,enter,exit,face,other"));
             if (!Context.readSetting("", "targetKindsHasFace", false)) {
@@ -1128,6 +1152,196 @@ ApplicationWindow {
         openPlaybackWindow(null, -1, "");
     }
 
+    // Bumped when Camera Tools sets a camera's picture stream, so that window redraws its marks.
+    property int tileStreamRev: 0
+
+    // "ip#channel" for a hikvision:// tile address, or "" for anything else.
+    function tileKeyFromUrl(url) {
+        var s = String(url || "");
+        var idx = s.indexOf("hikvision://");
+        if (idx < 0)
+            return "";
+        var content = s.substring(idx + 12);
+        var slash = content.indexOf("/");
+        var main = slash >= 0 ? content.substring(0, slash) : content;
+        var path = slash >= 0 ? content.substring(slash + 1) : "1";
+        var at = main.lastIndexOf("@");
+        var addr = at >= 0 ? main.substring(at + 1) : main;
+        var ip = addr.split(":")[0];
+        var ch = parseInt(path);
+        if (ip === "" || isNaN(ch))
+            return "";
+        return ip + "#" + ch;
+    }
+
+    function tileStreamSaved(key) {
+        if (!key)
+            return 0;
+        try {
+            var o = JSON.parse(generalSettings.tileStreamByCamera || "{}");
+            var m = o[key];
+            if (m === 1 || m === 2 || m === 3)
+                return m;
+        } catch (e) {}
+        return 0;
+    }
+
+    function layoutByUid(uid) {
+        if (!uid)
+            return null;
+        for (var L = 0; L < layoutsCollectionModel.count; ++L) {
+            var layout = layoutsCollectionModel.get(L);
+            if (layout && layout.uid === uid)
+                return layout;
+        }
+        return null;
+    }
+
+    function excludeList(layout) {
+        if (!layout)
+            return [];
+        try {
+            var l = JSON.parse(layout.streamExcludes || "[]");
+            return Array.isArray(l) ? l : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function layoutExcludes(layout, key) {
+        return !!key && rootWindow.excludeList(layout).indexOf(key) >= 0;
+    }
+
+    function layoutUidExcludes(uid, key) {
+        var rev = rootWindow.tileStreamRev;
+        return rootWindow.layoutExcludes(rootWindow.layoutByUid(uid), key);
+    }
+
+    // What the tiles that follow this camera are using. 1 Main, 2 Sub, 3 Third, 0 Auto,
+    // -1 when those layouts do not agree. An excluded layout is left out of this.
+    function cameraStreamMode(key) {
+        var rev = rootWindow.tileStreamRev;
+        if (!key)
+            return 0;
+        var seen = -2;
+        for (var L = 0; L < layoutsCollectionModel.count; ++L) {
+            var layout = layoutsCollectionModel.get(L);
+            if (!layout || layout === rootWindow.scratchLayout || rootWindow.layoutExcludes(layout, key))
+                continue;
+            for (var v = 0; v < layout.count; ++v) {
+                var item = layout.get(v);
+                if (!item || rootWindow.tileKeyFromUrl(item.url) !== key)
+                    continue;
+                if (seen === -2)
+                    seen = item.streamMode;
+                else if (seen !== item.streamMode)
+                    return -1;
+            }
+        }
+        if (seen === -2)
+            return rootWindow.tileStreamSaved(key);
+        return seen;
+    }
+
+    function applyStreamToLayout(layout, key, mode) {
+        if (!layout)
+            return;
+        for (var v = 0; v < layout.count; ++v) {
+            var item = layout.get(v);
+            if (!item || rootWindow.tileKeyFromUrl(item.url) !== key)
+                continue;
+            if (item.streamMode !== mode)
+                item.streamMode = mode;
+        }
+    }
+
+    // Remember the choice and write it onto every tile of these cameras that is not excluded.
+    // 0 is Auto: the entry is forgotten and every following tile of that camera goes back to Auto.
+    function setCameraStream(keys, mode) {
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 3)
+            return;
+        var o = {};
+        try { o = JSON.parse(generalSettings.tileStreamByCamera || "{}"); } catch (e) {}
+        if (!o || typeof o !== "object" || Array.isArray(o))
+            o = {};
+        for (var i = 0; i < keys.length; ++i) {
+            if (mode === 0)
+                delete o[keys[i]];
+            else
+                o[keys[i]] = mode;
+        }
+        generalSettings.tileStreamByCamera = JSON.stringify(o);
+        for (var L = 0; L < layoutsCollectionModel.count; ++L) {
+            var layout = layoutsCollectionModel.get(L);
+            if (!layout || layout === rootWindow.scratchLayout)
+                continue;
+            for (var k = 0; k < keys.length; ++k) {
+                if (!rootWindow.layoutExcludes(layout, keys[k]))
+                    rootWindow.applyStreamToLayout(layout, keys[k], mode);
+            }
+        }
+        rootWindow.tileStreamRev++;
+    }
+
+    // A right-click sets one tile, then marks that layout excluded so the camera choice leaves it alone.
+    function excludeCameraOnLayout(layout, key) {
+        if (!layout || !key || rootWindow.layoutExcludes(layout, key))
+            return;
+        var l = rootWindow.excludeList(layout);
+        l.push(key);
+        layout.streamExcludes = JSON.stringify(l);
+        rootWindow.tileStreamRev++;
+    }
+
+    // Tick or clear Exclude for one camera on one layout. Clearing writes the camera choice back onto its tiles there.
+    function setLayoutExcluded(uid, key, on) {
+        var layout = rootWindow.layoutByUid(uid);
+        if (!layout || !key)
+            return;
+        var mode = rootWindow.cameraStreamMode(key);
+        if (mode !== 0 && mode !== 1 && mode !== 2 && mode !== 3)
+            mode = rootWindow.tileStreamSaved(key);
+        var l = rootWindow.excludeList(layout);
+        var at = l.indexOf(key);
+        if (on && at < 0)
+            l.push(key);
+        else if (!on && at >= 0)
+            l.splice(at, 1);
+        else
+            return;
+        layout.streamExcludes = JSON.stringify(l);
+        if (!on)
+            rootWindow.applyStreamToLayout(layout, key, mode);
+        rootWindow.tileStreamRev++;
+    }
+
+    // The stream a newly placed tile should start on: the remembered choice, or Auto.
+    function streamModeForUrl(url) {
+        return rootWindow.tileStreamSaved(rootWindow.tileKeyFromUrl(url));
+    }
+
+    // A camera placed where that layout did not already show it follows the camera choice, so a stale Exclude is cleared.
+    function noteCameraPlaced(layout, url) {
+        var key = rootWindow.tileKeyFromUrl(url);
+        if (!layout || !key)
+            return;
+        var n = 0;
+        for (var v = 0; v < layout.count; ++v) {
+            var item = layout.get(v);
+            if (item && rootWindow.tileKeyFromUrl(item.url) === key)
+                n++;
+        }
+        if (n !== 1)
+            return;
+        var l = rootWindow.excludeList(layout);
+        var at = l.indexOf(key);
+        if (at < 0)
+            return;
+        l.splice(at, 1);
+        layout.streamExcludes = JSON.stringify(l);
+        rootWindow.tileStreamRev++;
+    }
+
     property int savedLayoutIndex: -1
     property var scratchLayout: null
 
@@ -1251,7 +1465,7 @@ ApplicationWindow {
     // Hover area at the very top edge of the window to slide down the top bar
     MouseArea {
         id: hoverArea
-        height: 12
+        height: rootWindow.toolbarPx(12)
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
@@ -1269,18 +1483,18 @@ ApplicationWindow {
     // Sleek premium horizontal top bar for settings and grid layout options (DOCK)
     Rectangle {
         id: topToolBar
-        height: 56
+        height: rootWindow.toolbarPx(56)
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.leftMargin: 8
         anchors.rightMargin: 8
         color: (rootWindow.visibility === Window.FullScreen) ? "#44121214" : "#99121214"
         z: 9999
-        radius: 12
+        radius: rootWindow.toolbarPx(12)
 
         // Slides down to y: -12 so that the top 12px (containing top rounded corners) is off-screen,
         // leaving only the bottom rounded corners visible at the top edge of the window.
-        y: (!rootWindow.topBarAutoCollapse || hoverArea.containsMouse || topToolBarMouseArea.containsMouse || keepVisibleTimer.running) ? -12 : -height
+        y: (!rootWindow.topBarAutoCollapse || hoverArea.containsMouse || topToolBarMouseArea.containsMouse || keepVisibleTimer.running) ? -rootWindow.toolbarPx(12) : -height
 
         Behavior on y {
             NumberAnimation {
@@ -1294,7 +1508,7 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 44
+            height: rootWindow.toolbarPx(44)
             hoverEnabled: true
             onContainsMouseChanged: {
                 if (containsMouse) {
@@ -1309,21 +1523,21 @@ ApplicationWindow {
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                height: 44
-                spacing: 6
+                anchors.leftMargin: rootWindow.toolbarPx(12)
+                anchors.rightMargin: rootWindow.toolbarPx(12)
+                height: rootWindow.toolbarPx(44)
+                spacing: rootWindow.toolbarPx(6)
 
             Button {
                 id: quitButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Text {
                     text: "✕"
                     font.bold: true
-                    font.pixelSize: 14
+                    font.pixelSize: rootWindow.toolbarPx(14)
                     color: "white"
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -1331,7 +1545,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: quitButton.pressed ? "#cc2929" : (quitButton.hovered ? "#ff4d4d" : "#d63333")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                 }
 
                 onClicked: {
@@ -1341,16 +1555,16 @@ ApplicationWindow {
 
             Button {
                 id: pinButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 property bool isPinned: !rootWindow.topBarAutoCollapse
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
                     rotation: pinButton.isPinned ? 0 : -45
 
                     Behavior on rotation {
@@ -1369,7 +1583,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: pinButton.pressed ? "#cc121214" : (pinButton.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: pinButton.hovered ? "#8898a6" : "#2a3540"
                     border.width: 1
                 }
@@ -1386,16 +1600,16 @@ ApplicationWindow {
 
             Button {
                 id: fullScreenBtn
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 property bool isActive: Context.config.fullScreen
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
                     source: {
                         var colorStr = fullScreenBtn.hovered ? "%2300ff66" : (fullScreenBtn.isActive ? "%2300ff66" : "%2300cc52");
                         if (fullScreenBtn.isActive) {
@@ -1408,7 +1622,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: fullScreenBtn.pressed ? "#cc121214" : (fullScreenBtn.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: fullScreenBtn.hovered ? "#00ff66" : "#2a3540"
                     border.width: 1
                 }
@@ -1425,14 +1639,14 @@ ApplicationWindow {
 
             Button {
                 id: minimizeButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
                     source: {
                         var colorStr = minimizeButton.hovered ? "%2333ccff" : "%2300c8ff";
                         return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><line x1='5' y1='18' x2='19' y2='18'></line></svg>";
@@ -1441,7 +1655,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: minimizeButton.pressed ? "#cc121214" : (minimizeButton.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: minimizeButton.hovered ? "#00c8ff" : "#2a3540"
                     border.width: 1
                 }
@@ -1458,16 +1672,16 @@ ApplicationWindow {
 
             Button {
                 id: optionsButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
-                    sourceSize.width: 16
-                    sourceSize.height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
+                    sourceSize.width: rootWindow.toolbarPx(16)
+                    sourceSize.height: rootWindow.toolbarPx(16)
                     fillMode: Image.PreserveAspectFit
                     source: {
                         var colorStr = optionsButton.hovered ? "%23ff9e00" : "%23ff7a00";
@@ -1477,7 +1691,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: optionsButton.pressed ? "#cc121214" : (optionsButton.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: optionsButton.hovered ? "#ff9e00" : "#2a3540"
                     border.width: 1
                 }
@@ -1498,16 +1712,16 @@ ApplicationWindow {
 
             Button {
                 id: newWindowButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
-                    sourceSize.width: 16
-                    sourceSize.height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
+                    sourceSize.width: rootWindow.toolbarPx(16)
+                    sourceSize.height: rootWindow.toolbarPx(16)
                     fillMode: Image.PreserveAspectFit
                     source: {
                         var colorStr = newWindowButton.hovered ? "%23c084fc" : "%23a855f7";
@@ -1517,7 +1731,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: newWindowButton.pressed ? "#cc121214" : (newWindowButton.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: newWindowButton.hovered ? "#c084fc" : "#2a3540"
                     border.width: 1
                 }
@@ -1534,16 +1748,16 @@ ApplicationWindow {
 
             Button {
                 id: archiveButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
-                    sourceSize.width: 16
-                    sourceSize.height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
+                    sourceSize.width: rootWindow.toolbarPx(16)
+                    sourceSize.height: rootWindow.toolbarPx(16)
                     fillMode: Image.PreserveAspectFit
                     source: {
                         var colorStr = "%23121214";
@@ -1553,7 +1767,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: archiveButton.pressed ? "#00ccb0" : (archiveButton.hovered ? "#00ffd8" : "#00f5d4")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: archiveButton.pressed ? "#00ccb0" : (archiveButton.hovered ? "#00ffd8" : "#00f5d4")
                     border.width: 1
                 }
@@ -1570,16 +1784,16 @@ ApplicationWindow {
 
             Button {
                 id: instructionsButton
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
-                    sourceSize.width: 16
-                    sourceSize.height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
+                    sourceSize.width: rootWindow.toolbarPx(16)
+                    sourceSize.height: rootWindow.toolbarPx(16)
                     fillMode: Image.PreserveAspectFit
                     source: {
                         var colorStr = instructionsButton.hovered ? "%23facc15" : "%23eab308";
@@ -1589,7 +1803,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: instructionsButton.pressed ? "#cc121214" : (instructionsButton.hovered ? "#3a4550" : "#1c242c")
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: instructionsButton.hovered ? "#facc15" : "#2a3540"
                     border.width: 1
                 }
@@ -1610,14 +1824,14 @@ ApplicationWindow {
                 id: systemStatsSwitch
                 checkable: true
                 checked: false
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Image {
                     anchors.centerIn: parent
-                    width: 16
-                    height: 16
+                    width: rootWindow.toolbarPx(16)
+                    height: rootWindow.toolbarPx(16)
                     source: {
                         var colorStr = systemStatsSwitch.pressed ? "%23ffffff" : (systemStatsSwitch.checked ? "%2300ff66" : (systemStatsSwitch.hovered ? "%23ffffff" : "%238898a6"));
                         return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='" + colorStr + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><line x1='18' y1='20' x2='18' y2='10'></line><line x1='12' y1='20' x2='12' y2='4'></line><line x1='6' y1='20' x2='6' y2='14'></line></svg>";
@@ -1626,7 +1840,7 @@ ApplicationWindow {
 
                 background: Rectangle {
                     color: systemStatsSwitch.pressed ? "#cc121214" : (systemStatsSwitch.checked ? "#cc004d1a" : (systemStatsSwitch.hovered ? "#3a4550" : "#1c242c"))
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: systemStatsSwitch.checked ? "#00ff66" : (systemStatsSwitch.hovered ? "#8898a6" : "#2a3540")
                     border.width: 1
                 }
@@ -1640,8 +1854,8 @@ ApplicationWindow {
             Button {
                 id: nvrStatusButton
                 visible: NvrStatusManager.monitoringEnabled && NvrStatusManager.hasConfiguredRecorders
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Item {
@@ -1651,9 +1865,9 @@ ApplicationWindow {
                     Rectangle {
                         id: pulseGlow
                         anchors.centerIn: parent
-                        width: 30
-                        height: 30
-                        radius: 15
+                        width: rootWindow.toolbarPx(30)
+                        height: rootWindow.toolbarPx(30)
+                        radius: rootWindow.toolbarPx(15)
                         color: "#ef4444"
                         opacity: 0.0
                         visible: NvrStatusManager.hasErrors
@@ -1677,9 +1891,9 @@ ApplicationWindow {
                     Rectangle {
                         id: pulseGlowInner
                         anchors.centerIn: parent
-                        width: 30
-                        height: 30
-                        radius: 15
+                        width: rootWindow.toolbarPx(30)
+                        height: rootWindow.toolbarPx(30)
+                        radius: rootWindow.toolbarPx(15)
                         color: "#ef4444"
                         opacity: 0.0
                         visible: NvrStatusManager.hasErrors
@@ -1701,10 +1915,10 @@ ApplicationWindow {
 
                     Image {
                         anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        sourceSize.width: 16
-                        sourceSize.height: 16
+                        width: rootWindow.toolbarPx(16)
+                        height: rootWindow.toolbarPx(16)
+                        sourceSize.width: rootWindow.toolbarPx(16)
+                        sourceSize.height: rootWindow.toolbarPx(16)
                         fillMode: Image.PreserveAspectFit
                         source: {
                             var colorStr = "%23121214";
@@ -1721,7 +1935,7 @@ ApplicationWindow {
                             return nvrStatusButton.pressed ? "#15803d" : (nvrStatusButton.hovered ? "#22c55e" : "#16a34a");
                         }
                     }
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: NvrStatusManager.hasErrors ? "#ef4444" : "#22c55e"
                     border.width: 1
                 }
@@ -1739,8 +1953,8 @@ ApplicationWindow {
             Button {
                 id: bgLogButton
                 visible: HikvisionEventLogger.backgroundMonitored
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+                Layout.preferredWidth: rootWindow.toolbarPx(30)
+                Layout.preferredHeight: rootWindow.toolbarPx(30)
                 Layout.alignment: Qt.AlignVCenter
 
                 contentItem: Item {
@@ -1748,9 +1962,9 @@ ApplicationWindow {
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 30
-                        height: 30
-                        radius: 15
+                        width: rootWindow.toolbarPx(30)
+                        height: rootWindow.toolbarPx(30)
+                        radius: rootWindow.toolbarPx(15)
                         color: "#ef4444"
                         opacity: 0.0
                         visible: HikvisionEventLogger.backgroundProblem
@@ -1771,9 +1985,9 @@ ApplicationWindow {
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 30
-                        height: 30
-                        radius: 15
+                        width: rootWindow.toolbarPx(30)
+                        height: rootWindow.toolbarPx(30)
+                        radius: rootWindow.toolbarPx(15)
                         color: "#ef4444"
                         opacity: 0.0
                         visible: HikvisionEventLogger.backgroundProblem
@@ -1794,10 +2008,10 @@ ApplicationWindow {
 
                     Image {
                         anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        sourceSize.width: 16
-                        sourceSize.height: 16
+                        width: rootWindow.toolbarPx(16)
+                        height: rootWindow.toolbarPx(16)
+                        sourceSize.width: rootWindow.toolbarPx(16)
+                        sourceSize.height: rootWindow.toolbarPx(16)
                         fillMode: Image.PreserveAspectFit
                         source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23121214' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='22 12 18 12 15 21 9 3 6 12 2 12'></polyline></svg>"
                     }
@@ -1807,7 +2021,7 @@ ApplicationWindow {
                     color: HikvisionEventLogger.backgroundProblem
                            ? (bgLogButton.pressed ? "#b91c1c" : (bgLogButton.hovered ? "#ef4444" : "#dc2626"))
                            : (bgLogButton.pressed ? "#15803d" : (bgLogButton.hovered ? "#22c55e" : "#16a34a"))
-                    radius: 15
+                    radius: rootWindow.toolbarPx(15)
                     border.color: HikvisionEventLogger.backgroundProblem ? "#ef4444" : "#22c55e"
                     border.width: 1
                 }
@@ -1823,28 +2037,28 @@ ApplicationWindow {
 
             Rectangle {
                 width: 1
-                height: 20
+                height: rootWindow.toolbarPx(20)
                 color: "#2a3540"
                 Layout.alignment: Qt.AlignVCenter
                 visible: nvrStatusButton.visible || bgLogButton.visible
             }
 
             RowLayout {
-                spacing: 4
+                spacing: rootWindow.toolbarPx(4)
 
                 Switch {
                     id: lockGridSwitch
                     checked: generalSettings.lockGridSize
 
-                    Layout.preferredHeight: 28
+                    Layout.preferredHeight: rootWindow.toolbarPx(28)
                     Layout.alignment: Qt.AlignVCenter
 
                     indicator: Rectangle {
-                        implicitWidth: 36
-                        implicitHeight: 18
+                        implicitWidth: rootWindow.toolbarPx(36)
+                        implicitHeight: rootWindow.toolbarPx(18)
                         x: lockGridSwitch.leftPadding
                         y: parent.height / 2 - height / 2
-                        radius: 9
+                        radius: rootWindow.toolbarPx(9)
                         color: lockGridSwitch.checked ? "#ff7a00" : "#1c242c"
                         border.color: lockGridSwitch.checked ? "#ff9e00" : "#2a3540"
                         border.width: 1
@@ -1852,9 +2066,9 @@ ApplicationWindow {
                         Rectangle {
                             x: lockGridSwitch.checked ? parent.width - width - 2 : 2
                             y: 2
-                            width: 14
-                            height: 14
-                            radius: 7
+                            width: rootWindow.toolbarPx(14)
+                            height: rootWindow.toolbarPx(14)
+                            radius: rootWindow.toolbarPx(7)
                             color: "white"
 
                             Behavior on x {
@@ -1875,7 +2089,7 @@ ApplicationWindow {
 
                 Rectangle {
                     width: 1
-                    height: 20
+                    height: rootWindow.toolbarPx(20)
                     color: "#2a3540"
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -1888,8 +2102,8 @@ ApplicationWindow {
                         text: gridSize + "x" + gridSize
                         enabled: !generalSettings.lockGridSize
 
-                        Layout.preferredWidth: 30
-                        Layout.preferredHeight: 30
+                        Layout.preferredWidth: rootWindow.toolbarPx(30)
+                        Layout.preferredHeight: rootWindow.toolbarPx(30)
 
                         // Highlight if this is the current active size!
                         property bool isActive: {
@@ -1902,7 +2116,7 @@ ApplicationWindow {
                         contentItem: Text {
                             text: gridBtn.text
                             font.bold: true
-                            font.pixelSize: 10
+                            font.pixelSize: rootWindow.toolbarPx(10)
                             color: gridBtn.enabled ? (gridBtn.isActive ? "white" : (gridBtn.hovered ? "#ffffff" : "#8898a6")) : "#555555"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -1910,7 +2124,7 @@ ApplicationWindow {
 
                         background: Rectangle {
                             color: gridBtn.isActive ? "#ff7a00" : (gridBtn.pressed ? "#cc121214" : (gridBtn.hovered ? "#3a4550" : "#1c242c"))
-                            radius: 15
+                            radius: rootWindow.toolbarPx(15)
                             border.color: gridBtn.isActive ? "#ff9e00" : (gridBtn.hovered ? "#8898a6" : "#2a3540")
                             border.width: 1
                             opacity: gridBtn.enabled ? 1.0 : 0.4
@@ -1925,16 +2139,16 @@ ApplicationWindow {
 
                 Button {
                     id: moreOptionsButton
-                    Layout.preferredWidth: 30
-                    Layout.preferredHeight: 30
+                    Layout.preferredWidth: rootWindow.toolbarPx(30)
+                    Layout.preferredHeight: rootWindow.toolbarPx(30)
                     Layout.alignment: Qt.AlignVCenter
 
                     contentItem: Image {
                         anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        sourceSize.width: 16
-                        sourceSize.height: 16
+                        width: rootWindow.toolbarPx(16)
+                        height: rootWindow.toolbarPx(16)
+                        sourceSize.width: rootWindow.toolbarPx(16)
+                        sourceSize.height: rootWindow.toolbarPx(16)
                         fillMode: Image.PreserveAspectFit
                         source: {
                             var colorStr = moreOptionsButton.hovered ? "white" : "%238898a6";
@@ -1944,7 +2158,7 @@ ApplicationWindow {
 
                     background: Rectangle {
                         color: moreOptionsButton.pressed ? "#cc121214" : (moreOptionsButton.hovered ? "#3a4550" : "#1c242c")
-                        radius: 15
+                        radius: rootWindow.toolbarPx(15)
                         border.color: moreOptionsButton.hovered ? "#ff9e00" : "#2a3540"
                         border.width: 1
                     }
@@ -1966,7 +2180,7 @@ ApplicationWindow {
 
             Rectangle {
                 width: 1
-                height: 20
+                height: rootWindow.toolbarPx(20)
                 color: "#2a3540"
                 Layout.alignment: Qt.AlignVCenter
                 Layout.leftMargin: 6
@@ -1976,7 +2190,7 @@ ApplicationWindow {
             Flickable {
                 id: layoutButtonFlick
                 Layout.fillWidth: true
-                Layout.preferredHeight: 36
+                Layout.preferredHeight: rootWindow.toolbarPx(36)
                 contentWidth: layoutButtonRow.implicitWidth
                 contentHeight: height
                 flickableDirection: Flickable.HorizontalFlick
@@ -1985,7 +2199,7 @@ ApplicationWindow {
 
                 Row {
                     id: layoutButtonRow
-                    spacing: 4
+                    spacing: rootWindow.toolbarPx(4)
                     height: parent.height
 
                     Repeater {
@@ -2001,10 +2215,10 @@ ApplicationWindow {
                                 return rootWindow.layoutDisplayName(layoutsCollectionModel, layoutIndex);
                             }
 
-                            height: 30
+                            height: rootWindow.toolbarPx(30)
                             anchors.verticalCenter: parent.verticalCenter
-                            leftPadding: 12
-                            rightPadding: 12
+                            leftPadding: rootWindow.toolbarPx(12)
+                            rightPadding: rootWindow.toolbarPx(12)
 
                             // Highlight if this is the currently active view!
                             property bool isActive: stackLayout.currentIndex === layoutIndex
@@ -2012,7 +2226,7 @@ ApplicationWindow {
                             contentItem: Text {
                                 text: viewBtn.text.toUpperCase()
                                 font.bold: true
-                                font.pixelSize: 10
+                                font.pixelSize: rootWindow.toolbarPx(10)
                                 color: viewBtn.isActive ? "#121214" : (viewBtn.hovered ? "#ffffff" : "#8898a6")
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
@@ -2020,7 +2234,7 @@ ApplicationWindow {
 
                             background: Rectangle {
                                 color: viewBtn.isActive ? "#00f5d4" : (viewBtn.pressed ? "#cc121214" : (viewBtn.hovered ? "#3a4550" : "#1c242c"))
-                                radius: 15
+                                radius: rootWindow.toolbarPx(15)
                                 border.color: viewBtn.isActive ? "#00f5d4" : (viewBtn.hovered ? "#8898a6" : "#2a3540")
                                 border.width: 1
                             }
@@ -2069,7 +2283,7 @@ ApplicationWindow {
         z: 100000 // On top of everything
 
         visible: nvrProblem || HikvisionEventLogger.backgroundProblem
-        opacity: (topToolBar.y < -12) ? 1.0 : 0.0
+        opacity: (topToolBar.y < -rootWindow.toolbarPx(12)) ? 1.0 : 0.0
         Behavior on opacity {
             NumberAnimation { duration: 200 }
         }
@@ -2096,14 +2310,14 @@ ApplicationWindow {
                 z: -1
 
                 SequentialAnimation on scale {
-                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -12)
+                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -rootWindow.toolbarPx(12))
                     loops: Animation.Infinite
                     PropertyAnimation { from: 1.0; to: 2.3; duration: 800; easing.type: Easing.OutQuad }
                     PropertyAnimation { from: 2.3; to: 1.0; duration: 800; easing.type: Easing.InQuad }
                 }
 
                 SequentialAnimation on opacity {
-                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -12)
+                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -rootWindow.toolbarPx(12))
                     loops: Animation.Infinite
                     PropertyAnimation { from: 0.85; to: 0.0; duration: 800; easing.type: Easing.OutQuad }
                     PropertyAnimation { from: 0.0; to: 0.85; duration: 800; easing.type: Easing.InQuad }
@@ -2120,14 +2334,14 @@ ApplicationWindow {
                 z: -2
 
                 SequentialAnimation on scale {
-                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -12)
+                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -rootWindow.toolbarPx(12))
                     loops: Animation.Infinite
                     PropertyAnimation { from: 1.0; to: 1.6; duration: 600; easing.type: Easing.OutQuad }
                     PropertyAnimation { from: 1.6; to: 1.0; duration: 600; easing.type: Easing.InQuad }
                 }
 
                 SequentialAnimation on opacity {
-                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -12)
+                    running: topEdgeErrorIndicator.visible && (topToolBar.y < -rootWindow.toolbarPx(12))
                     loops: Animation.Infinite
                     PropertyAnimation { from: 0.6; to: 0.1; duration: 600; easing.type: Easing.OutQuad }
                     PropertyAnimation { from: 0.1; to: 0.6; duration: 600; easing.type: Easing.InQuad }
@@ -2437,6 +2651,7 @@ ApplicationWindow {
         Context.writeSetting("", "talkGain", generalSettings.talkGain);
         Context.writeSetting("", "talkBoostDb", generalSettings.talkBoostDb);
         Context.writeSetting("", "auxiliaryLimit", generalSettings.auxiliaryLimit);
+        Context.writeSetting("", "auxiliaryScale", generalSettings.auxiliaryScale);
         Context.writeSetting("", "playbackOffsetSeconds", generalSettings.playbackOffsetSeconds);
         Context.writeSetting("", "playbackTimelineHours", generalSettings.playbackTimelineHours);
         Context.writeSetting("", "pauseLiveDuringPlayback", generalSettings.pauseLiveDuringPlayback);
@@ -2555,6 +2770,9 @@ ApplicationWindow {
         if (!Context.isAuxiliary && generalSettings.logDetectionEvents)
             backgroundServiceTimer.start();
         if (!Context.isAuxiliary) {
+            var overlaySaved = OverlayText.recoverEmptyList(Context.config.fileName, generalSettings.overlayText || "{}");
+            if (overlaySaved !== (generalSettings.overlayText || "{}"))
+                generalSettings.overlayText = overlaySaved;
             OverlayText.apply(generalSettings.overlayText || "{}");
         }
         if (generalSettings.checkSetupAtStart && !Context.isAuxiliary)

@@ -6,8 +6,8 @@ import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
 import CCTV_Viewer.Utils 1.0
 
-// A small window that shows the newest entries of the detection log (logs/Detection.log), 25 at a
-// time, with a button to load older ones. Opened from a tile's right-click menu.
+// A small window that shows the newest entries of the detection log (logs/Detection.log). It opens
+// with 10, and Load more adds 25 older ones. Opened from a tile's right-click menu.
 Window {
     id: logWin
 
@@ -23,6 +23,7 @@ Window {
     // The address of the camera the window was opened from, and its name for the checkbox text.
     property string cameraIp: ""
     property string cameraName: ""
+    readonly property int firstPage: 10
     readonly property int pageSize: 25
     readonly property int leadInSeconds: 10 // playback starts this long before the logged moment
 
@@ -114,7 +115,7 @@ Window {
 
     function load(reset) {
         var skip = reset ? 0 : logWin.entries.length;
-        var r = HikvisionEvents.readDetections(skip, logWin.pageSize, Context.configDirPath(),
+        var r = HikvisionEvents.readDetections(skip, reset ? logWin.firstPage : logWin.pageSize, Context.configDirPath(),
                                                onlyThisCamera.checked ? logWin.cameraIp : "",
                                                logWin.rangeFromMs(), logWin.rangeToMs(),
                                                logWin.hiddenList(logWin.targetChoices, logWin.shownTargets),
@@ -157,6 +158,15 @@ Window {
     }
 
     property string notice: ""
+    property bool loading: false
+    property bool ready: false
+
+    // The window is already on screen before the log is read, so the read does not hold the menu closed.
+    function loadWhenShown() {
+        logWin.loading = true;
+        logWin.ready = false;
+        showLoad.start();
+    }
 
     // Opens the viewer on the picture of the entry clicked. The pictures are in time order, oldest first, so the right
     // arrow always goes to the next newest picture and the left arrow to an older one (the list itself shows the newest
@@ -582,8 +592,20 @@ Window {
     }
 
     onVisibleChanged: {
-        if (visible) {
-            load(true);
+        if (visible)
+            logWin.loadWhenShown();
+    }
+
+    Timer {
+        id: showLoad
+        interval: 1
+        repeat: false
+        onTriggered: {
+            if (!logWin.visible)
+                return;
+            logWin.load(true);
+            logWin.loading = false;
+            logWin.ready = true;
             if (typeof rootWindow !== "undefined" && rootWindow)
                 HikvisionRecordingSpan.refresh(rootWindow.hikvisionRecordersJson || "[]");
         }
@@ -614,7 +636,7 @@ Window {
                 Layout.minimumWidth: 90
                 checked: logWin.cameraIp !== ""
                 text: qsTr("Only this camera") + (logWin.cameraName !== "" ? " (" + logWin.cameraName + ")" : "")
-                onToggled: logWin.load(true)
+                onToggled: if (logWin.ready) logWin.load(true)
                 contentItem: Text {
                     leftPadding: onlyThisCamera.indicator.width + 6
                     elide: Text.ElideRight
@@ -952,8 +974,8 @@ Window {
             }
 
             Text {
-                text: qsTr("%1 shown").arg(logWin.entries.length)
-                color: "#8899aa"
+                text: logWin.loading ? qsTr("Loading events") : qsTr("%1 shown").arg(logWin.entries.length)
+                color: logWin.loading ? "#00f5d4" : "#8899aa"
                 font.pixelSize: 12
             }
 

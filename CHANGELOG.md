@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+* **Video stream for every camera.** Settings > Camera Tools has **Choose streams...**. Auto, Main, Sub and Third, one mark per camera. A choice takes effect at once on every layout that shows that camera, and a camera added to a layout later keeps it. Auto uses the sub-stream on a multi-camera layout and the main stream when that tile is alone. Each of those layouts is listed under the camera with an **Exclude** tick: a ticked layout keeps the stream its tiles already have. Right-clicking a stream on a tile sets that tile and ticks Exclude for that layout. Clearing the tick puts the layout back on the camera's choice.
+* **Target boxes and VCA lines for every camera.** Settings > Camera Tools has **Choose cameras...**. Standalone cameras are listed first. A dual-lens camera is that camera and its two lenses, and a recorder is listed after them with one row per channel. Target Boxes and VCA Lines are two separated columns, and each tick lines up under its heading. A tick takes effect at once. The same ticks as the right-click menu. The camera is not changed.
+
+### Fixed
+* **Overlay text from MQTT keeps its saved list.** Opening that window was saving an empty list over the cameras already stored. A following start fills that empty list from the newest settings backup that still has entries. Clearing the list in the window stays cleared.
+* **Target boxes recover after the report clock runs ahead of the camera.** A later target report is drawn again, without reopening the connection. Rule lines were already unaffected. Changing layout no longer crashes while those connections are closing.
+
+### Changed
+* **Layout & Grid Tools explains its sections.** Window Division says to hold a square (or press F2) to type a custom size such as 2x3. Geometry Ratio, Grid Operations and Toolbar layouts have a short tip too.
+* **The auxiliary window toolbar is larger.** Its buttons and icons are one and a half times the main window's, so they stay easy to use at normal size on a 1080p screen.
+* **Auxiliary window size.** Settings > User Interface Settings chooses the scale of the next auxiliary window: same as the main window, Normal (1), Medium (1.5), or Large (2). Normal is the default, so a 1080p screen is not drawn at the 4K scale.
+* **Camera lists shade every other row.** Detection frame and event source, Video stream, and Target boxes and VCA lines use alternating row colors, so a tick lines up with its camera. A recorder name stays on its own bar.
+* **Detection frame and event source lists cameras in order.** Standalone cameras come first, then dual-lens cameras, each alphabetical. Recorders follow, alphabetical, with channels in channel order. The **All on** and **All off** above the list switch those standalone and dual-lens cameras. A recorder's own buttons switch that recorder. Saved HTTP and RTSP addresses are left out.
+* **Detection events opens with 10 entries.** **Load 25 more** still adds the next 25 older entries. The window opens at once and then reads the log. While that read runs it says **Loading events**.
+* **The tile right-click menu keeps every row in place.** Rows that do not apply to the tile are gray, including a camera action that is still being read. The menu no longer fades in.
+
+### Removed
+* **The camera burn-in for rule lines.** Camera Tools no longer asks a camera to draw its rule lines into the sub-stream. KVision draws the lines on the tile. A panoramic camera has no such switch.
+
 ## [3.9.0] - 22 Nov 2026
 
 ### Changed

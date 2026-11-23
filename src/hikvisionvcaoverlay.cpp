@@ -21,7 +21,7 @@ constexpr int kStreamSub = 1;       // the sub-stream carries the same smart dat
 
 // One SDK live connection. The SDK's data callback holds a raw pointer to it, so it is kept alive (and
 // told it is closed) until NET_DVR_StopRealPlay has returned; only then is the last reference dropped.
-struct HikvisionVcaOverlay::Link {
+struct HikvisionVcaOverlay::Link : std::enable_shared_from_this<HikvisionVcaOverlay::Link> {
     HikVcaDecoder decoder;
     std::atomic<bool> closed{false};
     std::atomic<bool> notifyPending{false};
@@ -42,6 +42,15 @@ HikvisionVcaOverlay::HikvisionVcaOverlay(QQuickItem *parent)
     m_retry.setInterval(kRetryMs);
     connect(&m_retry, &QTimer::timeout, this, [this]() { if (m_active && !m_link) start(); });
     m_frame.setInterval(40);
+    m_follow.setInterval(250);
+    connect(&m_follow, &QTimer::timeout, this, [this]() {
+        if (!m_showTargets || !m_link)
+            return;
+        const qint64 before = m_lastReportMs;
+        syncReportClock();
+        if (m_lastReportMs != before)
+            update();
+    });
     connect(&m_frame, &QTimer::timeout, this, [this]() {
         update();
         // The box only moves while it glides to the newest report; after that nothing changes until the next
@@ -77,7 +86,18 @@ void HikvisionVcaOverlay::setActive(bool v)
 }
 
 void HikvisionVcaOverlay::setShowRules(bool v) { if (m_showRules != v) { m_showRules = v; emit drawChanged(); update(); } }
-void HikvisionVcaOverlay::setShowTargets(bool v) { if (m_showTargets != v) { m_showTargets = v; emit drawChanged(); update(); } }
+void HikvisionVcaOverlay::setShowTargets(bool v)
+{
+    if (m_showTargets == v)
+        return;
+    m_showTargets = v;
+    emit drawChanged();
+    if (v && m_link)
+        m_follow.start();
+    else if (!v)
+        m_follow.stop();
+    update();
+}
 void HikvisionVcaOverlay::setVideoRect(const QRectF &r) { if (m_videoRect != r) { m_videoRect = r; emit drawChanged(); update(); } }
 
 void HikvisionVcaOverlay::setStatus(const QString &s)
@@ -185,6 +205,8 @@ void HikvisionVcaOverlay::start()
             if (ok) {
                 qInfo() << "[VcaLive]" << self->m_ip << "channel" << self->m_channel << "target boxes connected";
                 self->setStatus(QStringLiteral("on"));
+                if (self->m_showTargets)
+                    self->m_follow.start();
             } else {
                 self->m_link.reset();
                 self->setStatus(QStringLiteral("error"));
@@ -198,6 +220,7 @@ void HikvisionVcaOverlay::start()
 void HikvisionVcaOverlay::stop()
 {
     m_frame.stop();
+    m_follow.stop();
     if (!m_link)
         return;
     std::shared_ptr<Link> link = std::move(m_link);
@@ -234,8 +257,8 @@ void CALLBACK HikvisionVcaOverlay::dataCallBack(LONG handle, DWORD type, BYTE *b
     // would never paint until something else (a stream change) forced a redraw.
     if (link->decoder.latestMs() == before && link->decoder.rulesSerial() == rulesBefore)
         return;
-    // Only one repaint request is in flight at a time; it is cleared when the GUI thread has handled it,
-    // even if it found nothing to do, so a request can never stay "pending" for good.
+    // Only one repaint request is in flight at a time. The flag is always cleared once the GUI thread
+    // has seen the request, including when the overlay has since moved on to another connection.
     if (link->notifyPending.exchange(true))
         return;
     // The callback cannot outlive the link: stop() keeps it until NET_DVR_StopRealPlay has returned. The
@@ -246,33 +269,44 @@ void CALLBACK HikvisionVcaOverlay::dataCallBack(LONG handle, DWORD type, BYTE *b
         std::lock_guard<std::mutex> lock(link->ownerMutex);
         owner = link->owner;
     }
+    // A layout change can free this connection before the GUI thread runs the queued update. Hold a
+    // reference for that update. The overlay's own pointer is only read on the GUI thread.
+    std::shared_ptr<Link> keep = link->shared_from_this();
     if (!owner) {
-        link->notifyPending = false;
+        keep->notifyPending = false;
         return;
     }
-    QMetaObject::invokeMethod(owner.data(), [owner, link]() {
-        // The link is only touched while it is the overlay's current one (which keeps it alive); a replaced
-        // link is never touched again, so its flag does not matter.
-        if (owner && owner->m_link.get() == link) {
-            link->notifyPending = false;
+    const bool queued = QMetaObject::invokeMethod(owner.data(), [owner, keep]() {
+        keep->notifyPending = false;
+        if (owner && owner->m_link == keep)
             owner->onData();
-        }
     }, Qt::QueuedConnection);
+    if (!queued)
+        keep->notifyPending = false;
+}
+
+void HikvisionVcaOverlay::syncReportClock()
+{
+    if (!m_link)
+        return;
+    const qint64 newest = m_link->decoder.latestMs();
+    // Equal means the clock already matches. A newer report moves it forward. A report older than the
+    // clock means the clock ran ahead (one bad stamp, then the camera continued); follow the camera.
+    if (newest < 0 || newest == m_lastReportMs)
+        return;
+    if (m_lastReportMs >= 0 && newest > m_lastReportMs)
+        m_reportGapMs = qBound<qint64>(60, newest - m_lastReportMs, 1000);
+    m_lastReportMs = newest;
+    m_sinceReport.restart();
+    if (!m_frame.isActive())
+        m_frame.start();
 }
 
 void HikvisionVcaOverlay::onData()
 {
     if (!m_link)
         return;
-    const qint64 newest = m_link->decoder.latestMs();
-    if (newest != m_lastReportMs) {
-        if (m_lastReportMs >= 0 && newest > m_lastReportMs)
-            m_reportGapMs = qBound<qint64>(60, newest - m_lastReportMs, 1000);
-        m_lastReportMs = newest;
-        m_sinceReport.restart();
-        if (!m_frame.isActive())
-            m_frame.start();
-    }
+    syncReportClock();
     update();
 }
 

@@ -220,6 +220,9 @@ void ViewportsLayoutModel::fromJSValue(const QVariantMap &model)
     if (model.contains("uid") && LayoutBackups::validUid(model.value("uid").toString())) {
         setUid(model.value("uid").toString());
     }
+    if (model.contains("streamExcludes")) {
+        setStreamExcludes(model.value("streamExcludes").toString());
+    }
 
     if (model.contains("size")) {
         val = model.value("size");
@@ -292,6 +295,7 @@ QVariantMap ViewportsLayoutModel::toJSValue() const
     model["name"] = name();
     model["visible"] = visible();
     model["uid"] = uid();
+    model["streamExcludes"] = streamExcludes();
     model["items"] = items;
 
     return model;

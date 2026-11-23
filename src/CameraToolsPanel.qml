@@ -474,37 +474,10 @@ ColumnLayout {
         }
     }
 
-    // ── Rule lines on the video stream: the camera's own switch (web page: VCA > Smart Event > General Settings > Metadata) ──
-    property string ruleState: ""      // on, off, unavailable, error, or "" when not read yet
-    property string ruleMessage: ""
-    property string ruleForIp: ""
-    Connections {
-        target: HikvisionBackup
-        function onRuleLinesResult(ip, state, message) {
-            rootPanel.ruleForIp = ip;
-            rootPanel.ruleState = state;
-            rootPanel.ruleMessage = message;
-        }
-        function onRuleLinesAllProgress(name, done, total) {
-            rootWindow.showNotice("Rule lines on the stream\n" + done + " of " + total + ": " + name, "#00f5d4", 0);
-        }
-        function onRuleLinesAllFinished(summary, ok) {
-            rootWindow.showNotice(summary, ok ? "#00ff66" : "#ff3333", ok ? 10000 : 20000);
-            rootPanel.ruleState = "";
-            rootPanel.ruleMessage = "";
-        }
-    }
-
-    ConfirmDialog {
-        id: ruleAllConfirm
-        property bool turnOn: true
-        title: turnOn ? "Turn on rule lines for all cameras" : "Turn off rule lines for all cameras"
-        iconSource: "qrc:/images/icon-warning.svg"
-        message: (turnOn ? "Make every camera in the list draw its rule lines on the video stream?"
-                         : "Make every camera in the list stop drawing its rule lines on the video stream?")
-                 + "\n\n" + rootPanel.backupCameraModel.length + " camera(s) will be asked, one after the other, each on its own address. "
-                 + "A camera without the switch is skipped. Nothing else on a camera is changed."
-        onAccepted: HikvisionBackup.setRuleLinesAll(turnOn)
+    // ── On-screen target boxes and VCA lines, drawn by KVision. The camera is not changed. ──
+    Component {
+        id: vcaOverlayComponent
+        VcaOverlayWindow {}
     }
 
     Frame {
@@ -521,250 +494,112 @@ ColumnLayout {
             spacing: 8
 
             Text {
-                text: "Rule lines on the video stream"
+                text: "Target boxes and VCA lines"
                 color: "white"
                 font.pixelSize: 13
                 font.bold: true
                 Layout.fillWidth: true
             }
 
-            ComboBox {
-                id: ruleCameraCombo
-                Layout.fillWidth: true
-                enabled: !HikvisionBackup.ruleBusy
-                model: rootPanel.backupCameraModel
-                textRole: "name"
-                onCurrentIndexChanged: {
-                    rootPanel.ruleState = "";
-                    rootPanel.ruleMessage = "";
-                }
-
-                background: Rectangle {
-                    implicitHeight: 34
-                    color: "#1b2733"
-                    border.color: ruleCameraCombo.popup.visible || ruleCameraCombo.activeFocus ? "#ff7a00" : (ruleCameraCombo.hovered ? "#ff7a00" : "#5a6b7b")
-                    border.width: 1
-                    radius: 4
-                }
-                indicator: Text {
-                    x: ruleCameraCombo.width - width - 10
-                    y: (ruleCameraCombo.height - height) / 2
-                    text: "\u25BE"
-                    color: "#ff7a00"
-                    font.pixelSize: 18
-                }
-                contentItem: Text {
-                    text: ruleCameraCombo.displayText
-                    color: ruleCameraCombo.enabled ? "white" : "#8898a6"
-                    font.pixelSize: 11
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: 10
-                    rightPadding: 28
-                    elide: Text.ElideRight
-                }
-                delegate: ItemDelegate {
-                    width: ruleCameraCombo.width
-                    height: 32
-                    contentItem: Text {
-                        text: modelData.name + "  (" + modelData.ip + ")"
-                        color: hovered ? "#ff7a00" : "white"
-                        font.pixelSize: 11
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                    }
-                    background: Rectangle {
-                        color: hovered ? "#2a3540" : "transparent"
-                        radius: 4
-                    }
-                }
-                popup: Popup {
-                    y: ruleCameraCombo.height + 2
-                    width: ruleCameraCombo.width
-                    implicitHeight: Math.min(320, ruleCameraCombo.popup.visible ? contentItem.implicitHeight : 0)
-                    padding: 4
-                    contentItem: ListView {
-                        clip: true
-                        implicitHeight: contentHeight
-                        model: ruleCameraCombo.popup.visible ? ruleCameraCombo.delegateModel : null
-                        currentIndex: ruleCameraCombo.highlightedIndex
-                    }
-                    background: Rectangle {
-                        color: "#0f151b"
-                        border.color: "#ff7a00"
-                        border.width: 1
-                        radius: 6
-                    }
-                }
-            }
-
             Text {
-                property var sel: ruleCameraCombo.currentIndex >= 0 ? rootPanel.backupCameraModel[ruleCameraCombo.currentIndex] : null
-                text: {
-                    if (HikvisionBackup.ruleBusy)
-                        return "Asking the camera...";
-                    if (!sel)
-                        return "No camera to choose.";
-                    if (rootPanel.ruleForIp !== sel.ip || rootPanel.ruleState === "")
-                        return "Not read yet. Press Check to see what this camera is set to.";
-                    if (rootPanel.ruleState === "on")
-                        return "ON: this camera draws its rule lines and targets on the stream. " + rootPanel.ruleMessage + ".";
-                    if (rootPanel.ruleState === "off")
-                        return "OFF: the stream is clean. " + rootPanel.ruleMessage + ".";
-                    if (rootPanel.ruleState === "unavailable")
-                        return "Not available: " + rootPanel.ruleMessage + ".";
-                    return "Problem: " + rootPanel.ruleMessage + ".";
-                }
-                color: (rootPanel.ruleState === "on") ? "#00ff66" : ((rootPanel.ruleState === "error") ? "#ff6666" : "#8898a6")
+                text: "KVision draws these on the tile from the camera's smart data. A tick takes effect at once. The camera is not changed."
+                color: "#8898a6"
                 font.pixelSize: 11
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Button {
-                    id: ruleCheckBtn
-                    text: "Check"
-                    enabled: !HikvisionBackup.ruleBusy && ruleCameraCombo.currentIndex >= 0
-                    contentItem: Text {
-                        text: ruleCheckBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleCheckBtn.pressed ? "#303a46" : (ruleCheckBtn.hovered ? "#3a4550" : "#2a3540")
-                        border.color: "#00f5d4"
-                        radius: 4
-                    }
-                    onClicked: HikvisionBackup.checkRuleLines(rootPanel.backupCameraModel[ruleCameraCombo.currentIndex].ip)
+            Button {
+                id: vcaChooseBtn
+                text: "Choose cameras..."
+                contentItem: Text {
+                    text: vcaChooseBtn.text
+                    color: "white"
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 10
                 }
-
-                Button {
-                    id: ruleOnBtn
-                    text: "Turn on"
-                    enabled: !HikvisionBackup.ruleBusy && ruleCameraCombo.currentIndex >= 0
-                    contentItem: Text {
-                        text: ruleOnBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleOnBtn.pressed ? "#0a8f4a" : (ruleOnBtn.hovered ? "#14a24c" : "#118a41")
-                        radius: 4
-                    }
-                    onClicked: HikvisionBackup.setRuleLines(rootPanel.backupCameraModel[ruleCameraCombo.currentIndex].ip, true)
+                background: Rectangle {
+                    color: vcaChooseBtn.pressed ? "#303a46" : (vcaChooseBtn.hovered ? "#3a4550" : "#2a3540")
+                    border.color: "#00f5d4"
+                    radius: 4
                 }
-
-                Button {
-                    id: ruleOffBtn
-                    text: "Turn off"
-                    enabled: !HikvisionBackup.ruleBusy && ruleCameraCombo.currentIndex >= 0
-                    contentItem: Text {
-                        text: ruleOffBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleOffBtn.pressed ? "#b01c18" : (ruleOffBtn.hovered ? "#e0241f" : "#c9201b")
-                        radius: 4
-                    }
-                    onClicked: HikvisionBackup.setRuleLines(rootPanel.backupCameraModel[ruleCameraCombo.currentIndex].ip, false)
+                onClicked: {
+                    var w = vcaOverlayComponent.createObject(rootWindow);
+                    if (w)
+                        w.show();
                 }
+                ToolTip.delay: Compact.toolTipDelay
+                ToolTip.timeout: Compact.toolTipTimeout
+                ToolTip.visible: vcaChooseBtn.hovered
+                ToolTip.text: qsTr("Tick the cameras that show target boxes and the cameras that show VCA lines. The same ticks as the right-click menu.")
             }
+        }
+    }
 
-            RowLayout {
+    // ── Which picture a camera's tiles use. Written onto every layout. ──
+    Component {
+        id: streamSourceComponent
+        StreamSourceWindow {}
+    }
+
+    Frame {
+        Layout.fillWidth: true
+        background: Rectangle {
+            color: "#1c242c"
+            radius: 6
+            border.color: "#2a3540"
+            border.width: 1
+        }
+
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+
+            Text {
+                text: "Video stream"
+                color: "white"
+                font.pixelSize: 13
+                font.bold: true
                 Layout.fillWidth: true
-                spacing: 8
-
-                Button {
-                    id: ruleAllCheckBtn
-                    text: "Check all"
-                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0
-                    contentItem: Text {
-                        text: ruleAllCheckBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleAllCheckBtn.pressed ? "#303a46" : (ruleAllCheckBtn.hovered ? "#3a4550" : "#2a3540")
-                        border.color: "#00f5d4"
-                        radius: 4
-                    }
-                    onClicked: HikvisionBackup.checkRuleLinesAll()
-                }
-
-                Button {
-                    id: ruleAllOnBtn
-                    text: "Turn on all"
-                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0
-                    contentItem: Text {
-                        text: ruleAllOnBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleAllOnBtn.pressed ? "#0a8f4a" : (ruleAllOnBtn.hovered ? "#14a24c" : "#118a41")
-                        radius: 4
-                    }
-                    onClicked: { ruleAllConfirm.turnOn = true; ruleAllConfirm.open() }
-                }
-
-                Button {
-                    id: ruleAllOffBtn
-                    text: "Turn off all"
-                    enabled: !HikvisionBackup.ruleBusy && rootPanel.backupCameraModel.length > 0
-                    contentItem: Text {
-                        text: ruleAllOffBtn.text
-                        color: "white"
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: 10
-                        rightPadding: 10
-                    }
-                    background: Rectangle {
-                        color: ruleAllOffBtn.pressed ? "#b01c18" : (ruleAllOffBtn.hovered ? "#e0241f" : "#c9201b")
-                        radius: 4
-                    }
-                    onClicked: { ruleAllConfirm.turnOn = false; ruleAllConfirm.open() }
-                }
             }
 
             Text {
-                text: "Note: the lines are drawn on the camera's SUB-stream only (checked on a G3: the sub-stream had them, the main stream did not). "
-                      + "A tile shows them only while it plays the sub-stream, which KVision uses for small tiles; a large tile on the main stream, "
-                      + "and any recording of the main stream, will not have them. "
-                      + "Some cameras can draw the lines and boxes of their smart-event rules (line crossing, intrusion, region) on the video "
-                      + "they send, including the sub-stream that KVision's smaller tiles use. This is the camera's own switch (in its web "
-                      + "page: VCA > Smart Event > General Settings > Metadata > Enable Stream Rule and Sub-Stream). It is read first, only "
-                      + "that switch is changed, and the camera is asked again to confirm. A camera without the switch says so. It uses each "
-                      + "camera's own address and saved login, never the recorder's, and a refused login is not tried again."
+                text: "Choose Auto, Main, Sub or Third for each camera. Each layout that shows it is listed under it, and Exclude leaves that layout as it is."
                 color: "#8898a6"
-                font.pixelSize: 9
+                font.pixelSize: 11
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
+            }
+
+            Button {
+                id: streamChooseBtn
+                text: "Choose streams..."
+                contentItem: Text {
+                    text: streamChooseBtn.text
+                    color: "white"
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 10
+                    rightPadding: 10
+                }
+                background: Rectangle {
+                    color: streamChooseBtn.pressed ? "#303a46" : (streamChooseBtn.hovered ? "#3a4550" : "#2a3540")
+                    border.color: "#00f5d4"
+                    radius: 4
+                }
+                onClicked: {
+                    var w = streamSourceComponent.createObject(rootWindow);
+                    if (w)
+                        w.show();
+                }
+                ToolTip.delay: Compact.toolTipDelay
+                ToolTip.timeout: Compact.toolTipTimeout
+                ToolTip.visible: streamChooseBtn.hovered
+                ToolTip.text: qsTr("Set the picture each camera's tiles use. The same choice in every layout.")
             }
         }
     }

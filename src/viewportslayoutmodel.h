@@ -56,6 +56,9 @@ class ViewportsLayoutModel : public QAbstractListModel
     // does not lose them.
     QMLAV_PROPERTY(QString, uid, setUid, uidChanged);
     QMLAV_PROPERTY(bool, visible, setVisible, visibleChanged) = true;
+    // JSON array of "ip#channel" whose tiles on this layout keep their own stream
+    // instead of following the camera choice in Camera Tools.
+    QMLAV_PROPERTY(QString, streamExcludes, setStreamExcludes, streamExcludesChanged) = "";
 
 public:
     explicit ViewportsLayoutModel(QObject *parent = nullptr);

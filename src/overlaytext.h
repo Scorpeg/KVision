@@ -29,6 +29,9 @@ public:
 
     // The settings as the current JSON form, whatever form they were saved in. Empty or broken text gives an empty list.
     Q_INVOKABLE static QString migrate(const QString &json);
+    // When the saved list is empty, the newest config backup that still has entries is written back and returned.
+    // An empty list the window saved on purpose (overlayTextUserCleared) is left empty.
+    Q_INVOKABLE static QString recoverEmptyList(const QString &configFile, const QString &current);
     // Which camera and text overlay an entry is for. Two entries with the same key would overwrite each other.
     Q_INVOKABLE static QString entryKey(const QVariantMap &entry);
 
