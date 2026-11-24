@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
 import CCTV_Viewer.Hikvision 1.0
+import CCTV_Viewer.Utils 1.0
 
 // Settings for putting values from an MQTT broker (an outside temperature, say) into a camera's on-screen text overlays,
 // refreshed every few minutes. Each entry is one topic going into one text overlay of one camera, so the list can hold as
@@ -188,7 +189,8 @@ Window {
                 continue;
             if (cams.length <= 2) {
                 // A camera with its own address is written to directly.
-                out.push({ "label": (rec.name || recIp) + "  (" + recIp + ")", "ip": recIp, "channel": 1, "httpPort": http, "user": rec.username, "pass": rec.password });
+                out.push({ "label": (rec.name || recIp) + "  (" + recIp + ")", "ip": recIp, "channel": 1, "httpPort": http,
+                           "user": rec.username, "pass": rec.password, "standalone": true, "sortChannel": 0 });
                 continue;
             }
             // A recorder: each channel is a camera of its own. The recorder says which address that camera has, and the
@@ -200,9 +202,15 @@ Window {
                 if (!p || !p.ip || p.ip === recIp)
                     continue;
                 out.push({ "label": (rec.name || recIp) + " Ch. " + ch + "  " + (cams[j].customName || cams[j].name || ("Camera " + ch)) + "  (" + p.ip + ")",
-                           "ip": p.ip, "channel": p.channel > 0 ? p.channel : 1, "httpPort": 80, "user": rec.username, "pass": rec.password });
+                           "ip": p.ip, "channel": p.channel > 0 ? p.channel : 1, "httpPort": 80, "user": rec.username, "pass": rec.password,
+                           "standalone": false, "sortChannel": isNaN(ch) ? 0 : ch });
             }
         }
+        out.sort(function(a, b) {
+            return Utils.compareCameraChoice(
+                { standalone: a.standalone, name: a.label, channel: a.sortChannel, ip: a.ip },
+                { standalone: b.standalone, name: b.label, channel: b.sortChannel, ip: b.ip });
+        });
         var chosen = cameraBox.currentIndex >= 0 ? win.cameras[cameraBox.currentIndex] : null;
         win.cameras = out;
         if (chosen) {

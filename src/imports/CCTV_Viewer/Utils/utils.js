@@ -218,6 +218,118 @@ function log_error(message) {
     console.log("ERROR: " + message);
 }
 
+function compareText(a, b) {
+    var an = String(a || "").toLowerCase();
+    var bn = String(b || "").toLowerCase();
+    if (an < bn)
+        return -1;
+    if (an > bn)
+        return 1;
+    return 0;
+}
+
+function channelNumber(cam, fallback) {
+    var c = parseInt(cam && (cam.channelId !== undefined ? cam.channelId : cam.channel));
+    if (isNaN(c))
+        c = parseInt(fallback);
+    return isNaN(c) ? 0 : c;
+}
+
+// A recorder with one or two channels is a camera on its own. A dual-lens camera is still one device.
+// A pasted stream is listed with the standalone cameras. More than two channels is an NVR.
+function isStandaloneRecorder(rec) {
+    if (!rec)
+        return false;
+    if (rec.kind === "rtsp" || rec.streamUrl)
+        return true;
+    var cams = rec.cameras || [];
+    return cams.length <= 2;
+}
+
+// Each item: { standalone, name, channel, ip }.
+// Standalone cameras first, A–Z. NVR cameras after them, by channel number.
+function compareCameraChoice(a, b) {
+    var as = !!(a && a.standalone);
+    var bs = !!(b && b.standalone);
+    if (as !== bs)
+        return as ? -1 : 1;
+    if (as) {
+        var n = compareText(a && a.name, b && b.name);
+        if (n !== 0)
+            return n;
+        return compareText(a && a.ip, b && b.ip);
+    }
+    var ac = parseInt(a && a.channel);
+    var bc = parseInt(b && b.channel);
+    if (isNaN(ac))
+        ac = 0;
+    if (isNaN(bc))
+        bc = 0;
+    if (ac !== bc)
+        return ac - bc;
+    var n2 = compareText(a && a.name, b && b.name);
+    if (n2 !== 0)
+        return n2;
+    return compareText(a && a.ip, b && b.ip);
+}
+
+function sortCameraChoices(list) {
+    var copy = [];
+    var src = list || [];
+    for (var i = 0; i < src.length; ++i)
+        copy.push(src[i]);
+    copy.sort(compareCameraChoice);
+    return copy;
+}
+
+// A new array, ordered by channel number. The array passed in is left as it is.
+function sortByChannel(cams) {
+    var copy = [];
+    var src = cams || [];
+    for (var i = 0; i < src.length; ++i)
+        copy.push(src[i]);
+    copy.sort(function(a, b) {
+        var ac = channelNumber(a, 0);
+        var bc = channelNumber(b, 0);
+        if (ac !== bc)
+            return ac - bc;
+        return compareText((a && (a.customName || a.name)) || "", (b && (b.customName || b.name)) || "");
+    });
+    return copy;
+}
+
+// Standalone cameras and pasted streams first, A–Z, then NVRs A–Z.
+// Each recorder's cameras are copied into channel order. The saved list is not changed.
+function sortRecordersForPicker(recs) {
+    var standalone = [];
+    var nvrs = [];
+    var src = recs || [];
+    for (var i = 0; i < src.length; ++i) {
+        var rec = src[i];
+        if (!rec)
+            continue;
+        var copy = {};
+        for (var k in rec) {
+            if (Object.prototype.hasOwnProperty.call(rec, k))
+                copy[k] = rec[k];
+        }
+        copy.cameras = sortByChannel(rec.cameras || []);
+        if (isStandaloneRecorder(rec))
+            standalone.push(copy);
+        else
+            nvrs.push(copy);
+    }
+    function byRecorderName(a, b) {
+        var n = compareText(a.name || a.ip, b.name || b.ip);
+        if (n !== 0)
+            return n;
+        return compareText(a.ip, b.ip);
+    }
+    standalone.sort(byRecorderName);
+    nvrs.sort(byRecorderName);
+    return standalone.concat(nvrs);
+}
+
 function cleanMediaName(name) {
     var cleaned = String(name || "");
     cleaned = cleaned.replace(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g, "");

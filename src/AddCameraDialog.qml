@@ -76,6 +76,7 @@ Window {
         }
         if (!recorders)
             recorders = [];
+        recorders = Utils.sortRecordersForPicker(recorders);
 
         for (var i = 0; i < recorders.length; ++i) {
             var rec = recorders[i];

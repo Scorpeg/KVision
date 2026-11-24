@@ -3,6 +3,7 @@ import QtQuick.Window 2.11
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
+import CCTV_Viewer.Utils 1.0
 
 // One place to switch on-screen target boxes and VCA lines for every camera.
 // It writes the same lists the tile's right-click items write, so the two always agree.
@@ -76,32 +77,34 @@ Window {
             else
                 singles.push(item);
         }
-        singles.sort(win.byName);
-        duals.sort(win.byName);
+        var own = singles.concat(duals);
+        own.sort(win.byName);
         nvrs.sort(win.byName);
 
         var out = [];
-        for (var s = 0; s < singles.length; ++s) {
-            var one = singles[s];
-            var ch = win.channelOf(one.cams[0], 1);
-            out.push({ kind: "camera", key: one.ip + "#" + ch, group: one.ip, label: one.name });
-        }
-        for (var d = 0; d < duals.length; ++d) {
-            var two = duals[d];
-            out.push({ kind: "dual", label: two.name, group: two.ip });
-            for (var lens = 0; lens < 2; ++lens) {
-                var lc = win.channelOf(two.cams[lens], lens + 1);
-                out.push({ kind: "lens", key: two.ip + "#" + lc, group: two.ip,
-                           label: win.camLabel(two.cams[lens], qsTr("Lens %1").arg(lens + 1)) });
+        for (var s = 0; s < own.length; ++s) {
+            var dev = own[s];
+            if ((dev.cams || []).length === 2) {
+                out.push({ kind: "dual", label: dev.name, group: dev.ip });
+                var lenses = Utils.sortByChannel(dev.cams);
+                for (var lens = 0; lens < lenses.length; ++lens) {
+                    var lc = win.channelOf(lenses[lens], lens + 1);
+                    out.push({ kind: "lens", key: dev.ip + "#" + lc, group: dev.ip,
+                               label: win.camLabel(lenses[lens], qsTr("Lens %1").arg(lens + 1)) });
+                }
+            } else {
+                var ch = win.channelOf(dev.cams[0], 1);
+                out.push({ kind: "camera", key: dev.ip + "#" + ch, group: dev.ip, label: dev.name });
             }
         }
         for (var n = 0; n < nvrs.length; ++n) {
             var nvr = nvrs[n];
             out.push({ kind: "nvr", label: nvr.name, group: nvr.ip });
-            for (var j = 0; j < nvr.cams.length; ++j) {
-                var nc = win.channelOf(nvr.cams[j], j + 1);
+            var channels = Utils.sortByChannel(nvr.cams);
+            for (var j = 0; j < channels.length; ++j) {
+                var nc = win.channelOf(channels[j], j + 1);
                 out.push({ kind: "channel", key: nvr.ip + "#" + nc, group: nvr.ip,
-                           label: qsTr("Ch. %1  %2").arg(nc).arg(win.camLabel(nvr.cams[j], qsTr("Camera %1").arg(nc))) });
+                           label: qsTr("Ch. %1  %2").arg(nc).arg(win.camLabel(channels[j], qsTr("Camera %1").arg(nc))) });
             }
         }
         win.rows = out;

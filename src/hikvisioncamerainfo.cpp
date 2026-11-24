@@ -31,6 +31,41 @@ bool recIsSelf(const QString &camIp, const QString &recIp)
     return camIp == recIp;
 }
 
+int lowestChannel(const HikvisionCameraInfo::Cam &cam)
+{
+    int lowest = 0;
+    for (int ch : cam.channels) {
+        if (ch <= 0)
+            continue;
+        if (lowest <= 0 || ch < lowest)
+            lowest = ch;
+    }
+    return lowest;
+}
+
+// Standalone cameras first, A–Z. NVR cameras after them, by channel number.
+bool cameraChoiceLess(const HikvisionCameraInfo::Cam &a, const HikvisionCameraInfo::Cam &b)
+{
+    const bool aOwn = a.recIp.isEmpty();
+    const bool bOwn = b.recIp.isEmpty();
+    if (aOwn != bOwn)
+        return aOwn;
+    if (aOwn) {
+        const int n = a.name.compare(b.name, Qt::CaseInsensitive);
+        if (n != 0)
+            return n < 0;
+        return a.ip < b.ip;
+    }
+    const int ac = lowestChannel(a);
+    const int bc = lowestChannel(b);
+    if (ac != bc)
+        return ac < bc;
+    const int n = a.name.compare(b.name, Qt::CaseInsensitive);
+    if (n != 0)
+        return n < 0;
+    return a.ip < b.ip;
+}
+
 // Bumped when a read should stop. Each worker remembers the value from when it started, so a newer
 // read is not cancelled by the stop that ended the previous one.
 std::atomic<int> g_readGen{0};
@@ -370,9 +405,13 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                     return;
                 if (byIp.contains(ip)) { // a camera with two lenses sits on two recorder channels
                     if (channel > 0 && !recIsSelf(ip, recIp)) {
-                        byIp[ip].channels << channel;
-                        byIp[ip].chanNames.insert(channel, name);
-                        rememberLens(byIp[ip], local, channel, name);
+                        Cam &have = byIp[ip];
+                        have.channels << channel;
+                        have.chanNames.insert(channel, name);
+                        rememberLens(have, local, channel, name);
+                        // The row is one camera. Show the lower recorder channel.
+                        if (channel == lowestChannel(have))
+                            have.name = name;
                     }
                     return;
                 }
@@ -430,7 +469,8 @@ void HikvisionCameraInfo::startLoad(const QByteArray &json, const QString &confi
                 add(proxyCam.value(QStringLiteral("ip")).toString(), 80, QStringLiteral("%1 Ch.%2 %3").arg(recName).arg(ch).arg(nm), ch, local > 0 ? local : 1);
             }
         }
-        const QList<Cam> found = byIp.values();
+        QList<Cam> found = byIp.values();
+        std::sort(found.begin(), found.end(), cameraChoiceLess);
         QVariantList out;
         for (const Cam &c : found)
             out.append(QVariantMap{{QStringLiteral("name"), c.name}, {QStringLiteral("ip"), c.ip}, {QStringLiteral("user"), c.user}});

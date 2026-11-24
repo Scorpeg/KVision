@@ -3,6 +3,7 @@ import QtQuick.Window 2.11
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
+import CCTV_Viewer.Utils 1.0
 
 // One place to switch the detection frame on or off for every camera, instead of right-clicking each tile.
 // It writes the same two lists the tile's right-click item writes (targetOffCameras for cameras with their own
@@ -60,27 +61,17 @@ Window {
             else
                 singles.push(item);
         }
-        singles.sort(win.byName);
-        duals.sort(win.byName);
+        var own = singles.concat(duals);
+        own.sort(win.byName);
         nvrs.sort(win.byName);
 
         var out = [];
-        // A camera with its own connection is one box. Standalone cameras come first, then dual-lens cameras.
-        function pushOwn(group) {
-            for (var g = 0; g < group.length; ++g)
-                out.push({ header: false, standalone: true, key: group[g].ip, label: group[g].name, group: group[g].ip });
-        }
-        pushOwn(singles);
-        pushOwn(duals);
+        // A camera with its own connection is one box, dual-lens included, in name order.
+        for (var g = 0; g < own.length; ++g)
+            out.push({ header: false, standalone: true, key: own[g].ip, label: own[g].name, group: own[g].ip });
         for (var n = 0; n < nvrs.length; ++n) {
             var nvr = nvrs[n];
-            var channels = nvr.cams.slice().sort(function(a, b) {
-                var ac = parseInt(a.channelId);
-                var bc = parseInt(b.channelId);
-                if (isNaN(ac)) ac = 0;
-                if (isNaN(bc)) bc = 0;
-                return ac - bc;
-            });
+            var channels = Utils.sortByChannel(nvr.cams);
             out.push({ header: true, label: nvr.name, group: nvr.ip });
             for (var j = 0; j < channels.length; ++j) {
                 var ch = parseInt(channels[j].channelId);

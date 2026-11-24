@@ -21,6 +21,7 @@
 #include <QSettings>
 #include <QTextStream>
 #include <QThread>
+#include <algorithm>
 
 namespace {
 // The key every export uses. Never change it: a backup can only be read back with the key that made it.
@@ -37,6 +38,25 @@ QString safeName(const QString &s)
     QString r = s;
     r.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("_"));
     return r.left(60);
+}
+
+// Standalone cameras first, A–Z. NVR cameras after them, by channel number.
+bool cameraChoiceLess(const HikvisionBackup::Cam &a, const HikvisionBackup::Cam &b)
+{
+    if (a.standalone != b.standalone)
+        return a.standalone;
+    if (a.standalone) {
+        const int n = a.name.compare(b.name, Qt::CaseInsensitive);
+        if (n != 0)
+            return n < 0;
+        return a.ip < b.ip;
+    }
+    if (a.channel != b.channel)
+        return a.channel < b.channel;
+    const int n = a.name.compare(b.name, Qt::CaseInsensitive);
+    if (n != 0)
+        return n < 0;
+    return a.ip < b.ip;
 }
 
 // GET a URL with curl (the same way the rest of the program talks to cameras). The body goes to outFile when
@@ -915,7 +935,7 @@ void HikvisionBackup::startLoad(const QByteArray &json, const QString &configPat
             return true;
         };
 
-        QMap<QString, Cam> byIp; // one entry per device, in address order
+        QMap<QString, Cam> byIp; // one entry per device; ordered after the list is complete
         const QJsonArray list = QJsonDocument::fromJson(json).array();
         for (const QJsonValue &rv : list) {
             const QJsonObject rec = rv.toObject();
@@ -934,9 +954,18 @@ void HikvisionBackup::startLoad(const QByteArray &json, const QString &configPat
             if (recIp.isEmpty())
                 continue;
 
-            auto add = [&](const QString &ip, int port, const QString &name) {
-                if (ip.isEmpty() || byIp.contains(ip))
+            auto add = [&](const QString &ip, int port, const QString &name, bool standalone, int channel) {
+                if (ip.isEmpty())
                     return;
+                if (byIp.contains(ip)) {
+                    // Two lenses share an address. Keep the name of the lower NVR channel.
+                    Cam &have = byIp[ip];
+                    if (!standalone && !have.standalone && channel > 0 && (have.channel <= 0 || channel < have.channel)) {
+                        have.name = name;
+                        have.channel = channel;
+                    }
+                    return;
+                }
                 Cam c;
                 c.name = name;
                 c.ip = ip;
@@ -944,11 +973,13 @@ void HikvisionBackup::startLoad(const QByteArray &json, const QString &configPat
                 c.user = recUser;
                 c.pass = recPass;
                 c.ownLogin = login(ip, c.user, c.pass);
+                c.standalone = standalone;
+                c.channel = standalone ? 0 : channel;
                 byIp.insert(ip, c);
             };
 
             if (cams.size() <= 2) {
-                add(recIp, http, recName); // a camera (or a dual-lens one): the recorder entry is the device
+                add(recIp, http, recName, true, 0); // a camera (or a dual-lens one): the recorder entry is the device
                 continue;
             }
             // A recorder: each channel is a camera on its own address. The recorder is only asked for the list.
@@ -962,11 +993,12 @@ void HikvisionBackup::startLoad(const QByteArray &json, const QString &configPat
                     nm = cam.value(QStringLiteral("name")).toString();
                 if (nm.isEmpty())
                     nm = QStringLiteral("Camera %1").arg(ch);
-                add(ip, 80, QStringLiteral("%1 Ch.%2 %3").arg(recName).arg(ch).arg(nm));
+                add(ip, 80, QStringLiteral("%1 Ch.%2 %3").arg(recName).arg(ch).arg(nm), false, ch);
             }
         }
 
-        const QList<Cam> found = byIp.values();
+        QList<Cam> found = byIp.values();
+        std::sort(found.begin(), found.end(), cameraChoiceLess);
         QVariantList out;
         for (const Cam &c : found) {
             out.append(QVariantMap{{QStringLiteral("name"), c.name},

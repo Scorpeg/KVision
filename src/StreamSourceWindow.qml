@@ -3,6 +3,7 @@ import QtQuick.Window 2.11
 import QtQuick.Layouts 1.11
 import QtQuick.Controls 2.4
 import CCTV_Viewer.Core 1.0
+import CCTV_Viewer.Utils 1.0
 
 // One place to choose the stream saved on each layout. A layout opens to its cameras.
 // A choice is written only onto that layout.
@@ -25,14 +26,6 @@ Window {
     // Four columns, counted from the right edge: Third, Sub, Main, Auto.
     function colX(rowWidth, fromRight) {
         return rowWidth - win.colsRight - win.colW - fromRight * (win.colW + win.colGap);
-    }
-
-    function byName(a, b) {
-        var an = (a.name || "").toLowerCase();
-        var bn = (b.name || "").toLowerCase();
-        if (an < bn) return -1;
-        if (an > bn) return 1;
-        return 0;
     }
 
     function channelOf(cam, fallback) {
@@ -65,13 +58,14 @@ Window {
                 continue;
             var recName = (rec.name || ip).trim();
             var cams = rec.cameras || [];
+            var own = Utils.isStandaloneRecorder(rec);
             if (cams.length === 0) {
-                names[ip + "#1"] = { cam: "", rec: recName };
+                names[ip + "#1"] = { cam: "", rec: recName, standalone: own, channel: 1, ip: ip };
                 continue;
             }
             for (var j = 0; j < cams.length; ++j) {
                 var ch = win.channelOf(cams[j], j + 1);
-                names[ip + "#" + ch] = { cam: win.camLabel(cams[j], ""), rec: recName };
+                names[ip + "#" + ch] = { cam: win.camLabel(cams[j], ""), rec: recName, standalone: own, channel: ch, ip: ip };
             }
         }
         return names;
@@ -186,11 +180,19 @@ Window {
             }
             var labeled = [];
             for (k = 0; k < keys.length; ++k) {
-                entry = names[keys[k]] || { cam: keys[k], rec: "" };
+                entry = names[keys[k]] || { cam: keys[k], rec: "", standalone: true, channel: 0, ip: "" };
                 raw = (entry.cam || "").trim() || keys[k];
-                labeled.push({ key: keys[k], name: win.displayName(entry, counts[raw.toLowerCase()] || 1, keys[k]) });
+                var parts = String(keys[k]).split("#");
+                var chNum = parseInt(parts[1]);
+                labeled.push({
+                    key: keys[k],
+                    name: win.displayName(entry, counts[raw.toLowerCase()] || 1, keys[k]),
+                    standalone: entry.standalone !== false,
+                    channel: isNaN(chNum) ? (entry.channel || 0) : chNum,
+                    ip: entry.ip || parts[0] || ""
+                });
             }
-            labeled.sort(win.byName);
+            labeled.sort(Utils.compareCameraChoice);
             out.push({
                 kind: "layout",
                 layoutUid: layout.uid,

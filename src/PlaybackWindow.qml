@@ -221,7 +221,7 @@ Window {
         try {
             var jsonStr = rootWindow.hikvisionRecordersJson;
             if (jsonStr) {
-                recordersList = JSON.parse(jsonStr);
+                recordersList = Utils.sortRecordersForPicker(JSON.parse(jsonStr));
             }
         } catch (e) {
             console.log("Error parsing recorders in PlaybackWindow:", e);

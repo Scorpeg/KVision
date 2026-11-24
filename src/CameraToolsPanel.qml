@@ -23,10 +23,11 @@ ColumnLayout {
     property bool unstickBusy: false
     property string unstickLabel: ""
 
-    // Builds one entry per camera: standalone recorders count as themselves,
-    // NVR recorders expand to one entry per channel.
+    // Builds one entry per camera: a camera on its own (one or two lenses) stays one device,
+    // and an NVR expands to one entry per channel. Standalone names are A–Z; NVR rows follow by channel.
     function buildUnstickCameraModel() {
-        var model = [];
+        var standalone = [];
+        var nvrRows = [];
         try {
             var recs = rootWindow.hikvisionRecordersJson ? JSON.parse(rootWindow.hikvisionRecordersJson) : [];
             for (var i = 0; i < recs.length; i++) {
@@ -36,26 +37,45 @@ ColumnLayout {
                 var user = rec.username || "";
                 var pass = rec.password || "";
                 var cams = rec.cameras || [];
-                if (cams.length <= 1) {
-                    // Standalone camera (recorder with a single channel): shown by
-                    // recorder name, exactly like the "Connected Recorders" list.
-                    model.push({
-                        name: rec.name ? rec.name + " (" + ip + ")" : ip,
-                        ip: ip,
-                        httpPort: httpP,
-                        user: user,
-                        pass: pass,
-                        channelId: cams.length === 1 ? cams[0].channelId : 1
-                    });
-                } else {
-                    for (var j = 0; j < cams.length; j++) {
-                        model.push({
-                            name: (rec.name ? rec.name + " (" + ip + ")" : ip) + " - " + (cams[j].name ? cams[j].name : "Channel " + cams[j].channelId),
+                var recLabel = rec.name ? rec.name + " (" + ip + ")" : ip;
+                if (cams.length <= 2) {
+                    if (cams.length <= 1) {
+                        standalone.push({
+                            name: recLabel,
                             ip: ip,
                             httpPort: httpP,
                             user: user,
                             pass: pass,
-                            channelId: cams[j].channelId
+                            channelId: cams.length === 1 ? cams[0].channelId : 1,
+                            standalone: true,
+                            channel: 0
+                        });
+                    } else {
+                        // Both lenses stay selectable. They sort with the other standalone cameras, by the name shown.
+                        for (var d = 0; d < cams.length; d++) {
+                            standalone.push({
+                                name: recLabel + " - " + (cams[d].customName || cams[d].name || ("Channel " + cams[d].channelId)),
+                                ip: ip,
+                                httpPort: httpP,
+                                user: user,
+                                pass: pass,
+                                channelId: cams[d].channelId,
+                                standalone: true,
+                                channel: 0
+                            });
+                        }
+                    }
+                } else {
+                    for (var j = 0; j < cams.length; j++) {
+                        nvrRows.push({
+                            name: recLabel + " - " + (cams[j].customName || cams[j].name || ("Channel " + cams[j].channelId)),
+                            ip: ip,
+                            httpPort: httpP,
+                            user: user,
+                            pass: pass,
+                            channelId: cams[j].channelId,
+                            standalone: false,
+                            channel: Utils.channelNumber(cams[j])
                         });
                     }
                 }
@@ -63,7 +83,9 @@ ColumnLayout {
         } catch (e) {
             console.log("[Hikvision QML] buildUnstickCameraModel failed:", e);
         }
-        unstickCameraModel = model;
+        standalone.sort(Utils.compareCameraChoice);
+        nvrRows.sort(Utils.compareCameraChoice);
+        unstickCameraModel = standalone.concat(nvrRows);
     }
 
     Component {

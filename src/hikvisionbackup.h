@@ -131,6 +131,8 @@ public:
         QString user;
         QString pass;
         bool ownLogin = false; // a login saved for this camera, not the recorder's
+        bool standalone = false; // its own connection, including a dual-lens camera
+        int channel = 0;          // NVR channel this row is ordered by; 0 for a standalone camera
     };
     struct Result {
         enum Kind { Saved, Skipped, Failed } kind = Failed;

@@ -15,6 +15,8 @@ Window {
     title: (recorder && recorder.ip) ? (recorder.name ? qsTr("LNG_00074").arg(recorder.name) : qsTr("LNG_00074").arg(recorder.ip)) : qsTr("LNG_00073")
 
     property var recorder: ({})
+    // Channel order. Rebuilt only when the recorder changes, so a rename does not recreate the tiles.
+    property var cameraTiles: Utils.sortByChannel(recorder && recorder.cameras ? recorder.cameras : [])
 
     onClosing: {
         camerasWin.destroy();
@@ -166,7 +168,7 @@ Window {
 
                     Repeater {
                         id: cameraRepeater
-                        model: recorder.cameras || []
+                        model: camerasWin.cameraTiles
                         delegate: Item {
                             id: tileWrapper
                             Layout.fillWidth: true
