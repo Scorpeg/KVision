@@ -613,9 +613,6 @@ Window {
 
     onClosing: {
         logWin.destroy();
-        if (typeof rootWindow !== "undefined" && rootWindow) {
-            rootWindow.triggerGcDeferred();
-        }
     }
 
     ColumnLayout {

@@ -11,19 +11,13 @@ int main(int argc, char *argv[])
 
     std::cout << "=== DIAGNOSTYKA USTAWIEŃ ENKODOWANIA NVR ===" << std::endl;
 
-    std::string ip = "172.16.1.214";
-    std::string user = "admin";
-    std::string pass = "copernicus.33224";
-
-    if (argc > 1) {
-        ip = argv[1];
+    if (argc < 4) {
+        std::cerr << "usage: diagnose_compression <ip> <user> <password>\n";
+        return 1;
     }
-    if (argc > 2) {
-        user = argv[2];
-    }
-    if (argc > 3) {
-        pass = argv[3];
-    }
+    std::string ip = argv[1];
+    std::string user = argv[2];
+    std::string pass = argv[3];
 
     std::cout << "[COMP] Rejestrator IP: " << ip << std::endl;
 

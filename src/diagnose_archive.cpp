@@ -177,23 +177,14 @@ int main(int argc, char *argv[])
 
     std::cout << "=== DIAGNOSTYKA AUDIO REJESTRATORA HIKVISION ===" << std::endl;
 
-    std::string ip = "172.16.1.214";
-    int testChannel = 1;
-    std::string user = "admin";
-    std::string pass = "copernicus.33224";
-
-    if (argc > 1) {
-        ip = argv[1];
+    if (argc < 5) {
+        std::cerr << "usage: diagnose_archive <ip> <channel> <user> <password>\n";
+        return 1;
     }
-    if (argc > 2) {
-        testChannel = std::atoi(argv[2]);
-    }
-    if (argc > 3) {
-        user = argv[3];
-    }
-    if (argc > 4) {
-        pass = argv[4];
-    }
+    std::string ip = argv[1];
+    int testChannel = std::atoi(argv[2]);
+    std::string user = argv[3];
+    std::string pass = argv[4];
 
     std::cout << "[DIAGNOSE] Rejestrator IP: " << ip << std::endl;
     std::cout << "[DIAGNOSE] Testowany kanał logiczny: " << testChannel << std::endl;

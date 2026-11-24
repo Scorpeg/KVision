@@ -244,44 +244,6 @@ ApplicationWindow {
              : (kind === "other" ? qsTr("Other smart event") : qsTr("Motion")))));
     }
 
-    // Multi-stage Deferred Garbage Collection and Memory Trimming to prevent memory accumulation / leaks
-    Timer {
-        id: gcTimer
-        interval: 1000
-        repeat: true
-        property int tickCount: 0
-        onTriggered: {
-            tickCount++;
-            console.log("[Root] Multi-stage deferred GC and memory trim (tick " + tickCount + "/5)...");
-            gc();
-            Context.trimMemory();
-            if (tickCount >= 5) {
-                stop();
-            }
-        }
-        function restartGC() {
-            tickCount = 0;
-            restart();
-        }
-    }
-    function triggerGcDeferred() {
-        gcTimer.restartGC();
-    }
-
-    // Periodic Memory Housekeeping: runs once an hour to collect QML garbage and release free heap memory to the OS
-    Timer {
-        id: periodicTrimTimer
-        interval: 3600000 // 1 hour in milliseconds
-        running: true
-        repeat: true
-        triggeredOnStart: false
-        onTriggered: {
-            console.log("[Root] Performing scheduled periodic memory trim...");
-            gc();
-            Context.trimMemory();
-        }
-    }
-
     onActiveChanged: {
         if (active) {
             rootWindow.activeLayoutWindow = rootWindow;
@@ -2551,7 +2513,6 @@ ApplicationWindow {
                 if (rootWindow.layoutReorderHold)
                     return;
                 windowLayoutSettings.currentIndex = currentIndex;
-                rootWindow.triggerGcDeferred();
             }
 
             Repeater {

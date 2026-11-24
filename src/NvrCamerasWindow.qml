@@ -20,9 +20,6 @@ Window {
 
     onClosing: {
         camerasWin.destroy();
-        if (typeof rootWindow !== "undefined" && rootWindow) {
-            rootWindow.triggerGcDeferred();
-        }
     }
 
     // Track thumbnail refresh counters per cache key

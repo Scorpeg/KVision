@@ -342,7 +342,6 @@ FocusScope {
     QtObject {
         id: playerPool
 
-        property var pool: []
         property var sharedPlayerComponent: null
         property var activePlayersMap: ({}) // index -> Player
         property var mediaErrorSlotsMap: ({}) // index -> function
@@ -352,19 +351,15 @@ FocusScope {
                 releasePlayer(index);
             }
 
-            var player = null;
-            if (pool.length > 0) {
-                player = pool.pop();
-            } else {
-                if (!sharedPlayerComponent || sharedPlayerComponent.status !== Component.Ready)
-                    sharedPlayerComponent = Qt.createComponent("Player.qml");
-                if (sharedPlayerComponent.status === Component.Ready) {
-                    player = sharedPlayerComponent.createObject(root);
-                } else {
-                    console.error("Failed to create Player: " + sharedPlayerComponent.errorString());
-                    return null;
-                }
+            if (!sharedPlayerComponent || sharedPlayerComponent.status !== Component.Ready)
+                sharedPlayerComponent = Qt.createComponent("Player.qml");
+            if (sharedPlayerComponent.status !== Component.Ready) {
+                console.error("Failed to create Player: " + sharedPlayerComponent.errorString());
+                return null;
             }
+            var player = sharedPlayerComponent.createObject(root);
+            if (!player)
+                return null;
 
             player.parent = parentContainer;
 
@@ -493,22 +488,11 @@ FocusScope {
                 player.width = 0;
                 player.height = 0;
 
-                if (!root.visible) {
-                    player.destroy();
-                } else {
-                    pool.push(player);
-                }
+                // Drop the player with the cell. A pool kept every retired picture's
+                // decoders alive for as long as the layout stayed on screen.
+                player.destroy();
                 delete activePlayersMap[index];
             }
-        }
-
-        function clearPool() {
-            for (var i = 0; i < pool.length; i++) {
-                if (pool[i]) {
-                    pool[i].destroy();
-                }
-            }
-            pool = [];
         }
 
         function releaseAll() {
@@ -516,8 +500,6 @@ FocusScope {
             for (var i = 0; i < indices.length; i++) {
                 releasePlayer(indices[i]);
             }
-            clearPool();
-            gc(); // Force garbage collection to free detached UI nodes and bindings
         }
     }
 
@@ -561,10 +543,8 @@ FocusScope {
 
     onVisibleChanged: {
         d.selectionReset()
-        if (!visible) {
-            playerPool.clearPool();
-            gc(); // Collect garbage immediately after hiding
-        }
+        if (!visible)
+            playerPool.releaseAll();
     }
 
     QtObject {

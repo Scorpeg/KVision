@@ -313,7 +313,10 @@ if(NOT ANDROID)
             src/vcaparse.cpp
             src/recordersecrets.cpp
             src/tests/recordersecrets_tests.cpp
+            src/tests/playback_tests.cpp
         )
+        target_compile_definitions(kvision_tests PRIVATE
+            KVISION_PLAYCTRL_SO="${CMAKE_SOURCE_DIR}/src/hikvision_sdk/lib/libPlayCtrl.so")
         target_include_directories(kvision_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
         target_link_libraries(kvision_tests PRIVATE GTest::GTest GTest::Main Qt${QT_VERSION_MAJOR}::Core)
         add_test(NAME kvision_tests COMMAND kvision_tests)

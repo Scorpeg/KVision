@@ -774,14 +774,12 @@ Window {
         rootWindow.playbackSegmentsCache = {};
         rootWindow.playbackEventsCache = {};
         rootWindow.monthAvailabilitiesCache = {};
-        // We defer the loader unloading and GC triggering to ensure the close sequence finishes cleanly.
+        // Unload the window after this close handler returns.
         Qt.callLater(function() {
             if (typeof playbackWindowLoader !== "undefined" && playbackWindowLoader) {
                 playbackWindowLoader.active = false;
             }
-            if (typeof rootWindow !== "undefined" && rootWindow) {
-                rootWindow.triggerGcDeferred();
-            }
+
         });
     }
 

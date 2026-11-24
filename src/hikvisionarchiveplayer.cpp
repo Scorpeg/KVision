@@ -14,14 +14,24 @@
 #include <algorithm>
 #include <QAudioDeviceInfo>
 #include <dlfcn.h>
+#include "archiveaudio.h"
+#include "playctrlaudio.h"
 
 namespace {
 constexpr int kVcaHoldMs = 400; // a box with no newer report is not drawn
 
 // PlayM4_Play skips audio unless PlaySound has run. PlaySound also opens one
 // process-wide renderer, and SetVolume(0) does not silence it. The splitter
-// skip bit is the part that lets PCM reach DecCallBack. These symbols and the
-// CMPManager+0x20 splitter pointer are from this vendored libPlayCtrl.so.
+// skip bit is the part that lets PCM reach DecCallBack.
+void warnPlaybackAudioOff(const char *reason)
+{
+    static bool logged = false;
+    if (logged)
+        return;
+    logged = true;
+    qWarning() << "[HikArchive] Playback audio is off." << reason;
+}
+
 void enableDecodedAudio(LONG port)
 {
     if (port < 0)
@@ -34,19 +44,21 @@ void enableDecodedAudio(LONG port)
     static auto *setSkip = reinterpret_cast<SetSkipFn>(
         dlsym(RTLD_DEFAULT, "_ZN9CSplitter11SetSkipTypeE14_MP_SKIP_TYPE_i"));
     static void *portMap = dlsym(RTLD_DEFAULT, "g_cPortToHandle");
-    if (!portToHandle || !setSkip || !portMap) {
-        static bool missingLogged = false;
-        if (!missingLogged) {
-            missingLogged = true;
-            qWarning() << "[HikArchive] Cannot enable playback audio (PlayCtrl symbols missing)";
-        }
+    static const auto *managerSetSkip = reinterpret_cast<const unsigned char *>(
+        dlsym(RTLD_DEFAULT, "_ZN10CMPManager11SetSkipTypeE14_MP_SKIP_TYPE_ii"));
+    if (!portToHandle || !setSkip || !portMap || !managerSetSkip) {
+        warnPlaybackAudioOff("PlayCtrl symbols are missing");
+        return;
+    }
+    if (!playCtrlAudioSplitterLoadMatches(managerSetSkip, kPlayCtrlSetSkipScanBytes)) {
+        warnPlaybackAudioOff("This PlayCtrl build does not match the audio-skip hook");
         return;
     }
 
     void *manager = portToHandle(portMap, static_cast<int>(port));
     if (!manager)
         return;
-    void *splitter = *reinterpret_cast<void **>(static_cast<char *>(manager) + 0x20);
+    void *splitter = *reinterpret_cast<void **>(static_cast<char *>(manager) + kPlayCtrlAudioSplitterOffset);
     if (!splitter)
         return;
     // Type 2 is audio. 0 means decode it. This does not open the SDK sound device.
@@ -1209,43 +1221,12 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
             return; // Drop audio frames if GUI is frozen to prevent memory expansion
         }
 
-        int sampleRate = 0;
-        // The frame header carries the real rate. A 640-byte packet is 8 kHz or 16 kHz,
-        // so the size guess is only for headers that do not say.
-        if (info->nFrameRate >= 4000 && info->nFrameRate <= 192000)
-            sampleRate = info->nFrameRate;
-        else if (info->nWidth >= 4000 && info->nWidth <= 192000)
-            sampleRate = info->nWidth;
-        else if (nSize == 640 || nSize == 320) {
-            sampleRate = 8000;
-        } else if (nSize == 2048 || nSize == 1024) {
-            sampleRate = 16000;
-        } else {
-            // 2. Fallback to dynamic stamp calculation
-            long nStamp = info->nStamp;
-            long lastStamp = player->m_lastAudioStamp.exchange(nStamp);
-            if (lastStamp > 0 && nStamp > lastStamp) {
-                long deltaStamp = nStamp - lastStamp;
-                if (deltaStamp > 0 && deltaStamp < 200) {
-                    double dynamicRate = static_cast<double>(nSize) * 500.0 / deltaStamp;
-                    if (dynamicRate > 7000 && dynamicRate < 9000) {
-                        sampleRate = 8000;
-                    } else if (dynamicRate > 10000 && dynamicRate < 12000) {
-                        sampleRate = 11025;
-                    } else if (dynamicRate > 14000 && dynamicRate < 18000) {
-                        sampleRate = 16000;
-                    } else if (dynamicRate > 20000 && dynamicRate < 24000) {
-                        sampleRate = 22050;
-                    } else if (dynamicRate > 28000 && dynamicRate < 36000) {
-                        sampleRate = 32000;
-                    } else if (dynamicRate > 40000 && dynamicRate < 46000) {
-                        sampleRate = 44100;
-                    } else if (dynamicRate > 46000 && dynamicRate < 50000) {
-                        sampleRate = 48000;
-                    }
-                }
-            }
-        }
+        const ArchiveAudioDecision decision = archiveAudioDecision(
+            static_cast<int>(info->nFrameRate), static_cast<int>(info->nWidth), static_cast<int>(nSize),
+            true, info->nStamp, player->m_lastAudioStamp.load());
+        if (decision.readStamp)
+            player->m_lastAudioStamp.exchange(info->nStamp);
+        const int sampleRate = decision.sampleRate;
 
         if (sampleRate <= 0) {
             return; // Ignore unrecognized or highly jittery/unstable rates
@@ -1279,41 +1260,12 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
             return; // Drop audio frames if GUI is frozen to prevent memory expansion
         }
 
-        int sampleRate = 0;
-        if (info->nFrameRate >= 4000 && info->nFrameRate <= 192000)
-            sampleRate = info->nFrameRate;
-        else if (info->nWidth >= 4000 && info->nWidth <= 192000)
-            sampleRate = info->nWidth;
-        else if (nSize == 320 || nSize == 160) {
-            sampleRate = 8000;
-        } else if (nSize == 1024 || nSize == 512) {
-            sampleRate = 16000;
-        } else {
-            // 2. Fallback to dynamic stamp calculation
-            long nStamp = info->nStamp;
-            long lastStamp = player->m_lastAudioStamp.exchange(nStamp);
-            if (lastStamp > 0 && nStamp > lastStamp) {
-                long deltaStamp = nStamp - lastStamp;
-                if (deltaStamp > 0 && deltaStamp < 200) {
-                    double dynamicRate = static_cast<double>(nSize) * 1000.0 / deltaStamp;
-                    if (dynamicRate > 7000 && dynamicRate < 9000) {
-                        sampleRate = 8000;
-                    } else if (dynamicRate > 10000 && dynamicRate < 12000) {
-                        sampleRate = 11025;
-                    } else if (dynamicRate > 14000 && dynamicRate < 18000) {
-                        sampleRate = 16000;
-                    } else if (dynamicRate > 20000 && dynamicRate < 24000) {
-                        sampleRate = 22050;
-                    } else if (dynamicRate > 28000 && dynamicRate < 36000) {
-                        sampleRate = 32000;
-                    } else if (dynamicRate > 40000 && dynamicRate < 46000) {
-                        sampleRate = 44100;
-                    } else if (dynamicRate > 46000 && dynamicRate < 50000) {
-                        sampleRate = 48000;
-                    }
-                }
-            }
-        }
+        const ArchiveAudioDecision decision = archiveAudioDecision(
+            static_cast<int>(info->nFrameRate), static_cast<int>(info->nWidth), static_cast<int>(nSize),
+            false, info->nStamp, player->m_lastAudioStamp.load());
+        if (decision.readStamp)
+            player->m_lastAudioStamp.exchange(info->nStamp);
+        const int sampleRate = decision.sampleRate;
 
         if (sampleRate <= 0) {
             return; // Ignore unrecognized or highly jittery/unstable rates

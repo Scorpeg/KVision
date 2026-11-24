@@ -77,8 +77,6 @@ Window {
 
     onClosing: {
         win.destroy();
-        if (typeof rootWindow !== "undefined" && rootWindow)
-            rootWindow.triggerGcDeferred();
     }
 
     Connections {

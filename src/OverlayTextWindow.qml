@@ -253,8 +253,6 @@ Window {
 
     onClosing: {
         win.destroy();
-        if (typeof rootWindow !== "undefined" && rootWindow)
-            rootWindow.triggerGcDeferred();
     }
 
     readonly property var chosen: win.selected >= 0 && win.selected < win.entries.length ? win.entries[win.selected] : null
