@@ -848,7 +848,15 @@ FocusScope {
         }
     }
     property bool talkWasMuted: false
-    readonly property bool hasAudio: (typeof generalSettings !== "undefined" && generalSettings.disableAudio) ? false : (activePlayerIndex === 1 ? qmlAvPlayer1.hasAudio : qmlAvPlayer2.hasAudio)
+    readonly property bool hasAudio: {
+        if (typeof generalSettings !== "undefined" && generalSettings.disableAudio)
+            return false;
+        // Quick playback stops the live stream, so the live player reports no audio.
+        // The recording still has sound, and M has to be able to mute that tile.
+        if (isQuickPlayback)
+            return true;
+        return activePlayerIndex === 1 ? qmlAvPlayer1.hasAudio : qmlAvPlayer2.hasAudio;
+    }
 
     onMutedChanged: {
         if (activePlayerIndex === 1) {
@@ -2835,13 +2843,15 @@ FocusScope {
                     + (playbackBadge.visible ? 1 : 0) + (quickPlaybackToggleBadge.visible ? 1 : 0)
                     + (oneToOneBadge.visible ? 1 : 0) + (zoomBadge.visible ? 1 : 0)
                     + (ptzToggleBadge.visible ? 1 : 0) + (aimBadge.visible ? 1 : 0)
+                // Quick playback keeps its own volume on the bar below, so this row does not also grow for it.
+                readonly property bool showTileVolume: root.hasAudio && !root.isQuickPlayback
                 readonly property int toolSize: {
                     var w = Math.max(0, width);
                     // Mute and full volume sit on the left of the same row, or minus and plus when the slider does not fit.
                     function fits(size, gap) {
-                        var buttons = toolCount + (root.hasAudio ? 2 : 0);
+                        var buttons = toolCount + (showTileVolume ? 2 : 0);
                         var gaps = Math.max(0, toolCount - 1) * gap;
-                        if (root.hasAudio) {
+                        if (showTileVolume) {
                             gaps += gap;
                             if (toolCount > 0)
                                 gaps += gap;
@@ -2871,7 +2881,7 @@ FocusScope {
                     anchors.rightMargin: viewportControls.toolGap
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: viewportControls.toolGap
-                    visible: root.hasAudio
+                    visible: viewportControls.showTileVolume
                     clip: true
 
                     readonly property int availableWidth: Math.max(0, viewportControls.width - actionButtons.width - viewportControls.toolGap)
@@ -4047,6 +4057,107 @@ FocusScope {
                 }
 
                 Item { Layout.fillWidth: true }
+
+                Row {
+                    id: qpVolumeRow
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: 4
+                    visible: !(typeof generalSettings !== "undefined" && generalSettings.disableAudio)
+                    // The seek buttons already fill a narrow bar, so those tiles get tenth-steps instead of a slider.
+                    readonly property bool showSlider: qpButtonsRow.width > 640
+
+                    function restoreVolume() {
+                        var cell = root.parent && root.parent.parent;
+                        var back = (cell && cell.audibleVolume > 0) ? cell.audibleVolume : 1;
+                        volumeControl.setVolume(back);
+                    }
+
+                    CctvButton {
+                        focusPolicy: Qt.NoFocus
+                        isMini: true
+                        isTransparent: true
+                        text: qpVolumeRow.showSlider ? "" : "-"
+                        iconSource: qpVolumeRow.showSlider
+                            ? "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff3333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><line x1='23' y1='9' x2='17' y2='15'></line><line x1='17' y1='9' x2='23' y2='15'></line></svg>"
+                            : ""
+                        opacity: (!qpVolumeRow.showSlider && root.volume <= 0.001) ? 0.4 : 1
+                        onClicked: {
+                            if (qpVolumeRow.showSlider) {
+                                if (root.volume > 0)
+                                    volumeControl.setVolume(0);
+                                else
+                                    qpVolumeRow.restoreVolume();
+                            } else {
+                                volumeControl.stepVolume(-1);
+                            }
+                        }
+                        ToolTip.delay: Compact.toolTipDelay
+                        ToolTip.timeout: Compact.toolTipTimeout
+                        ToolTip.visible: hovered
+                        ToolTip.text: qpVolumeRow.showSlider ? (root.volume > 0 ? qsTr("LNG_00106") : qsTr("LNG_00157")) : qsTr("Lower the volume")
+                    }
+
+                    Slider {
+                        id: qpVolumeSlider
+                        width: qpVolumeRow.showSlider ? 72 : 0
+                        height: 24
+                        visible: qpVolumeRow.showSlider
+                        padding: 0
+                        from: 0.0
+                        to: 1.0
+                        value: root.volume
+                        focusPolicy: Qt.NoFocus
+                        onMoved: volumeControl.setVolume(value)
+
+                        background: Rectangle {
+                            x: qpVolumeSlider.leftPadding
+                            y: qpVolumeSlider.topPadding + qpVolumeSlider.availableHeight / 2 - height / 2
+                            width: qpVolumeSlider.availableWidth
+                            height: 4
+                            radius: 2
+                            color: "#1c242c"
+
+                            Rectangle {
+                                width: qpVolumeSlider.visualPosition * parent.width
+                                height: parent.height
+                                color: "#00f5d4"
+                                radius: 2
+                            }
+                        }
+
+                        handle: Rectangle {
+                            x: qpVolumeSlider.leftPadding + qpVolumeSlider.visualPosition * (qpVolumeSlider.availableWidth - width)
+                            y: qpVolumeSlider.topPadding + qpVolumeSlider.availableHeight / 2 - height / 2
+                            implicitWidth: 12
+                            implicitHeight: 12
+                            radius: 6
+                            color: qpVolumeSlider.pressed ? "#ff9a00" : "#ff7a00"
+                            border.color: "#ffffff"
+                            border.width: 1
+                        }
+                    }
+
+                    CctvButton {
+                        focusPolicy: Qt.NoFocus
+                        isMini: true
+                        isTransparent: true
+                        text: qpVolumeRow.showSlider ? "" : "+"
+                        iconSource: qpVolumeRow.showSlider
+                            ? "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300f5d4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'></polygon><path d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07'></path></svg>"
+                            : ""
+                        opacity: (!qpVolumeRow.showSlider && root.volume >= 0.999) ? 0.4 : 1
+                        onClicked: {
+                            if (qpVolumeRow.showSlider)
+                                volumeControl.setVolume(1);
+                            else
+                                volumeControl.stepVolume(1);
+                        }
+                        ToolTip.delay: Compact.toolTipDelay
+                        ToolTip.timeout: Compact.toolTipTimeout
+                        ToolTip.visible: hovered
+                        ToolTip.text: qpVolumeRow.showSlider ? qsTr("LNG_00157") : qsTr("Raise the volume")
+                    }
+                }
 
                 CctvButton {
                     id: qpPrevEventBtn

@@ -13,9 +13,47 @@
 #include <set>
 #include <algorithm>
 #include <QAudioDeviceInfo>
+#include <dlfcn.h>
 
 namespace {
 constexpr int kVcaHoldMs = 400; // a box with no newer report is not drawn
+
+// PlayM4_Play skips audio unless PlaySound has run. PlaySound also opens one
+// process-wide renderer, and SetVolume(0) does not silence it. The splitter
+// skip bit is the part that lets PCM reach DecCallBack. These symbols and the
+// CMPManager+0x20 splitter pointer are from this vendored libPlayCtrl.so.
+void enableDecodedAudio(LONG port)
+{
+    if (port < 0)
+        return;
+
+    using PortToHandleFn = void* (*)(void*, int);
+    using SetSkipFn = int (*)(void*, int, int);
+    static auto *portToHandle = reinterpret_cast<PortToHandleFn>(
+        dlsym(RTLD_DEFAULT, "_ZN13CPortToHandle12PortToHandleEi"));
+    static auto *setSkip = reinterpret_cast<SetSkipFn>(
+        dlsym(RTLD_DEFAULT, "_ZN9CSplitter11SetSkipTypeE14_MP_SKIP_TYPE_i"));
+    static void *portMap = dlsym(RTLD_DEFAULT, "g_cPortToHandle");
+    if (!portToHandle || !setSkip || !portMap) {
+        static bool missingLogged = false;
+        if (!missingLogged) {
+            missingLogged = true;
+            qWarning() << "[HikArchive] Cannot enable playback audio (PlayCtrl symbols missing)";
+        }
+        return;
+    }
+
+    void *manager = portToHandle(portMap, static_cast<int>(port));
+    if (!manager)
+        return;
+    void *splitter = *reinterpret_cast<void **>(static_cast<char *>(manager) + 0x20);
+    if (!splitter)
+        return;
+    // Type 2 is audio. 0 means decode it. This does not open the SDK sound device.
+    const int rc = setSkip(splitter, 2, 0);
+    if (rc != 0)
+        qWarning() << "[HikArchive] Playback audio decode was not enabled, code" << rc;
+}
 }
 
 // Hikvision PlayM4 decoder constants (usually YV12)
@@ -769,6 +807,8 @@ void HikvisionArchivePlayer::setPlaybackSpeed(int speedMultiplier)
         if (port != -1) {
             for (int i = 0; i < decoderSteps; ++i)
                 PlayM4_Fast(port);
+            // Play() above turns audio skipping back on. Turn decode back on.
+            enableDecodedAudio(port);
         }
     }, Qt::QueuedConnection);
 }
@@ -836,6 +876,7 @@ void HikvisionArchivePlayer::stepFrame()
             // Leave the decoder running until a real frame arrives. Stopping it
             // on the first callback drops that frame and makes the next click refill again.
             PlayM4_Play(port, 0);
+            enableDecodedAudio(port);
             if (handle >= 0) {
                 NET_DVR_PlayBackControl_V40(handle, NET_DVR_PLAYRESTART, nullptr, 0, nullptr, nullptr);
                 NET_DVR_PlayBackControl_V40(handle, NET_DVR_PLAYNORMAL, nullptr, 0, nullptr, nullptr);
@@ -857,6 +898,7 @@ void HikvisionArchivePlayer::resume()
                 if (port != -1) {
                     PlayM4_Pause(port, 0);
                     PlayM4_Play(port, 0);
+                    enableDecodedAudio(port);
                 }
                 NET_DVR_PlayBackControl_V40(handle, NET_DVR_PLAYRESTART, nullptr, 0, nullptr, nullptr);
                 NET_DVR_PlayBackControl_V40(handle, NET_DVR_PLAYNORMAL, nullptr, 0, nullptr, nullptr);
@@ -1019,10 +1061,11 @@ void HikvisionArchivePlayer::PlayDataCallBack(LONG lPlayHandle, DWORD dwDataType
                 player->setPlaybackSpeed(player->m_currentSpeedMultiplier);
             }
             
-            // Decoded audio is played by QAudioOutput, which follows the tile mute.
-            // PlayM4_PlaySound opens one shared ALSA device for the whole process. SetVolume(0)
-            // does not silence it, and every other port then fails with Error 2. That one device
-            // keeps playing the first stream on every layout, muted tiles included.
+            // Decoded PCM is played by QAudioOutput, which follows mute and volume.
+            // Do not call PlayM4_PlaySound: it opens one process-wide device that
+            // SetVolume(0) does not silence. Play() has just told the demuxer to
+            // skip audio; enableDecodedAudio turns that skip off without the device.
+            enableDecodedAudio(activePort);
             bool audioCallbackRegistered = PlayM4_SetAudioCallBack(activePort, AudioCallBack, reinterpret_cast<long>(player));
 
             if (audioCallbackRegistered) {
@@ -1120,7 +1163,8 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
                  << "type=" << info->nType
                  << "size=" << nSize
                  << "w=" << info->nWidth
-                 << "h=" << info->nHeight;
+                 << "h=" << info->nHeight
+                 << "rate=" << info->nFrameRate;
     }
 
     uint64_t activeSessionId = player->m_playbackSessionId.load();
@@ -1166,8 +1210,13 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
         }
 
         int sampleRate = 0;
-        // 1. Instantly determine rate based on frame size (extremely robust, immune to network jitter)
-        if (nSize == 640 || nSize == 320) {
+        // The frame header carries the real rate. A 640-byte packet is 8 kHz or 16 kHz,
+        // so the size guess is only for headers that do not say.
+        if (info->nFrameRate >= 4000 && info->nFrameRate <= 192000)
+            sampleRate = info->nFrameRate;
+        else if (info->nWidth >= 4000 && info->nWidth <= 192000)
+            sampleRate = info->nWidth;
+        else if (nSize == 640 || nSize == 320) {
             sampleRate = 8000;
         } else if (nSize == 2048 || nSize == 1024) {
             sampleRate = 16000;
@@ -1231,8 +1280,11 @@ void HikvisionArchivePlayer::DecCallBack(long nPort, char *pBuf, long nSize, FRA
         }
 
         int sampleRate = 0;
-        // 1. Instantly determine rate based on frame size (extremely robust, immune to network jitter)
-        if (nSize == 320 || nSize == 160) {
+        if (info->nFrameRate >= 4000 && info->nFrameRate <= 192000)
+            sampleRate = info->nFrameRate;
+        else if (info->nWidth >= 4000 && info->nWidth <= 192000)
+            sampleRate = info->nWidth;
+        else if (nSize == 320 || nSize == 160) {
             sampleRate = 8000;
         } else if (nSize == 1024 || nSize == 512) {
             sampleRate = 16000;
